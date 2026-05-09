@@ -4,12 +4,14 @@
 
 :root {
   color-scheme: light dark;
-  --bg: #f7f8fa;
-  --surface: #ffffff;
-  --surface-2: #ffffff;
-  --line: #e7eaf0;
-  --text: #0d111c;
-  --text-muted: #5d6a7e;
+  /* Warm, low-glare "trading desk" light mode — paper-like cream with a hint
+     of slate. Easier on the eye than pure white during long sessions. */
+  --bg: #ecedef;          /* page background — soft slate */
+  --surface: #f8f7f3;     /* cards — warm off-white */
+  --surface-2: #f2f1ec;   /* nested surfaces — slightly deeper */
+  --line: #d6d4cc;        /* visible but quiet borders */
+  --text: #1a2030;        /* deep slate, not pitch-black */
+  --text-muted: #6a7280;
   --accent: #0a3a66;
 }
 .dark {

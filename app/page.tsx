@@ -137,7 +137,7 @@ export default function HomePage() {
 
           <ProductTable tranche={trancheWithFixing} quotes={quotes} />
           <Dashboard tranche={trancheWithFixing} quotes={quotes} />
-          <KOSchedule tranche={trancheWithFixing} />
+          <KOSchedule tranche={trancheWithFixing} quotes={quotes} />
           <Analytics tranche={trancheWithFixing} quotes={quotes} />
         </>
       )}

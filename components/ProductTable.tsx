@@ -52,17 +52,20 @@ export const ProductTable = forwardRef<ProductTableHandle, Props>(function Produ
       pdf.save(`${tranche.trancheCode}.pdf`);
     },
     async copyTsv() {
-      const header = ["Stock", "Live Price", "52W High", "52W Low", "EKI Price", "Strike Price"].join("\t");
-      const lines = rows.map((r) =>
-        [
+      const header = ["Stock", "Initial Fixing", "Live Price", "Δ vs Initial", "52W High", "52W Low", "EKI Price", "Strike Price"].join("\t");
+      const lines = rows.map((r) => {
+        const delta = r.initial && r.live ? `${(((r.live - r.initial) / r.initial) * 100).toFixed(2)}%` : "";
+        return [
           `${r.underlying.rawName} ${r.underlying.market}`,
+          r.initial ?? "",
           r.live ?? "",
+          delta,
           r.high52 ?? "",
           r.low52 ?? "",
           r.eki ?? "",
           r.strike ?? "",
-        ].join("\t")
-      );
+        ].join("\t");
+      });
       const text = [header, ...lines].join("\n");
       try { await navigator.clipboard.writeText(text); } catch {}
     },
@@ -143,7 +146,9 @@ export const ProductTable = forwardRef<ProductTableHandle, Props>(function Produ
             <thead>
               <tr>
                 <th>Stock</th>
+                <th>Initial Fixing</th>
                 <th>Live Price</th>
+                <th>Δ vs Initial</th>
                 <th>52-Week High</th>
                 <th>52-Week Low</th>
                 <th>EKI Price</th>
@@ -153,8 +158,10 @@ export const ProductTable = forwardRef<ProductTableHandle, Props>(function Produ
             <tbody>
               {rows.map((r) => {
                 const ki = r.eki;
-                const aboveKi =
-                  r.live != null && ki != null ? r.live > ki : undefined;
+                const aboveKi = r.live != null && ki != null ? r.live > ki : undefined;
+                const delta = r.initial != null && r.live != null
+                  ? ((r.live - r.initial) / r.initial) * 100
+                  : undefined;
                 return (
                   <tr key={r.underlying.symbol}>
                     <td>
@@ -165,8 +172,12 @@ export const ProductTable = forwardRef<ProductTableHandle, Props>(function Produ
                         </span>
                       </div>
                     </td>
-                    <td className="tabular font-medium">
-                      {formatPx(r.live, r.currency)}
+                    <td className="tabular text-ink-500">{formatPx(r.initial, r.currency)}</td>
+                    <td className="tabular font-semibold">{formatPx(r.live, r.currency)}</td>
+                    <td className={`tabular font-medium ${
+                      delta == null ? "" : delta >= 0 ? "text-success" : "text-danger"
+                    }`}>
+                      {delta == null ? "—" : `${delta >= 0 ? "+" : ""}${delta.toFixed(2)}%`}
                     </td>
                     <td className="tabular">{formatPx(r.high52, r.currency)}</td>
                     <td className="tabular">{formatPx(r.low52, r.currency)}</td>
@@ -181,7 +192,10 @@ export const ProductTable = forwardRef<ProductTableHandle, Props>(function Produ
           </table>
         </div>
         <div className="border-t border-[var(--line)] px-4 py-2 text-[10px] text-ink-500">
-          Strike = Initial × {(tranche.strikePct * 100).toFixed(0)}%   ·   EKI = Initial × {(tranche.ekiPct * 100).toFixed(0)}%   ·   Quotes refresh automatically. Indicative pricing shown until trade date.
+          Initial Fixing {tranche.isIndicativeFixing ? "(indicative — latest close)" : "(actual)"}
+          {" · "}Strike = Initial × {(tranche.strikePct * 100).toFixed(0)}%
+          {" · "}EKI = Initial × {(tranche.ekiPct * 100).toFixed(0)}%
+          {" · "}Δ vs Initial = (Live − Initial) ÷ Initial. Quotes refresh automatically.
         </div>
       </div>
     </section>

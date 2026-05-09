@@ -1,17 +1,19 @@
 "use client";
 
 import clsx from "clsx";
-import type { Tranche } from "@/lib/types";
+import type { PriceQuote, Tranche } from "@/lib/types";
 import { koSchedule, formatPx } from "@/lib/calc";
 
 interface Props {
   tranche: Tranche;
+  quotes: Record<string, PriceQuote | undefined>;
 }
 
-export function KOSchedule({ tranche }: Props) {
+export function KOSchedule({ tranche, quotes }: Props) {
   const sched = koSchedule(tranche);
   const today = new Date().toISOString().slice(0, 10);
   const showInitialFx = !!tranche.initialFixing;
+  const nextN = sched.find((x) => x.date >= today)?.n;
 
   return (
     <section className="card mt-4 p-4">
@@ -34,34 +36,88 @@ export function KOSchedule({ tranche }: Props) {
               <th>#</th>
               <th>Valuation date</th>
               <th>KO level</th>
-              {showInitialFx && tranche.underlyings.map((u) => <th key={u.symbol}>KO @ {u.symbol}</th>)}
-              <th>Status</th>
+              {showInitialFx &&
+                tranche.underlyings.map((u) => (
+                  <th key={u.symbol} className="!text-right">
+                    {u.symbol}
+                    <div className="text-[9px] font-normal normal-case tracking-normal text-[var(--text-muted)]">
+                      KO px · live Δ
+                    </div>
+                  </th>
+                ))}
+              <th>Worst-of</th>
             </tr>
           </thead>
           <tbody>
             {sched.map((o) => {
-              const status: "past" | "next" | "future" =
-                o.date < today ? "past" : (sched.find((x) => x.date >= today)?.n === o.n ? "next" : "future");
+              const past = o.date < today;
+              const isNext = o.n === nextN;
+
+              // Compute live-vs-KO delta per underlying for this row.
+              const perSym = tranche.underlyings.map((u) => {
+                const koPx = o.koPriceBySymbol[u.symbol];
+                const live = quotes[u.symbol]?.price;
+                const delta =
+                  koPx != null && live != null
+                    ? ((live - koPx) / koPx) * 100
+                    : undefined;
+                return { u, koPx, live, delta };
+              });
+
+              // Worst-of is the underlying with the SMALLEST cushion above KO.
+              // For autocallables, all underlyings must be >= KO for autocall to trigger.
+              const valid = perSym.filter((p) => p.delta != null) as Array<typeof perSym[number] & { delta: number }>;
+              const worst = valid.length ? valid.reduce((a, b) => (a.delta < b.delta ? a : b)) : null;
+
               return (
-                <tr key={o.n} className={clsx(status === "next" && "bg-accent-50 dark:bg-accent-900/30")}>
+                <tr key={o.n} className={clsx(isNext && "bg-accent-50 dark:bg-accent-900/30")}>
                   <td className="tabular">{o.n}</td>
                   <td className="tabular">{o.date}</td>
                   <td className="tabular font-medium">{(o.koPct * 100).toFixed(0)}%</td>
                   {showInitialFx &&
-                    tranche.underlyings.map((u) => (
+                    perSym.map(({ u, koPx, delta }) => (
                       <td key={u.symbol} className="tabular">
-                        {formatPx(o.koPriceBySymbol[u.symbol])}
+                        <div>{formatPx(koPx)}</div>
+                        {delta != null && (
+                          <div
+                            className={clsx(
+                              "text-[10.5px] font-semibold",
+                              delta >= 0 ? "text-success" : "text-danger"
+                            )}
+                            title={
+                              delta >= 0
+                                ? `Spot is ${delta.toFixed(2)}% above this KO trigger — would knock out at this observation.`
+                                : `Spot is ${Math.abs(delta).toFixed(2)}% below this KO trigger — would NOT knock out at this observation.`
+                            }
+                          >
+                            {delta >= 0 ? "▲ +" : "▼ "}{delta.toFixed(2)}%
+                          </div>
+                        )}
                       </td>
                     ))}
                   <td>
-                    <span
-                      className={clsx(
-                        "badge",
-                        status === "past" ? "moderate" : status === "next" ? "near-ko" : "safe"
-                      )}
-                    >
-                      {status === "past" ? "Passed" : status === "next" ? "Next" : "Upcoming"}
-                    </span>
+                    {past ? (
+                      <span className="badge moderate">Passed</span>
+                    ) : worst ? (
+                      <span
+                        className={clsx(
+                          "badge",
+                          worst.delta >= 0
+                            ? "safe"
+                            : worst.delta >= -5
+                            ? "near-ko"
+                            : worst.delta >= -15
+                            ? "moderate"
+                            : "high-risk"
+                        )}
+                      >
+                        {worst.delta >= 0 ? "Would KO" : "Short by"}{" "}
+                        {Math.abs(worst.delta).toFixed(2)}%
+                        <span className="ml-1 text-[10px] font-normal opacity-75">({worst.u.symbol})</span>
+                      </span>
+                    ) : (
+                      <span className="badge moderate">—</span>
+                    )}
                   </td>
                 </tr>
               );
@@ -69,6 +125,12 @@ export function KOSchedule({ tranche }: Props) {
           </tbody>
         </table>
       </div>
+
+      <p className="mt-2 text-[10.5px] text-[var(--text-muted)]">
+        For each observation, the per-underlying column shows the KO price plus the current spot's distance from it
+        (▲ = above KO, ▼ = below KO). The Worst-of badge is driven by the underlying with the smallest cushion —
+        autocall only triggers when all underlyings are at or above their KO levels on the observation date.
+      </p>
     </section>
   );
 }

@@ -5,6 +5,7 @@ import Link from "next/link";
 import {
   Search, Trash2, Pin, PinOff, Filter, Pencil, Check, X,
   Shield, AlertTriangle, ShieldAlert, Activity, Wallet, Calendar,
+  StickyNote,
 } from "lucide-react";
 import {
   listPocket, removePocket, togglePin, updateTrancheFields, type PocketEntry,
@@ -25,6 +26,8 @@ export default function PocketPage() {
   const [maturityWithin, setMaturityWithin] = useState<number | "all">("all");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState<string>("");
+  const [notesEditingId, setNotesEditingId] = useState<string | null>(null);
+  const [notesValue, setNotesValue] = useState<string>("");
 
   useEffect(() => { setList(listPocket()); }, []);
 
@@ -114,6 +117,15 @@ export default function PocketPage() {
     const v = editingValue.trim();
     if (v) updateTrancheFields(id, { trancheCode: v });
     setEditingId(null);
+    setList(listPocket());
+  }
+  function startNotesEdit(id: string, current?: string) {
+    setNotesEditingId(id);
+    setNotesValue(current ?? "");
+  }
+  function commitNotes(id: string) {
+    updateTrancheFields(id, { notes: notesValue.trim() || undefined });
+    setNotesEditingId(null);
     setList(listPocket());
   }
 
@@ -327,6 +339,44 @@ export default function PocketPage() {
                     );
                   })}
                 </div>
+              </div>
+
+              {/* Notes — client name, ticket #, anything you want to remember */}
+              <div className="mt-3 border-t border-[var(--line)] pt-2 text-[11.5px]">
+                {notesEditingId === entry.id ? (
+                  <div className="flex flex-col gap-1.5">
+                    <textarea
+                      autoFocus
+                      value={notesValue}
+                      onChange={(e) => setNotesValue(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) commitNotes(entry.id);
+                        if (e.key === "Escape") setNotesEditingId(null);
+                      }}
+                      placeholder="Client(s), ticket #, follow-ups, allocation breakdown…"
+                      className="input min-h-[60px] py-2 text-[12px] leading-snug"
+                      rows={3}
+                    />
+                    <div className="flex justify-end gap-1.5">
+                      <button onClick={() => setNotesEditingId(null)} className="btn h-7 px-2 text-[11px]"><X size={12} /> Cancel</button>
+                      <button onClick={() => commitNotes(entry.id)} className="btn btn-primary h-7 px-2 text-[11px]"><Check size={12} /> Save</button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => startNotesEdit(entry.id, t.notes)}
+                    className="group flex w-full items-start gap-1.5 text-left text-[var(--text-muted)] hover:text-[var(--text)]"
+                    title="Click to edit notes"
+                  >
+                    <StickyNote size={12} className="mt-0.5 flex-shrink-0" />
+                    <span className="flex-1">
+                      {t.notes
+                        ? <span className="whitespace-pre-wrap">{t.notes}</span>
+                        : <span className="italic opacity-70">Add notes — clients, allocation, follow-ups…</span>}
+                    </span>
+                    <Pencil size={10} className="mt-1 flex-shrink-0 opacity-0 transition-opacity group-hover:opacity-100" />
+                  </button>
+                )}
               </div>
             </article>
           );
