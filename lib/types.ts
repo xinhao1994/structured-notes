@@ -19,6 +19,13 @@ export interface Underlying {
   symbol: string;
   /** Market this stock trades on — drives timezone & holiday calendar */
   market: MarketCode;
+  /**
+   * False if the parser had to guess (e.g. user pasted the company name
+   * "Western Digital" instead of the ticker "WDC"). The client side will
+   * try /api/symbol-search to upgrade it; until then the dashboard shows
+   * a warning chip and the price source is "mock" or empty.
+   */
+  resolved?: boolean;
 }
 
 export interface Tranche {

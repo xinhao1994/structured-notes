@@ -93,23 +93,29 @@ export function Dashboard({ tranche, quotes }: Props) {
           const mktState = isMarketOpen(u.market);
           return (
             <article key={u.symbol} className="rounded-xl border border-[var(--line)] bg-[var(--surface-2)] p-3">
-              <header className="mb-2 flex items-center justify-between">
-                <div>
+              <header className="mb-2 flex items-center justify-between gap-2">
+                <div className="min-w-0">
                   <div className="text-[11px] font-semibold uppercase tracking-wide text-[var(--text-muted)]">
                     {MARKETS[u.market].label}
                   </div>
-                  <div className="font-semibold">{u.rawName} <span className="text-[var(--text-muted)] text-xs">{u.symbol}</span></div>
+                  <div className="truncate font-semibold">
+                    {u.rawName}{" "}
+                    <span className="text-[var(--text-muted)] text-xs">{u.symbol}</span>
+                  </div>
                 </div>
-                <span
-                  className={clsx(
-                    "rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase",
-                    mktState.open
-                      ? "bg-successBg text-success dark:bg-success/15 dark:text-[#6dd49a]"
-                      : "bg-ink-100 text-ink-600 dark:bg-ink-700 dark:text-ink-300"
-                  )}
-                >
-                  {mktState.open ? "Live" : "Delayed"}
-                </span>
+                <div className="flex flex-shrink-0 flex-col items-end gap-1">
+                  <span
+                    className={clsx(
+                      "rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase",
+                      mktState.open
+                        ? "bg-successBg text-success dark:bg-success/15 dark:text-[#6dd49a]"
+                        : "bg-ink-100 text-ink-600 dark:bg-ink-700 dark:text-ink-300"
+                    )}
+                  >
+                    {mktState.open ? "Live" : "Delayed"}
+                  </span>
+                  <SourceBadge source={q?.source} />
+                </div>
               </header>
               <div className="flex items-end justify-between gap-2">
                 <div className="tabular text-2xl font-semibold leading-none">
@@ -187,6 +193,32 @@ function Mini({ label, value, positive }: { label: string; value: string; positi
         {value}
       </div>
     </div>
+  );
+}
+
+function SourceBadge({ source }: { source?: string }) {
+  if (!source) return null;
+  // The "mock" badge is the important one — it tells the user the price
+  // they're seeing isn't real and the symbol probably wasn't recognised.
+  const isMock = source === "mock";
+  const label =
+    source === "polygon" ? "Polygon"
+    : source === "finnhub" ? "Finnhub"
+    : source === "alphavantage" ? "Alpha Vtg"
+    : source === "cache" ? "Cached"
+    : isMock ? "Mock data" : source;
+  return (
+    <span
+      className={clsx(
+        "rounded-full px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide",
+        isMock
+          ? "bg-dangerBg text-danger dark:bg-danger/15 dark:text-[#ff8b85]"
+          : "bg-ink-100 text-ink-600 dark:bg-ink-800 dark:text-ink-300"
+      )}
+      title={isMock ? "This price is simulated — the ticker wasn't recognised by the data provider." : `Source: ${source}`}
+    >
+      {label}
+    </span>
   );
 }
 

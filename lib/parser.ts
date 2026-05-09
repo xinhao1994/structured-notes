@@ -22,28 +22,132 @@ const CURRENCY_FROM_FLAG: Record<string, Currency> = {
   "🇦🇺": "AUD",
 };
 
-// Map common name → ticker for well-known issues. This is intentionally tiny —
-// production deployments should swap in a proper symbol-master service.
+// Map common name → ticker for well-known issues.
+// This list is the cheap fast-path; anything not here goes to the
+// /api/symbol-search route (Finnhub) for live resolution.
 const NAME_TO_TICKER: Record<string, { sym: string; mkt: MarketCode }> = {
-  google: { sym: "GOOGL", mkt: "US" },
-  alphabet: { sym: "GOOGL", mkt: "US" },
-  broadcom: { sym: "AVGO", mkt: "US" },
+  // ─── US tech ──────────────────────────────────────────────────────────
   apple: { sym: "AAPL", mkt: "US" },
   microsoft: { sym: "MSFT", mkt: "US" },
-  nvidia: { sym: "NVDA", mkt: "US" },
-  meta: { sym: "META", mkt: "US" },
+  google: { sym: "GOOGL", mkt: "US" },
+  alphabet: { sym: "GOOGL", mkt: "US" },
   amazon: { sym: "AMZN", mkt: "US" },
+  meta: { sym: "META", mkt: "US" },
+  facebook: { sym: "META", mkt: "US" },
+  nvidia: { sym: "NVDA", mkt: "US" },
   tesla: { sym: "TSLA", mkt: "US" },
   netflix: { sym: "NFLX", mkt: "US" },
+  broadcom: { sym: "AVGO", mkt: "US" },
+  oracle: { sym: "ORCL", mkt: "US" },
+  salesforce: { sym: "CRM", mkt: "US" },
+  cisco: { sym: "CSCO", mkt: "US" },
+  intel: { sym: "INTC", mkt: "US" },
+  amd: { sym: "AMD", mkt: "US" },
+  ibm: { sym: "IBM", mkt: "US" },
+  adobe: { sym: "ADBE", mkt: "US" },
+  qualcomm: { sym: "QCOM", mkt: "US" },
+  paypal: { sym: "PYPL", mkt: "US" },
+  uber: { sym: "UBER", mkt: "US" },
+  airbnb: { sym: "ABNB", mkt: "US" },
+  shopify: { sym: "SHOP", mkt: "US" },
+  palantir: { sym: "PLTR", mkt: "US" },
+  snowflake: { sym: "SNOW", mkt: "US" },
+  servicenow: { sym: "NOW", mkt: "US" },
+  arista: { sym: "ANET", mkt: "US" },
+  "arista networks": { sym: "ANET", mkt: "US" },
+  amphenol: { sym: "APH", mkt: "US" },
+  "western digital": { sym: "WDC", mkt: "US" },
+  sandisk: { sym: "SNDK", mkt: "US" },
+  micron: { sym: "MU", mkt: "US" },
+  "applied materials": { sym: "AMAT", mkt: "US" },
+  "lam research": { sym: "LRCX", mkt: "US" },
+  asml: { sym: "ASML", mkt: "US" },
+  tsmc: { sym: "TSM", mkt: "US" },
+  "taiwan semiconductor": { sym: "TSM", mkt: "US" },
+
+  // ─── US financials / consumer / healthcare ────────────────────────────
+  jpmorgan: { sym: "JPM", mkt: "US" },
+  "jp morgan": { sym: "JPM", mkt: "US" },
+  "bank of america": { sym: "BAC", mkt: "US" },
+  "goldman sachs": { sym: "GS", mkt: "US" },
+  "morgan stanley": { sym: "MS", mkt: "US" },
+  "wells fargo": { sym: "WFC", mkt: "US" },
+  citigroup: { sym: "C", mkt: "US" },
+  visa: { sym: "V", mkt: "US" },
+  mastercard: { sym: "MA", mkt: "US" },
+  berkshire: { sym: "BRK.B", mkt: "US" },
+  walmart: { sym: "WMT", mkt: "US" },
+  costco: { sym: "COST", mkt: "US" },
+  "home depot": { sym: "HD", mkt: "US" },
+  mcdonalds: { sym: "MCD", mkt: "US" },
+  starbucks: { sym: "SBUX", mkt: "US" },
+  "coca cola": { sym: "KO", mkt: "US" },
+  "coca-cola": { sym: "KO", mkt: "US" },
+  pepsi: { sym: "PEP", mkt: "US" },
+  pepsico: { sym: "PEP", mkt: "US" },
+  disney: { sym: "DIS", mkt: "US" },
+  nike: { sym: "NKE", mkt: "US" },
+  boeing: { sym: "BA", mkt: "US" },
+  caterpillar: { sym: "CAT", mkt: "US" },
+  exxonmobil: { sym: "XOM", mkt: "US" },
+  exxon: { sym: "XOM", mkt: "US" },
+  chevron: { sym: "CVX", mkt: "US" },
+  pfizer: { sym: "PFE", mkt: "US" },
+  "johnson & johnson": { sym: "JNJ", mkt: "US" },
+  "johnson and johnson": { sym: "JNJ", mkt: "US" },
+  "eli lilly": { sym: "LLY", mkt: "US" },
+  unitedhealth: { sym: "UNH", mkt: "US" },
+  "procter & gamble": { sym: "PG", mkt: "US" },
+  merck: { sym: "MRK", mkt: "US" },
+  abbvie: { sym: "ABBV", mkt: "US" },
+  verizon: { sym: "VZ", mkt: "US" },
+  "at&t": { sym: "T", mkt: "US" },
+
+  // ─── HK / China ───────────────────────────────────────────────────────
   tencent: { sym: "0700", mkt: "HK" },
   alibaba: { sym: "9988", mkt: "HK" },
   hsbc: { sym: "0005", mkt: "HK" },
+  meituan: { sym: "3690", mkt: "HK" },
+  "ping an": { sym: "2318", mkt: "HK" },
+  "china mobile": { sym: "0941", mkt: "HK" },
+  "icbc": { sym: "1398", mkt: "HK" },
+  "byd": { sym: "1211", mkt: "HK" },
+  jd: { sym: "9618", mkt: "HK" },
+  netease: { sym: "9999", mkt: "HK" },
+
+  // ─── Malaysia ─────────────────────────────────────────────────────────
   cimb: { sym: "1023", mkt: "MY" },
   maybank: { sym: "1155", mkt: "MY" },
+  "public bank": { sym: "1295", mkt: "MY" },
+  "tenaga nasional": { sym: "5347", mkt: "MY" },
+  petronas: { sym: "5681", mkt: "MY" },
+  "ihh healthcare": { sym: "5225", mkt: "MY" },
+
+  // ─── Singapore ────────────────────────────────────────────────────────
   dbs: { sym: "D05", mkt: "SG" },
+  uob: { sym: "U11", mkt: "SG" },
+  ocbc: { sym: "O39", mkt: "SG" },
+  singtel: { sym: "Z74", mkt: "SG" },
+  capitaland: { sym: "C31", mkt: "SG" },
+
+  // ─── Japan ────────────────────────────────────────────────────────────
   toyota: { sym: "7203", mkt: "JP" },
+  sony: { sym: "6758", mkt: "JP" },
+  softbank: { sym: "9984", mkt: "JP" },
+  nintendo: { sym: "7974", mkt: "JP" },
+  honda: { sym: "7267", mkt: "JP" },
+  "mitsubishi ufj": { sym: "8306", mkt: "JP" },
+
+  // ─── Australia ────────────────────────────────────────────────────────
   bhp: { sym: "BHP", mkt: "AU" },
   cba: { sym: "CBA", mkt: "AU" },
+  "commonwealth bank": { sym: "CBA", mkt: "AU" },
+  "rio tinto": { sym: "RIO", mkt: "AU" },
+  woolworths: { sym: "WOW", mkt: "AU" },
+  westpac: { sym: "WBC", mkt: "AU" },
+  anz: { sym: "ANZ", mkt: "AU" },
+  nab: { sym: "NAB", mkt: "AU" },
+  fortescue: { sym: "FMG", mkt: "AU" },
 };
 
 const MARKET_TOKENS: Record<string, MarketCode> = {
@@ -156,15 +260,19 @@ function extractTickers(text: string): Underlying[] {
       if (!mkt) continue;
       const longName = m[3]?.trim();
       const upper = ticker.toUpperCase();
-      const known = NAME_TO_TICKER[ticker.toLowerCase()] || (longName ? NAME_TO_TICKER[longName.toLowerCase()] : undefined);
-      const symbol = known?.sym || (/^[A-Z0-9.&-]{1,8}$/.test(upper) ? upper : upper);
+      const known =
+        NAME_TO_TICKER[ticker.toLowerCase()] ||
+        (longName ? NAME_TO_TICKER[longName.toLowerCase()] : undefined);
+      const looksLikeTicker = /^[A-Z0-9.&\-]{1,8}$/.test(upper);
+      const symbol = known?.sym || (looksLikeTicker ? upper : upper);
+      const resolved = !!known || looksLikeTicker;
       const rawName = longName ? `${ticker} (${longName})` : ticker;
-      out.push({ rawName, symbol, market: mkt });
+      out.push({ rawName, symbol, market: mkt, resolved });
       continue;
     }
     const known = NAME_TO_TICKER[raw.toLowerCase()];
     if (known) {
-      out.push({ rawName: raw, symbol: known.sym, market: known.mkt });
+      out.push({ rawName: raw, symbol: known.sym, market: known.mkt, resolved: true });
     }
   }
   // Dedupe
@@ -183,8 +291,6 @@ function extractTickers(text: string): Underlying[] {
  * or "ANET US (Arista Networks) ⭐" parse cleanly.
  */
 function stripDecor(s: string): string {
-  // Strip everything in Symbol / Other-Symbol / Modifier_Symbol Unicode
-  // categories plus the regional-indicator pair used for flag emoji.
   return s.replace(/[\p{Extended_Pictographic}\p{Emoji_Modifier}\p{Emoji_Component}]+/gu, "")
           .replace(/[\u{1F1E6}-\u{1F1FF}]+/gu, "")
           .replace(/\s+/g, " ");

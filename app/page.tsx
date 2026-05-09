@@ -8,6 +8,7 @@ import { KOSchedule } from "@/components/KOSchedule";
 import { Analytics } from "@/components/Charts";
 import { ParseResult } from "@/lib/parser";
 import { useQuotes } from "@/lib/hooks/useQuotes";
+import { useSymbolResolver } from "@/lib/hooks/useSymbolResolver";
 import { upsertTranche } from "@/lib/storage";
 import { SAMPLE_TRANCHE_TEXT } from "@/lib/sample";
 import { parseTrancheText } from "@/lib/parser";
@@ -20,7 +21,12 @@ export default function HomePage() {
   const [parsed, setParsed] = useState<ParseResult | null>(() => parseTrancheText(SAMPLE_TRANCHE_TEXT));
   const [saved, setSaved] = useState(false);
 
-  const tranche = parsed?.tranche;
+  const parsedTranche = parsed?.tranche;
+  // Resolve any "Western Digital"-style names to real tickers (WDC) before
+  // we ever ask /api/prices for them. Falls through unchanged when names
+  // are already valid tickers.
+  const { resolved: tranche, pending: resolverPending, errors: resolverErrors } =
+    useSymbolResolver(parsedTranche ?? null);
 
   // Live quotes for parsed underlyings (15s while open, longer when closed via API cache)
   const items = useMemo(
@@ -82,6 +88,23 @@ export default function HomePage() {
           </ul>
         </div>
       ) : null}
+
+      {resolverPending > 0 && (
+        <div className="card mb-3 border-l-4 border-l-accent p-3 text-[12.5px] text-[var(--text-muted)]">
+          Resolving {resolverPending} ticker{resolverPending > 1 ? "s" : ""} via symbol search…
+        </div>
+      )}
+      {resolverErrors.length > 0 && (
+        <div className="card mb-3 border-l-4 border-l-danger p-3 text-[12.5px]">
+          <div className="mb-1 flex items-center gap-2 font-semibold text-danger">
+            <AlertTriangle size={14} /> Could not resolve ticker for: {resolverErrors.join(", ")}
+          </div>
+          <p className="text-[var(--text-muted)]">
+            Edit the paste to use the real ticker (e.g. <code className="font-mono">WDC US</code>{" "}
+            instead of <code className="font-mono">Western Digital US</code>).
+          </p>
+        </div>
+      )}
 
       {trancheWithFixing && (
         <>
