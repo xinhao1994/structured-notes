@@ -52,11 +52,21 @@ const t = { ...tranche, initialFixing: { TSM: 200, AVGO: 1000, GOOGL: 180 } };
 const sched = koSchedule(t);
 eq(sched.length, 11, "ko: 11 monthly observations");
 near(sched[0].koPct, 1.08, 1e-9, "ko: obs1 = 108%");
-near(sched[1].koPct, 1.04, 1e-9, "ko: obs2 = 104% (stepdown)");
+near(sched[1].koPct, 1.04, 1e-9, "ko: obs2 = 104% (-4%)");
 near(sched[2].koPct, 1.00, 1e-9, "ko: obs3 = 100%");
-near(sched[3].koPct, 1.00, 1e-9, "ko: obs4 floored at strike (no <100%)");
-near(sched[10].koPct, 1.00, 1e-9, "ko: final obs floored at strike");
+near(sched[3].koPct, 0.96, 1e-9, "ko: obs4 = 96% (steps below strike)");
+near(sched[10].koPct, 0.68, 1e-9, "ko: obs11 = 68% (108 − 10×4)");
 near(sched[0].koPriceBySymbol.TSM, 216, 1e-9, "ko: TSM obs1 price = 200 × 1.08");
+near(sched[3].koPriceBySymbol.TSM, 192, 1e-9, "ko: TSM obs4 price = 200 × 0.96");
+
+// User-reported case: KO 107%, stepdown 7%
+const t107 = { ...tranche, koStartPct: 1.07, koStepdownPct: 0.07, tenorMonths: 7, initialFixing: { TSM: 200, AVGO: 1000, GOOGL: 180 } };
+const s107 = koSchedule(t107);
+near(s107[0].koPct, 1.07, 1e-9, "ko 107/7: obs1 = 107%");
+near(s107[1].koPct, 1.00, 1e-9, "ko 107/7: obs2 = 100%");
+near(s107[2].koPct, 0.93, 1e-9, "ko 107/7: obs3 = 93%");
+near(s107[3].koPct, 0.86, 1e-9, "ko 107/7: obs4 = 86%");
+near(s107[6].koPct, 0.65, 1e-9, "ko 107/7: obs7 = 65%");
 
 // ─── tableRows + indicative pricing ────────────────────────────────────────
 const quotes = {

@@ -40,8 +40,12 @@ export function ekiPrices(t: Tranche): Record<string, number> {
  *
  * For an N-month, monthly-observed autocallable with KO start = K0 and
  * stepdown s, observations are at months 1..N and the KO trigger at obs i is:
- *   max(strike%, K0 - (i-1) * s)
- * (i.e. you don't step below the strike)
+ *   K0 - (i-1) * s
+ *
+ * The trigger is allowed to step below the strike — this matches typical
+ * step-down autocallable structures where the issuer's call probability
+ * grows over the tenor (e.g. 108 → 104 → 100 → 96 → 92 …). Floored at 0
+ * to avoid negative levels in degenerate inputs.
  *
  * If `koObsFreqMonths > 1` we observe less frequently.
  */
@@ -50,7 +54,7 @@ export function koSchedule(t: Tranche): KoObservation[] {
   const freq = Math.max(1, t.koObsFreqMonths);
   const total = Math.floor(t.tenorMonths / freq);
   for (let i = 1; i <= total; i++) {
-    const koPct = Math.max(t.strikePct, t.koStartPct - (i - 1) * t.koStepdownPct);
+    const koPct = Math.max(0, t.koStartPct - (i - 1) * t.koStepdownPct);
     const date = addMonthsBizSnap(t.tradeDate, i * freq, t.underlyings[0]?.market ?? "US");
     const koPriceBySymbol: Record<string, number> = {};
     if (t.initialFixing) {
