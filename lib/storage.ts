@@ -52,3 +52,12 @@ export function togglePin(id: string): void {
     listPocket().map((e) => (e.id === id ? { ...e, pinned: !e.pinned } : e))
   );
 }
+
+/** Patch fields on a saved tranche. Used by the inline tranche-code editor. */
+export function updateTrancheFields(id: string, updates: Partial<Tranche>): void {
+  savePocket(
+    listPocket().map((e) =>
+      e.id === id ? { ...e, tranche: { ...e.tranche, ...updates } } : e
+    )
+  );
+}

@@ -12,7 +12,8 @@ import { upsertTranche } from "@/lib/storage";
 import { SAMPLE_TRANCHE_TEXT } from "@/lib/sample";
 import { parseTrancheText } from "@/lib/parser";
 import type { Tranche } from "@/lib/types";
-import { BookmarkPlus, BellRing, AlertTriangle } from "lucide-react";
+import Link from "next/link";
+import { BookmarkPlus, BellRing, AlertTriangle, Wallet, Check } from "lucide-react";
 
 export default function HomePage() {
   // Auto-load the sample on first render so the dashboard is alive immediately.
@@ -58,7 +59,9 @@ export default function HomePage() {
     if (!trancheWithFixing) return;
     upsertTranche(trancheWithFixing);
     setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+    // Keep the success banner visible long enough that the user can spot the
+    // "View Pocket" link and click it without it disappearing on them.
+    setTimeout(() => setSaved(false), 6000);
   }
 
   return (
@@ -90,11 +93,24 @@ export default function HomePage() {
             <div className="flex gap-2">
               <button onClick={refresh} className="btn h-9 px-3 text-xs">Refresh</button>
               <button onClick={handleSaveToPocket} className="btn btn-primary h-9 px-3 text-xs">
-                <BookmarkPlus size={14} /> {saved ? "Saved!" : "Save to Pocket"}
+                {saved ? <Check size={14} /> : <BookmarkPlus size={14} />}
+                {saved ? "Saved!" : "Save to Pocket"}
               </button>
               <NotifyButton tranche={trancheWithFixing} />
             </div>
           </div>
+
+          {saved && (
+            <div className="mb-3 flex items-center justify-between gap-3 rounded-xl border border-success/30 bg-successBg p-3 text-[13px] text-success dark:bg-success/10">
+              <div className="flex items-center gap-2">
+                <Check size={16} />
+                Saved to Pocket. You can rename the tranche code from the Pocket card.
+              </div>
+              <Link href="/pocket" className="btn h-8 px-3 text-xs">
+                <Wallet size={14} /> View Pocket
+              </Link>
+            </div>
+          )}
 
           <ProductTable tranche={trancheWithFixing} quotes={quotes} />
           <Dashboard tranche={trancheWithFixing} quotes={quotes} />
