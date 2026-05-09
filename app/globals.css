@@ -1,0 +1,160 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light dark;
+  --bg: #f7f8fa;
+  --surface: #ffffff;
+  --surface-2: #ffffff;
+  --line: #e7eaf0;
+  --text: #0d111c;
+  --text-muted: #5d6a7e;
+  --accent: #0a3a66;
+}
+.dark {
+  --bg: #070912;
+  --surface: #0d111c;
+  --surface-2: #11172a;
+  --line: #1e2641;
+  --text: #eef0f4;
+  --text-muted: #8a96a8;
+  --accent: #69a2d8;
+}
+
+html, body { height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-feature-settings: "tnum" 1, "ss01" 1, "cv11" 1;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Tabular numbers for everything price-like */
+.tabular { font-variant-numeric: tabular-nums; }
+
+/* Premium thin scrollbar */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: #cbd2dd; border-radius: 8px; }
+.dark ::-webkit-scrollbar-thumb { background: #2a3344; }
+
+/* Smooth focus ring */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* Banking-style table */
+.bank-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+.bank-table th, .bank-table td {
+  border-bottom: 1px solid var(--line);
+  padding: 10px 12px;
+  text-align: right;
+  white-space: nowrap;
+}
+.bank-table th:first-child, .bank-table td:first-child {
+  text-align: left;
+}
+.bank-table thead th {
+  font-size: 11px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  background: var(--surface-2);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.bank-table tbody tr:hover {
+  background: rgba(10, 58, 102, 0.03);
+}
+.dark .bank-table tbody tr:hover {
+  background: rgba(105, 162, 216, 0.06);
+}
+
+/* Subtle pulse for live elements */
+@keyframes pulse-soft {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+.live-dot {
+  width: 8px; height: 8px; border-radius: 9999px;
+  background: #137a4a;
+  animation: pulse-soft 2s ease-in-out infinite;
+  display: inline-block;
+}
+.live-dot.closed { background: #b3261e; animation: none; }
+
+/* Card */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 1px 2px rgba(15,23,42,.04), 0 1px 1px rgba(15,23,42,.03);
+}
+.dark .card { box-shadow: none; }
+
+/* Inputs */
+.input {
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  color: var(--text);
+  font-size: 14px;
+}
+.input:focus { border-color: var(--accent); }
+
+/* Buttons */
+.btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  height: 38px; padding: 0 14px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 500;
+  font-size: 14px;
+  transition: background-color .12s ease, border-color .12s ease, transform .04s ease;
+}
+.btn:hover { background: var(--surface-2); }
+.btn:active { transform: translateY(1px); }
+.btn-primary {
+  background: #0a3a66;
+  border-color: #0a3a66;
+  color: white;
+}
+.btn-primary:hover { background: #082c4d; border-color: #082c4d; }
+.dark .btn-primary { background: #1a64a8; border-color: #1a64a8; }
+.dark .btn-primary:hover { background: #2178c2; border-color: #2178c2; }
+
+/* Risk badge colors */
+.badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; letter-spacing: .02em; }
+.badge.safe       { background: #e6f4ec; color: #137a4a; }
+.badge.moderate   { background: #fdf3e3; color: #a4670c; }
+.badge.high-risk  { background: #fbe9e7; color: #b3261e; }
+.badge.critical   { background: #b3261e; color: white; }
+.badge.near-ki    { background: #fbe9e7; color: #b3261e; }
+.badge.near-ko    { background: #eaf2fb; color: #0a3a66; }
+.dark .badge.safe { background: rgba(19,122,74,.15); color: #6dd49a; }
+.dark .badge.moderate { background: rgba(164,103,12,.15); color: #f3b65a; }
+.dark .badge.high-risk { background: rgba(179,38,30,.15); color: #ff8b85; }
+.dark .badge.near-ki { background: rgba(179,38,30,.15); color: #ff8b85; }
+.dark .badge.near-ko { background: rgba(105,162,216,.15); color: #9bc1e6; }
+
+/* Mobile-first horizontal scroller for tables */
+.scroll-x { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+/* Print / capture friendly */
+@media print {
+  body { background: white; }
+  .no-print { display: none !important; }
+}

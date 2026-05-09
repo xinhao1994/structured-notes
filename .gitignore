@@ -1,0 +1,17 @@
+node_modules/
+.next/
+out/
+dist/
+build/
+
+.env
+.env.local
+.env.*.local
+
+.DS_Store
+*.log
+.vercel
+.idea/
+.vscode/
+ios/
+android/
