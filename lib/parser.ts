@@ -69,14 +69,17 @@ function pct(s: string | undefined): number | undefined {
 }
 
 function parseDate(s: string): string | undefined {
-  // Accepts "12 May 2026", "8 - 12 May 2026", "12 May 2026, 4pm"
+  // Accepts "12 May 2026", "8 - 12 May 2026", "12 May 2026, 4pm",
+  // and 2-digit-year forms like "08 May 26".
   const m = s.match(
-    /(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})/
+    /(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{2,4})/
   );
   if (!m) return undefined;
   const day = parseInt(m[1], 10);
   const monthName = m[2].toLowerCase();
-  const year = parseInt(m[3], 10);
+  let year = parseInt(m[3], 10);
+  // 2-digit year: assume current century. "26" → 2026, "99" → 2099.
+  if (year < 100) year += 2000;
   const months = [
     "jan", "feb", "mar", "apr", "may", "jun",
     "jul", "aug", "sep", "oct", "nov", "dec",
@@ -92,15 +95,16 @@ function parseOffering(line: string): { start?: string; end?: string } {
   //   "8 - 12 May 2026"     (dash range, same month/year)
   //   "8 May - 12 May 2026" (full dates)
   //   "8 May 2026 - 12 May 2026"
+  //   2-digit years also accepted (e.g. "8 - 12 May 26")
   const trimmed = line.replace(/^[Oo]ffering[:\s]*/, "").trim();
   const range = trimmed.match(
-    /(\d{1,2})\s*(?:[A-Za-z]{3,9})?\s*(?:\d{4})?\s*[-–]\s*(\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})/
+    /(\d{1,2})\s*(?:[A-Za-z]{3,9})?\s*(?:\d{2,4})?\s*[-–]\s*(\d{1,2}\s+[A-Za-z]{3,9}\s+\d{2,4})/
   );
   if (range) {
     const end = parseDate(range[2]);
     if (!end) return {};
     // Pull month/year from end and graft start day onto it
-    const endMatch = range[2].match(/(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})/)!;
+    const endMatch = range[2].match(/(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{2,4})/)!;
     const startDay = parseInt(range[1], 10);
     const months = [
       "jan", "feb", "mar", "apr", "may", "jun",
@@ -108,7 +112,9 @@ function parseOffering(line: string): { start?: string; end?: string } {
     ];
     const idx = months.findIndex((m) => endMatch[2].toLowerCase().startsWith(m));
     if (idx < 0) return { end };
-    const start = new Date(Date.UTC(parseInt(endMatch[3], 10), idx, startDay))
+    let endYear = parseInt(endMatch[3], 10);
+    if (endYear < 100) endYear += 2000;
+    const start = new Date(Date.UTC(endYear, idx, startDay))
       .toISOString().slice(0, 10);
     return { start, end };
   }
@@ -127,24 +133,33 @@ function detectCurrency(text: string): Currency | undefined {
 function extractTickers(text: string): Underlying[] {
   // Look in the body, after "Tranche code" and before "Strike".
   // We grab non-empty lines that contain a market token OR look ticker-like.
-  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  // Strip leading/trailing emoji and ad-hoc decoration so a line like
+  // "💡 ANET US (Arista Networks) ⭐"
+  // still parses as ticker=ANET, market=US, name="ANET (Arista Networks)".
+  const lines = text.split(/\r?\n/)
+    .map((l) => stripDecor(l).trim())
+    .filter(Boolean);
   const out: Underlying[] = [];
   for (const raw of lines) {
     if (/^(Strike|KO|Coupon|Tenor|EKI|Offering|Trade|Settlement|Tranche|MYR|USD|HKD|SGD|JPY|AUD)\b/i.test(raw)) {
       continue;
     }
-    if (/^[🇲🇺🇸🇭🇰🇯🇵🇦🇺🇨🇦🇸🇬]/u.test(raw)) continue;
-    // Find a market token at end of line ("TSM US", "0700 HK", "1155.KL")
-    const m = raw.match(/^([A-Za-z0-9.&\- ]+?)\s+([A-Z]{1,4}|\.[A-Z]{1,3})$/);
+    // Allow optional "(Company Name)" after the market token, e.g.
+    //   "ANET US (Arista Networks)"
+    //   "0700 HK"
+    //   "1155.KL (Maybank)"
+    const m = raw.match(/^([A-Za-z0-9.&\- ]+?)\s+([A-Z]{1,4}|\.[A-Z]{1,3})(?:\s*\((.*?)\))?\s*$/);
     if (m) {
-      const name = m[1].trim();
+      const ticker = m[1].trim();
       const tok = m[2].replace(/^\./, "");
       const mkt: MarketCode | undefined = MARKET_TOKENS[tok];
       if (!mkt) continue;
-      const upper = name.toUpperCase();
-      const known = NAME_TO_TICKER[name.toLowerCase()];
-      const symbol = known?.sym || (/^[A-Z0-9.&-]{1,8}$/.test(upper) ? upper : known?.sym || upper);
-      out.push({ rawName: name, symbol, market: mkt });
+      const longName = m[3]?.trim();
+      const upper = ticker.toUpperCase();
+      const known = NAME_TO_TICKER[ticker.toLowerCase()] || (longName ? NAME_TO_TICKER[longName.toLowerCase()] : undefined);
+      const symbol = known?.sym || (/^[A-Z0-9.&-]{1,8}$/.test(upper) ? upper : upper);
+      const rawName = longName ? `${ticker} (${longName})` : ticker;
+      out.push({ rawName, symbol, market: mkt });
       continue;
     }
     const known = NAME_TO_TICKER[raw.toLowerCase()];
@@ -160,6 +175,19 @@ function extractTickers(text: string): Underlying[] {
     seen.add(k);
     return true;
   });
+}
+
+/**
+ * Remove emojis and other decorative symbols. Keeps letters, numbers,
+ * common punctuation, and spaces. Used so that lines like "💡MSI 👶🏻🦥"
+ * or "ANET US (Arista Networks) ⭐" parse cleanly.
+ */
+function stripDecor(s: string): string {
+  // Strip everything in Symbol / Other-Symbol / Modifier_Symbol Unicode
+  // categories plus the regional-indicator pair used for flag emoji.
+  return s.replace(/[\p{Extended_Pictographic}\p{Emoji_Modifier}\p{Emoji_Component}]+/gu, "")
+          .replace(/[\u{1F1E6}-\u{1F1FF}]+/gu, "")
+          .replace(/\s+/g, " ");
 }
 
 function parseField(text: string, key: RegExp): string | undefined {
@@ -181,9 +209,10 @@ export function parseTrancheText(input: string): ParseResult {
   const warnings: ParseWarning[] = [];
   const text = input.trim();
 
-  const issuer =
-    parseField(text, /^([A-Z]{2,8})\s*$/m) ||
-    parseField(text, /^([A-Z]{2,8})\s*\n/);
+  // Strip decorative emojis from each line for issuer detection so a header
+  // like "💡 MSI 🦥" still resolves to "MSI".
+  const lines = text.split(/\r?\n/).map((l) => stripDecor(l).trim()).filter(Boolean);
+  const issuer = lines.find((l) => /^[A-Z]{2,8}$/.test(l));
 
   const trancheCode =
     parseField(text, /Tranche\s*code[:\s]+([A-Z0-9-]+)/i) ||

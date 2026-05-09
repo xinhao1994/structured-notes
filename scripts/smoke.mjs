@@ -115,6 +115,36 @@ eq(addMonthsBizSnap("2026-01-30", 1, "US"), "2026-03-02", "markets: Jan 30 + 1m 
 const today = new Date().toISOString().slice(0, 10);
 ok(today < tranche.tradeDate, "fixing: today is before trade date in our test horizon");
 
+// ─── Variant: 2-digit year + emoji header + parenthetical company names ───
+const SAMPLE_2 = `💡MSI 👶🏻🦥
+Offering: 08 May 26
+Trade: 08 May 26
+Settlement: T+7
+Tranche Code: MSIT260572
+MYR
+ANET US (Arista Networks)
+APH US (Amphenol)
+Strike 100%
+KO 107%, Stepdown 7%
+Coupon 8.5% p.a.
+Tenor 7M
+EKI 60%
+`;
+const r2 = parseTrancheText(SAMPLE_2);
+eq(r2.tranche.issuer, "MSI", "v2: emoji-decorated issuer detected");
+eq(r2.tranche.trancheCode, "MSIT260572", "v2: tranche code");
+eq(r2.tranche.tradeDate, "2026-05-08", "v2: 2-digit year date '08 May 26'");
+eq(r2.tranche.offeringEnd, "2026-05-08", "v2: 2-digit year offering");
+eq(r2.tranche.currency, "MYR", "v2: MYR currency");
+eq(r2.tranche.tenorMonths, 7, "v2: tenor 7M");
+near(r2.tranche.couponPa, 0.085, 1e-9, "v2: coupon 8.5% pa");
+near(r2.tranche.koStartPct, 1.07, 1e-9, "v2: KO 107%");
+near(r2.tranche.koStepdownPct, 0.07, 1e-9, "v2: stepdown 7% (capital S)");
+near(r2.tranche.ekiPct, 0.6, 1e-9, "v2: EKI 60%");
+eq(r2.tranche.underlyings.length, 2, "v2: 2 underlyings (parens-suffixed)");
+eq(r2.tranche.underlyings.map(u => u.symbol).join(","), "ANET,APH", "v2: ANET, APH detected");
+eq(r2.tranche.underlyings[0].rawName, "ANET (Arista Networks)", "v2: rawName preserves company");
+
 // ─── Summary ───────────────────────────────────────────────────────────────
 console.log("\n────────────────");
 console.log(`${pass} passed · ${fail} failed`);
