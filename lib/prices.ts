@@ -219,6 +219,145 @@ export async function fetchQuotes(items: { symbol: string; market: MarketCode }[
   return Promise.all(items.map((i) => fetchQuote(i.symbol, i.market)));
 }
 
+// ─── historical close (for the trade-date initial fixing) ───────────────────
+
+export interface HistoricalClose {
+  symbol: string;
+  market: MarketCode;
+  /** Trade date the user asked about. */
+  requestedDate: string;
+  /** Date of the close we actually used (e.g. snapped back to last business day). */
+  effectiveDate: string;
+  close: number;
+  source: "polygon" | "finnhub" | "alphavantage";
+}
+
+// Permanent cache — historical closes never change once set.
+const histCache = new Map<string, HistoricalClose>();
+function histKey(symbol: string, market: MarketCode, date: string) {
+  return `${market}:${symbol}:${date}`;
+}
+
+/**
+ * Closing price on or before `date` for a given symbol+market.
+ *
+ * Tries Polygon (best for US daily aggs on free tier) → Finnhub (paid candle)
+ * → Alpha Vantage (free TIME_SERIES_DAILY, rate-limited but global coverage).
+ * Returns null if no provider has the data.
+ *
+ * If the requested date falls on a weekend or holiday, the result is the
+ * close on the most recent prior trading day (effectiveDate < requestedDate).
+ */
+export async function fetchHistoricalClose(
+  symbol: string,
+  market: MarketCode,
+  date: string
+): Promise<HistoricalClose | null> {
+  const k = histKey(symbol, market, date);
+  const hit = histCache.get(k);
+  if (hit) return hit;
+
+  const chain = [polygonHist, finnhubHist, alphaHist];
+  for (const f of chain) {
+    const r = await f(symbol, market, date);
+    if (r && isFinite(r.close) && r.close > 0) {
+      histCache.set(k, r);
+      return r;
+    }
+  }
+  return null;
+}
+
+async function polygonHist(symbol: string, market: MarketCode, date: string): Promise<HistoricalClose | null> {
+  const key = process.env.POLYGON_API_KEY;
+  if (!key) return null;
+  const sym = polygonSymbol(symbol, market);
+  if (!sym) return null;
+  // Pull 7 days ending on the trade date so we can snap back over weekends.
+  const end = date;
+  const start = isoMinusDays(date, 10);
+  try {
+    const r = await fetch(
+      `https://api.polygon.io/v2/aggs/ticker/${sym}/range/1/day/${start}/${end}?adjusted=true&sort=desc&limit=10&apiKey=${key}`
+    );
+    if (!r.ok) return null;
+    const j = await r.json();
+    const bars = j?.results || [];
+    for (const b of bars) {
+      const eff = new Date(b.t).toISOString().slice(0, 10);
+      if (eff <= date) {
+        return { symbol, market, requestedDate: date, effectiveDate: eff, close: b.c, source: "polygon" };
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+async function finnhubHist(symbol: string, market: MarketCode, date: string): Promise<HistoricalClose | null> {
+  const key = process.env.FINNHUB_API_KEY;
+  if (!key) return null;
+  const sym = finnhubSymbol(symbol, market);
+  const target = new Date(date + "T00:00:00Z").getTime();
+  const from = Math.floor((target - 10 * 86_400_000) / 1000);
+  const to = Math.floor((target + 86_400_000) / 1000);
+  try {
+    const r = await fetch(
+      `https://finnhub.io/api/v1/stock/candle?symbol=${encodeURIComponent(sym)}&resolution=D&from=${from}&to=${to}&token=${key}`
+    );
+    if (!r.ok) return null;
+    const j = await r.json();
+    if (j?.s !== "ok" || !Array.isArray(j.c) || !j.c.length) return null;
+    // Walk newest → oldest, picking the candle whose date is <= target.
+    for (let i = j.t.length - 1; i >= 0; i--) {
+      const eff = new Date(j.t[i] * 1000).toISOString().slice(0, 10);
+      if (eff <= date) {
+        return { symbol, market, requestedDate: date, effectiveDate: eff, close: j.c[i], source: "finnhub" };
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+async function alphaHist(symbol: string, market: MarketCode, date: string): Promise<HistoricalClose | null> {
+  const key = process.env.ALPHA_VANTAGE_API_KEY;
+  if (!key) return null;
+  const sym = alphaSymbol(symbol, market);
+  // outputsize=full needed for trade dates older than ~100 days.
+  const monthsAgo = (Date.now() - new Date(date + "T00:00:00Z").getTime()) / (30 * 86_400_000);
+  const size = monthsAgo > 3 ? "full" : "compact";
+  try {
+    const r = await fetch(
+      `https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=${encodeURIComponent(sym)}&outputsize=${size}&apikey=${key}`
+    );
+    if (!r.ok) return null;
+    const j = await r.json();
+    const series = j?.["Time Series (Daily)"];
+    if (!series) return null;
+    const dates = Object.keys(series).sort().reverse();
+    for (const d of dates) {
+      if (d <= date) {
+        const close = parseFloat(series[d]["4. close"]);
+        if (isFinite(close) && close > 0) {
+          return { symbol, market, requestedDate: date, effectiveDate: d, close, source: "alphavantage" };
+        }
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function isoMinusDays(iso: string, n: number): string {
+  const d = new Date(iso + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() - n);
+  return d.toISOString().slice(0, 10);
+}
+
 function today(): string {
   return new Date().toISOString().slice(0, 10);
 }

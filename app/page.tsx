@@ -9,6 +9,7 @@ import { Analytics } from "@/components/Charts";
 import { ParseResult } from "@/lib/parser";
 import { useQuotes } from "@/lib/hooks/useQuotes";
 import { useSymbolResolver } from "@/lib/hooks/useSymbolResolver";
+import { useHistoricalFixings } from "@/lib/hooks/useHistoricalFixings";
 import { upsertTranche } from "@/lib/storage";
 import { SAMPLE_TRANCHE_TEXT } from "@/lib/sample";
 import { parseTrancheText } from "@/lib/parser";
@@ -35,26 +36,18 @@ export default function HomePage() {
   );
   const { quotes, loading, asOf, refresh } = useQuotes(items, 15_000);
 
-  // Apply indicative initial fixing (use latest close until trade date passes)
-  // and switch to actual fixing automatically once trade date is reached.
-  const trancheWithFixing: Tranche | null = useMemo(() => {
-    if (!tranche) return null;
-    const today = new Date().toISOString().slice(0, 10);
-    const isPreTrade = today < tranche.tradeDate;
-    if (!Object.keys(quotes).length) return tranche;
+  // The previous-close map drives the pre-trade indicative fixing path inside
+  // useHistoricalFixings. Memoised so the hook doesn't re-run on every render.
+  const prevCloses = useMemo(() => {
+    const m: Record<string, number | undefined> = {};
+    for (const sym of Object.keys(quotes)) m[sym] = quotes[sym]?.prevClose ?? quotes[sym]?.price;
+    return m;
+  }, [quotes]);
 
-    const fixing: Record<string, number> = {};
-    for (const u of tranche.underlyings) {
-      const q = quotes[u.symbol];
-      if (q?.price != null) {
-        // Pre-trade: indicative = latest available close (prevClose preferred,
-        // else live). On/after trade date: actual = whatever the live price is
-        // at fixing time (the desk would override this with the official fix).
-        fixing[u.symbol] = isPreTrade ? (q.prevClose ?? q.price) : q.price;
-      }
-    }
-    return { ...tranche, initialFixing: fixing, isIndicativeFixing: isPreTrade };
-  }, [tranche, quotes]);
+  // Pre-trade  → indicative fixing (latest close)
+  // Post-trade → actual fixing fetched from provider history on the trade date
+  const fixingResult = useHistoricalFixings(tranche, prevCloses);
+  const trancheWithFixing: Tranche | null = fixingResult.tranche;
 
   function handleParsed(r: ParseResult) {
     setParsed(r);
@@ -102,6 +95,23 @@ export default function HomePage() {
           <p className="text-[var(--text-muted)]">
             Edit the paste to use the real ticker (e.g. <code className="font-mono">WDC US</code>{" "}
             instead of <code className="font-mono">Western Digital US</code>).
+          </p>
+        </div>
+      )}
+
+      {fixingResult.pending.length > 0 && (
+        <div className="card mb-3 border-l-4 border-l-accent p-3 text-[12.5px] text-[var(--text-muted)]">
+          Fetching trade-date close for {fixingResult.pending.join(", ")}…
+        </div>
+      )}
+      {fixingResult.errors.length > 0 && (
+        <div className="card mb-3 border-l-4 border-l-warning p-3 text-[12.5px]">
+          <div className="mb-1 flex items-center gap-2 font-semibold text-warning">
+            <AlertTriangle size={14} /> Trade-date close unavailable for: {fixingResult.errors.join(", ")}
+          </div>
+          <p className="text-[var(--text-muted)]">
+            Falling back to latest close. Add an <code className="font-mono">ALPHA_VANTAGE_API_KEY</code>{" "}
+            (free at alphavantage.co) for reliable historical closes across HK/MY/SG/JP/AU.
           </p>
         </div>
       )}
