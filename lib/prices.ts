@@ -29,7 +29,6 @@ function writeCache(q: PriceQuote): void {
   cache.set(cacheKey(q.symbol, q.market), { q, until: Date.now() + ttlMs(q.market) });
 }
 
-// ─── provider symbol mapping ────────────────────────────────────────────────
 function polygonSymbol(symbol: string, market: MarketCode): string | null {
   if (market !== "US") return null;
   return symbol.toUpperCase();
@@ -45,7 +44,6 @@ function alphaSymbol(symbol: string, market: MarketCode): string {
   return `${symbol.toUpperCase()}${def.alphaVantageSuffix ?? ""}`;
 }
 
-// ─── live quote providers ───────────────────────────────────────────────────
 async function fromPolygon(symbol: string, market: MarketCode): Promise<PriceQuote | null> {
   const key = process.env.POLYGON_API_KEY;
   if (!key) return null;
@@ -138,7 +136,6 @@ function fromMock(symbol: string, market: MarketCode): PriceQuote {
   };
 }
 
-// ─── public API: live quotes ────────────────────────────────────────────────
 export async function fetchQuote(symbol: string, market: MarketCode): Promise<PriceQuote> {
   const cached = readCache(symbol, market);
   if (cached) return cached;
@@ -158,7 +155,6 @@ export async function fetchQuotes(items: { symbol: string; market: MarketCode }[
   return Promise.all(items.map((i) => fetchQuote(i.symbol, i.market)));
 }
 
-<<<<<<< HEAD
 // ─── historical close (for the trade-date initial fixing) ───────────────────
 export interface HistoricalClose {
   symbol: string;
@@ -257,11 +253,6 @@ function isoMinusDays(iso: string, n: number): string {
   return d.toISOString().slice(0, 10);
 }
 function today(): string { return new Date().toISOString().slice(0, 10); }
-=======
-function today(): string {
-  return new Date().toISOString().slice(0, 10);
-}
->>>>>>> parent of e41b707 (fix: actual initial fixing from trade-date close (was using live))
 function oneYearAgo(): string {
   const d = new Date();
   d.setUTCFullYear(d.getUTCFullYear() - 1);
