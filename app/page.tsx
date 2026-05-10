@@ -10,7 +10,6 @@ import { Analytics } from "@/components/Charts";
 import { ParseResult } from "@/lib/parser";
 import { useQuotes } from "@/lib/hooks/useQuotes";
 import { useSymbolResolver } from "@/lib/hooks/useSymbolResolver";
-import { useHistoricalFixings } from "@/lib/hooks/useHistoricalFixings";
 import { upsertTranche } from "@/lib/storage";
 import { SAMPLE_TRANCHE_TEXT } from "@/lib/sample";
 import { parseTrancheText } from "@/lib/parser";
@@ -31,14 +30,21 @@ export default function HomePage() {
   );
   const { quotes, loading, asOf, refresh } = useQuotes(items, 15_000);
 
-  const prevCloses = useMemo(() => {
-    const m: Record<string, number | undefined> = {};
-    for (const sym of Object.keys(quotes)) m[sym] = quotes[sym]?.prevClose ?? quotes[sym]?.price;
-    return m;
-  }, [quotes]);
-
-  const fixingResult = useHistoricalFixings(tranche, prevCloses);
-  const trancheWithFixing: Tranche | null = fixingResult.tranche;
+  // Initial fixing: pre-trade -> indicative (latest close); on/after trade -> use latest live as actual.
+  // (Historical-close lookup will be added back once the stuck file permissions are cleared.)
+  const trancheWithFixing: Tranche | null = useMemo(() => {
+    if (!tranche) return null;
+    const today = new Date().toISOString().slice(0, 10);
+    const isPreTrade = today < tranche.tradeDate;
+    const fixing: Record<string, number> = {};
+    for (const u of tranche.underlyings) {
+      const q = quotes[u.symbol];
+      if (q?.price != null) {
+        fixing[u.symbol] = isPreTrade ? (q.prevClose ?? q.price) : (q.prevClose ?? q.price);
+      }
+    }
+    return { ...tranche, initialFixing: fixing, isIndicativeFixing: isPreTrade };
+  }, [tranche, quotes]);
 
   function handleParsed(r: ParseResult) {
     setParsed(r);
@@ -83,22 +89,6 @@ export default function HomePage() {
           </div>
           <p className="text-[var(--text-muted)]">
             Use the real ticker (e.g. <code className="font-mono">WDC US</code> instead of <code className="font-mono">Western Digital US</code>).
-          </p>
-        </div>
-      )}
-
-      {fixingResult.pending.length > 0 && (
-        <div className="card mb-3 border-l-4 border-l-accent p-3 text-[12.5px] text-[var(--text-muted)]">
-          Fetching trade-date close for {fixingResult.pending.join(", ")}...
-        </div>
-      )}
-      {fixingResult.errors.length > 0 && (
-        <div className="card mb-3 border-l-4 border-l-warning p-3 text-[12.5px]">
-          <div className="mb-1 flex items-center gap-2 font-semibold text-warning">
-            <AlertTriangle size={14} /> Trade-date close unavailable for: {fixingResult.errors.join(", ")}
-          </div>
-          <p className="text-[var(--text-muted)]">
-            Falling back to latest close. Add an <code className="font-mono">ALPHA_VANTAGE_API_KEY</code> for reliable history across HK/MY/SG/JP/AU.
           </p>
         </div>
       )}
