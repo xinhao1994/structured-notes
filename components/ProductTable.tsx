@@ -1,7 +1,7 @@
 "use client";
 
 import { forwardRef, useImperativeHandle, useRef } from "react";
-import { Copy, Download, FileImage, FileText } from "lucide-react";
+import { Copy, FileImage, FileText } from "lucide-react";
 import * as htmlToImage from "html-to-image";
 import jsPDF from "jspdf";
 import type { Tranche, PriceQuote } from "@/lib/types";
@@ -29,23 +29,20 @@ export const ProductTable = forwardRef<ProductTableHandle, Props>(function Produ
     async exportPng() {
       if (!tableRef.current) return;
       const dataUrl = await htmlToImage.toPng(tableRef.current, {
-        backgroundColor: "white",
-        pixelRatio: 2,
+        backgroundColor: "white", pixelRatio: 2,
       });
       download(dataUrl, `${tranche.trancheCode}.png`);
     },
     async exportPdf() {
       if (!tableRef.current) return;
       const dataUrl = await htmlToImage.toPng(tableRef.current, {
-        backgroundColor: "white",
-        pixelRatio: 2,
+        backgroundColor: "white", pixelRatio: 2,
       });
       const pdf = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
-      const pageW = pdf.internal.pageSize.getWidth();
       const img = new Image();
       img.src = dataUrl;
       await new Promise((r) => (img.onload = r));
-      const w = pageW - 60;
+      const w = pdf.internal.pageSize.getWidth() - 60;
       const h = (img.height * w) / img.width;
       pdf.text(`Tranche ${tranche.trancheCode}`, 30, 30);
       pdf.addImage(dataUrl, "PNG", 30, 50, w, h);
@@ -57,13 +54,8 @@ export const ProductTable = forwardRef<ProductTableHandle, Props>(function Produ
         const delta = r.initial && r.live ? `${(((r.live - r.initial) / r.initial) * 100).toFixed(2)}%` : "";
         return [
           `${r.underlying.rawName} ${r.underlying.market}`,
-          r.initial ?? "",
-          r.live ?? "",
-          delta,
-          r.high52 ?? "",
-          r.low52 ?? "",
-          r.eki ?? "",
-          r.strike ?? "",
+          r.initial ?? "", r.live ?? "", delta,
+          r.high52 ?? "", r.low52 ?? "", r.eki ?? "", r.strike ?? "",
         ].join("\t");
       });
       const text = [header, ...lines].join("\n");
@@ -84,24 +76,17 @@ export const ProductTable = forwardRef<ProductTableHandle, Props>(function Produ
           <button
             onClick={async () => {
               const node = tableRef.current!;
-              const dataUrl = await htmlToImage.toPng(node, {
-                backgroundColor: "white",
-                pixelRatio: 2,
-              });
+              const dataUrl = await htmlToImage.toPng(node, { backgroundColor: "white", pixelRatio: 2 });
               download(dataUrl, `${tranche.trancheCode}.png`);
             }}
-            className="btn h-9 px-3 text-xs"
-            title="Export as PNG"
+            className="btn h-9 px-3 text-xs" title="Export as PNG"
           >
             <FileImage size={14} /> PNG
           </button>
           <button
             onClick={async () => {
               const node = tableRef.current!;
-              const dataUrl = await htmlToImage.toPng(node, {
-                backgroundColor: "white",
-                pixelRatio: 2,
-              });
+              const dataUrl = await htmlToImage.toPng(node, { backgroundColor: "white", pixelRatio: 2 });
               const pdf = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
               const img = new Image();
               img.src = dataUrl;
@@ -112,28 +97,24 @@ export const ProductTable = forwardRef<ProductTableHandle, Props>(function Produ
               pdf.addImage(dataUrl, "PNG", 30, 50, w, h);
               pdf.save(`${tranche.trancheCode}.pdf`);
             }}
-            className="btn h-9 px-3 text-xs"
-            title="Export as PDF"
+            className="btn h-9 px-3 text-xs" title="Export as PDF"
           >
             <FileText size={14} /> PDF
           </button>
           <button
             onClick={async () => {
-              const header = ["Stock", "Live Price", "52W High", "52W Low", "EKI Price", "Strike Price"].join("\t");
-              const lines = rows.map((r) =>
-                [
+              const header = ["Stock", "Initial Fixing", "Live Price", "Δ vs Initial", "52W High", "52W Low", "EKI Price", "Strike Price"].join("\t");
+              const lines = rows.map((r) => {
+                const delta = r.initial && r.live ? `${(((r.live - r.initial) / r.initial) * 100).toFixed(2)}%` : "";
+                return [
                   `${r.underlying.rawName} ${r.underlying.market}`,
-                  r.live ?? "",
-                  r.high52 ?? "",
-                  r.low52 ?? "",
-                  r.eki ?? "",
-                  r.strike ?? "",
-                ].join("\t")
-              );
+                  r.initial ?? "", r.live ?? "", delta,
+                  r.high52 ?? "", r.low52 ?? "", r.eki ?? "", r.strike ?? "",
+                ].join("\t");
+              });
               try { await navigator.clipboard.writeText([header, ...lines].join("\n")); } catch {}
             }}
-            className="btn h-9 px-3 text-xs"
-            title="Copy as TSV"
+            className="btn h-9 px-3 text-xs" title="Copy as TSV"
           >
             <Copy size={14} /> Copy
           </button>

@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
+import Link from "next/link";
 import { ProductParser } from "@/components/ProductParser";
 import { ProductTable } from "@/components/ProductTable";
 import { Dashboard } from "@/components/Dashboard";
@@ -14,38 +15,28 @@ import { upsertTranche } from "@/lib/storage";
 import { SAMPLE_TRANCHE_TEXT } from "@/lib/sample";
 import { parseTrancheText } from "@/lib/parser";
 import type { Tranche } from "@/lib/types";
-import Link from "next/link";
 import { BookmarkPlus, BellRing, AlertTriangle, Wallet, Check } from "lucide-react";
 
 export default function HomePage() {
-  // Auto-load the sample on first render so the dashboard is alive immediately.
   const [parsed, setParsed] = useState<ParseResult | null>(() => parseTrancheText(SAMPLE_TRANCHE_TEXT));
   const [saved, setSaved] = useState(false);
 
   const parsedTranche = parsed?.tranche;
-  // Resolve any "Western Digital"-style names to real tickers (WDC) before
-  // we ever ask /api/prices for them. Falls through unchanged when names
-  // are already valid tickers.
   const { resolved: tranche, pending: resolverPending, errors: resolverErrors } =
     useSymbolResolver(parsedTranche ?? null);
 
-  // Live quotes for parsed underlyings (15s while open, longer when closed via API cache)
   const items = useMemo(
     () => (tranche?.underlyings ?? []).map((u) => ({ symbol: u.symbol, market: u.market })),
     [tranche]
   );
   const { quotes, loading, asOf, refresh } = useQuotes(items, 15_000);
 
-  // The previous-close map drives the pre-trade indicative fixing path inside
-  // useHistoricalFixings. Memoised so the hook doesn't re-run on every render.
   const prevCloses = useMemo(() => {
     const m: Record<string, number | undefined> = {};
     for (const sym of Object.keys(quotes)) m[sym] = quotes[sym]?.prevClose ?? quotes[sym]?.price;
     return m;
   }, [quotes]);
 
-  // Pre-trade  → indicative fixing (latest close)
-  // Post-trade → actual fixing fetched from provider history on the trade date
   const fixingResult = useHistoricalFixings(tranche, prevCloses);
   const trancheWithFixing: Tranche | null = fixingResult.tranche;
 
@@ -58,8 +49,6 @@ export default function HomePage() {
     if (!trancheWithFixing) return;
     upsertTranche(trancheWithFixing);
     setSaved(true);
-    // Keep the success banner visible long enough that the user can spot the
-    // "View Pocket" link and click it without it disappearing on them.
     setTimeout(() => setSaved(false), 6000);
   }
 
@@ -84,7 +73,7 @@ export default function HomePage() {
 
       {resolverPending > 0 && (
         <div className="card mb-3 border-l-4 border-l-accent p-3 text-[12.5px] text-[var(--text-muted)]">
-          Resolving {resolverPending} ticker{resolverPending > 1 ? "s" : ""} via symbol search…
+          Resolving {resolverPending} ticker{resolverPending > 1 ? "s" : ""} via symbol search...
         </div>
       )}
       {resolverErrors.length > 0 && (
@@ -93,15 +82,14 @@ export default function HomePage() {
             <AlertTriangle size={14} /> Could not resolve ticker for: {resolverErrors.join(", ")}
           </div>
           <p className="text-[var(--text-muted)]">
-            Edit the paste to use the real ticker (e.g. <code className="font-mono">WDC US</code>{" "}
-            instead of <code className="font-mono">Western Digital US</code>).
+            Use the real ticker (e.g. <code className="font-mono">WDC US</code> instead of <code className="font-mono">Western Digital US</code>).
           </p>
         </div>
       )}
 
       {fixingResult.pending.length > 0 && (
         <div className="card mb-3 border-l-4 border-l-accent p-3 text-[12.5px] text-[var(--text-muted)]">
-          Fetching trade-date close for {fixingResult.pending.join(", ")}…
+          Fetching trade-date close for {fixingResult.pending.join(", ")}...
         </div>
       )}
       {fixingResult.errors.length > 0 && (
@@ -110,18 +98,16 @@ export default function HomePage() {
             <AlertTriangle size={14} /> Trade-date close unavailable for: {fixingResult.errors.join(", ")}
           </div>
           <p className="text-[var(--text-muted)]">
-            Falling back to latest close. Add an <code className="font-mono">ALPHA_VANTAGE_API_KEY</code>{" "}
-            (free at alphavantage.co) for reliable historical closes across HK/MY/SG/JP/AU.
+            Falling back to latest close. Add an <code className="font-mono">ALPHA_VANTAGE_API_KEY</code> for reliable history across HK/MY/SG/JP/AU.
           </p>
         </div>
       )}
 
       {trancheWithFixing && (
         <>
-          {/* Action bar */}
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
             <div className="text-[11px] text-[var(--text-muted)]">
-              {loading ? "Refreshing…" : asOf ? `Last refresh ${new Date(asOf).toLocaleTimeString()}` : "Pulling quotes…"}
+              {loading ? "Refreshing..." : asOf ? `Last refresh ${new Date(asOf).toLocaleTimeString()}` : "Pulling quotes..."}
             </div>
             <div className="flex gap-2">
               <button onClick={refresh} className="btn h-9 px-3 text-xs">Refresh</button>
@@ -136,8 +122,7 @@ export default function HomePage() {
           {saved && (
             <div className="mb-3 flex items-center justify-between gap-3 rounded-xl border border-success/30 bg-successBg p-3 text-[13px] text-success dark:bg-success/10">
               <div className="flex items-center gap-2">
-                <Check size={16} />
-                Saved to Pocket. You can rename the tranche code from the Pocket card.
+                <Check size={16} /> Saved to Pocket. You can rename the tranche code from the Pocket card.
               </div>
               <Link href="/pocket" className="btn h-8 px-3 text-xs">
                 <Wallet size={14} /> View Pocket
@@ -155,11 +140,6 @@ export default function HomePage() {
   );
 }
 
-/**
- * Lightweight notify button — uses the browser Notifications API.
- * On real deployments, hook this up to your push provider (web-push, OneSignal,
- * APNs/FCM via Capacitor) using the VAPID keys in .env.local.
- */
 function NotifyButton({ tranche }: { tranche: Tranche }) {
   const [granted, setGranted] = useState<boolean | null>(null);
   useEffect(() => {

@@ -1,14 +1,6 @@
 // Multi-provider price client with cache + failover.
-//
-//   Polygon.io (primary)  →  Finnhub (secondary)  →  Alpha Vantage (backup)
-//
-// The chain skips providers that lack an API key, return non-OK, or return
-// junk (zero/NaN price). Quotes are cached in-memory (per-process); short TTL
-// while market is open, longer TTL when closed. Public-facing 52-week
-// high/low is fetched whenever a fresh provider call is made.
-//
-// IMPORTANT: this module runs server-side only. Never import it into a
-// client component.
+//   Polygon.io (primary) → Finnhub (secondary) → Alpha Vantage (backup)
+// Server-side only.
 
 import { MARKETS, isMarketOpen } from "./markets";
 import type { MarketCode, PriceQuote } from "./types";
@@ -23,54 +15,37 @@ function ttlMs(market: MarketCode): number {
   const closed = parseInt(process.env.PRICE_CLOSED_TTL_SECONDS || "600", 10);
   return (open ? live : closed) * 1000;
 }
-
 function cacheKey(symbol: string, market: MarketCode): string {
   return `${market}:${symbol}`;
 }
-
 function readCache(symbol: string, market: MarketCode): PriceQuote | null {
   const k = cacheKey(symbol, market);
   const hit = cache.get(k);
   if (!hit) return null;
-  if (hit.until < Date.now()) {
-    cache.delete(k);
-    return null;
-  }
+  if (hit.until < Date.now()) { cache.delete(k); return null; }
   return { ...hit.q, cached: true, source: "cache" as Source };
 }
-
 function writeCache(q: PriceQuote): void {
-  cache.set(cacheKey(q.symbol, q.market), {
-    q,
-    until: Date.now() + ttlMs(q.market),
-  });
+  cache.set(cacheKey(q.symbol, q.market), { q, until: Date.now() + ttlMs(q.market) });
 }
 
 // ─── provider symbol mapping ────────────────────────────────────────────────
-
 function polygonSymbol(symbol: string, market: MarketCode): string | null {
-  // Polygon currently has the deepest US coverage. Asia/AU is partial; we
-  // intentionally skip non-US for Polygon to avoid sending bad lookups.
   if (market !== "US") return null;
   return symbol.toUpperCase();
 }
-
 function finnhubSymbol(symbol: string, market: MarketCode): string {
   const def = MARKETS[market];
   if (market === "US") return symbol.toUpperCase();
-  // Finnhub uses ".HK", ".KL", ".SI", ".T", ".AX"
   return `${symbol.toUpperCase()}${def.finnhubSuffix ?? ""}`;
 }
-
 function alphaSymbol(symbol: string, market: MarketCode): string {
   const def = MARKETS[market];
   if (market === "US") return symbol.toUpperCase();
-  // Alpha Vantage uses suffix forms similar to Yahoo, e.g. "0700.HKG"
   return `${symbol.toUpperCase()}${def.alphaVantageSuffix ?? ""}`;
 }
 
-// ─── provider implementations ───────────────────────────────────────────────
-
+// ─── live quote providers ───────────────────────────────────────────────────
 async function fromPolygon(symbol: string, market: MarketCode): Promise<PriceQuote | null> {
   const key = process.env.POLYGON_API_KEY;
   if (!key) return null;
@@ -78,14 +53,10 @@ async function fromPolygon(symbol: string, market: MarketCode): Promise<PriceQuo
   if (!sym) return null;
   try {
     const [snap, hilo] = await Promise.all([
-      fetch(
-        `https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/${sym}?apiKey=${key}`,
-        { next: { revalidate: 0 } }
-      ).then((r) => (r.ok ? r.json() : null)),
-      fetch(
-        `https://api.polygon.io/v2/aggs/ticker/${sym}/range/1/day/${oneYearAgo()}/${today()}?adjusted=true&sort=desc&limit=260&apiKey=${key}`,
-        { next: { revalidate: 0 } }
-      ).then((r) => (r.ok ? r.json() : null)),
+      fetch(`https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/${sym}?apiKey=${key}`,
+        { next: { revalidate: 0 } }).then((r) => (r.ok ? r.json() : null)),
+      fetch(`https://api.polygon.io/v2/aggs/ticker/${sym}/range/1/day/${oneYearAgo()}/${today()}?adjusted=true&sort=desc&limit=260&apiKey=${key}`,
+        { next: { revalidate: 0 } }).then((r) => (r.ok ? r.json() : null)),
     ]);
     const last = snap?.ticker?.day?.c || snap?.ticker?.lastTrade?.p || snap?.ticker?.prevDay?.c;
     const prev = snap?.ticker?.prevDay?.c;
@@ -94,20 +65,13 @@ async function fromPolygon(symbol: string, market: MarketCode): Promise<PriceQuo
     const high52 = bars.length ? Math.max(...bars.map((b: any) => b.h)) : undefined;
     const low52 = bars.length ? Math.min(...bars.map((b: any) => b.l)) : undefined;
     return {
-      symbol,
-      market,
-      price: last,
-      prevClose: prev,
-      high52,
-      low52,
+      symbol, market, price: last, prevClose: prev, high52, low52,
       currency: MARKETS[market].currency,
       asOf: new Date().toISOString(),
       marketOpen: isMarketOpen(market).open,
       source: "polygon",
     };
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
 async function fromFinnhub(symbol: string, market: MarketCode): Promise<PriceQuote | null> {
@@ -116,20 +80,13 @@ async function fromFinnhub(symbol: string, market: MarketCode): Promise<PriceQuo
   const sym = finnhubSymbol(symbol, market);
   try {
     const [quote, metric] = await Promise.all([
-      fetch(`https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(sym)}&token=${key}`).then((r) =>
-        r.ok ? r.json() : null
-      ),
-      fetch(
-        `https://finnhub.io/api/v1/stock/metric?symbol=${encodeURIComponent(sym)}&metric=all&token=${key}`
-      ).then((r) => (r.ok ? r.json() : null)),
+      fetch(`https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(sym)}&token=${key}`).then((r) => r.ok ? r.json() : null),
+      fetch(`https://finnhub.io/api/v1/stock/metric?symbol=${encodeURIComponent(sym)}&metric=all&token=${key}`).then((r) => r.ok ? r.json() : null),
     ]);
     const last = quote?.c;
     if (!last || last === 0) return null;
     return {
-      symbol,
-      market,
-      price: last,
-      prevClose: quote?.pc,
+      symbol, market, price: last, prevClose: quote?.pc,
       high52: metric?.metric?.["52WeekHigh"],
       low52: metric?.metric?.["52WeekLow"],
       currency: MARKETS[market].currency,
@@ -137,9 +94,7 @@ async function fromFinnhub(symbol: string, market: MarketCode): Promise<PriceQuo
       marketOpen: isMarketOpen(market).open,
       source: "finnhub",
     };
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
 async function fromAlpha(symbol: string, market: MarketCode): Promise<PriceQuote | null> {
@@ -147,10 +102,7 @@ async function fromAlpha(symbol: string, market: MarketCode): Promise<PriceQuote
   if (!key) return null;
   const sym = alphaSymbol(symbol, market);
   try {
-    // Alpha Vantage GLOBAL_QUOTE returns price + previous close.
-    const r = await fetch(
-      `https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${encodeURIComponent(sym)}&apikey=${key}`
-    );
+    const r = await fetch(`https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${encodeURIComponent(sym)}&apikey=${key}`);
     if (!r.ok) return null;
     const j = await r.json();
     const g = j?.["Global Quote"];
@@ -158,31 +110,23 @@ async function fromAlpha(symbol: string, market: MarketCode): Promise<PriceQuote
     const prev = parseFloat(g?.["08. previous close"] ?? "");
     if (!isFinite(last) || last === 0) return null;
     return {
-      symbol,
-      market,
-      price: last,
+      symbol, market, price: last,
       prevClose: isFinite(prev) ? prev : undefined,
       currency: MARKETS[market].currency,
       asOf: new Date().toISOString(),
       marketOpen: isMarketOpen(market).open,
       source: "alphavantage",
     };
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
-// Demo fallback — used only when *no* provider key is configured. Generates
-// stable, plausible quotes so the UI looks alive in local dev.
 function fromMock(symbol: string, market: MarketCode): PriceQuote {
   const seed = Array.from(symbol).reduce((a, c) => a + c.charCodeAt(0), 0);
   const base = 50 + (seed % 350);
   const drift = ((Date.now() / 60000) % 360) / 360 - 0.5;
   const price = +(base * (1 + drift * 0.04)).toFixed(2);
   return {
-    symbol,
-    market,
-    price,
+    symbol, market, price,
     prevClose: +(base * (1 + (drift - 0.01) * 0.04)).toFixed(2),
     high52: +(base * 1.25).toFixed(2),
     low52: +(base * 0.78).toFixed(2),
@@ -194,14 +138,11 @@ function fromMock(symbol: string, market: MarketCode): PriceQuote {
   };
 }
 
-// ─── public API ─────────────────────────────────────────────────────────────
-
+// ─── public API: live quotes ────────────────────────────────────────────────
 export async function fetchQuote(symbol: string, market: MarketCode): Promise<PriceQuote> {
   const cached = readCache(symbol, market);
   if (cached) return cached;
-
-  const chain = [fromPolygon, fromFinnhub, fromAlpha];
-  for (const f of chain) {
+  for (const f of [fromPolygon, fromFinnhub, fromAlpha]) {
     const q = await f(symbol, market);
     if (q && isFinite(q.price) && q.price > 0) {
       const out = { ...q, delayed: !q.marketOpen };
@@ -209,56 +150,35 @@ export async function fetchQuote(symbol: string, market: MarketCode): Promise<Pr
       return out;
     }
   }
-  // No keys / all failed — fall back to mock so UI still renders.
   const mock = fromMock(symbol, market);
   writeCache(mock);
   return mock;
 }
-
 export async function fetchQuotes(items: { symbol: string; market: MarketCode }[]): Promise<PriceQuote[]> {
   return Promise.all(items.map((i) => fetchQuote(i.symbol, i.market)));
 }
 
 // ─── historical close (for the trade-date initial fixing) ───────────────────
-
 export interface HistoricalClose {
   symbol: string;
   market: MarketCode;
-  /** Trade date the user asked about. */
   requestedDate: string;
-  /** Date of the close we actually used (e.g. snapped back to last business day). */
   effectiveDate: string;
   close: number;
   source: "polygon" | "finnhub" | "alphavantage";
 }
-
-// Permanent cache — historical closes never change once set.
 const histCache = new Map<string, HistoricalClose>();
 function histKey(symbol: string, market: MarketCode, date: string) {
   return `${market}:${symbol}:${date}`;
 }
 
-/**
- * Closing price on or before `date` for a given symbol+market.
- *
- * Tries Polygon (best for US daily aggs on free tier) → Finnhub (paid candle)
- * → Alpha Vantage (free TIME_SERIES_DAILY, rate-limited but global coverage).
- * Returns null if no provider has the data.
- *
- * If the requested date falls on a weekend or holiday, the result is the
- * close on the most recent prior trading day (effectiveDate < requestedDate).
- */
 export async function fetchHistoricalClose(
-  symbol: string,
-  market: MarketCode,
-  date: string
+  symbol: string, market: MarketCode, date: string
 ): Promise<HistoricalClose | null> {
   const k = histKey(symbol, market, date);
   const hit = histCache.get(k);
   if (hit) return hit;
-
-  const chain = [polygonHist, finnhubHist, alphaHist];
-  for (const f of chain) {
+  for (const f of [polygonHist, finnhubHist, alphaHist]) {
     const r = await f(symbol, market, date);
     if (r && isFinite(r.close) && r.close > 0) {
       histCache.set(k, r);
@@ -273,26 +193,18 @@ async function polygonHist(symbol: string, market: MarketCode, date: string): Pr
   if (!key) return null;
   const sym = polygonSymbol(symbol, market);
   if (!sym) return null;
-  // Pull 7 days ending on the trade date so we can snap back over weekends.
-  const end = date;
   const start = isoMinusDays(date, 10);
   try {
-    const r = await fetch(
-      `https://api.polygon.io/v2/aggs/ticker/${sym}/range/1/day/${start}/${end}?adjusted=true&sort=desc&limit=10&apiKey=${key}`
-    );
+    const r = await fetch(`https://api.polygon.io/v2/aggs/ticker/${sym}/range/1/day/${start}/${date}?adjusted=true&sort=desc&limit=10&apiKey=${key}`);
     if (!r.ok) return null;
     const j = await r.json();
     const bars = j?.results || [];
     for (const b of bars) {
       const eff = new Date(b.t).toISOString().slice(0, 10);
-      if (eff <= date) {
-        return { symbol, market, requestedDate: date, effectiveDate: eff, close: b.c, source: "polygon" };
-      }
+      if (eff <= date) return { symbol, market, requestedDate: date, effectiveDate: eff, close: b.c, source: "polygon" };
     }
     return null;
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
 async function finnhubHist(symbol: string, market: MarketCode, date: string): Promise<HistoricalClose | null> {
@@ -303,36 +215,26 @@ async function finnhubHist(symbol: string, market: MarketCode, date: string): Pr
   const from = Math.floor((target - 10 * 86_400_000) / 1000);
   const to = Math.floor((target + 86_400_000) / 1000);
   try {
-    const r = await fetch(
-      `https://finnhub.io/api/v1/stock/candle?symbol=${encodeURIComponent(sym)}&resolution=D&from=${from}&to=${to}&token=${key}`
-    );
+    const r = await fetch(`https://finnhub.io/api/v1/stock/candle?symbol=${encodeURIComponent(sym)}&resolution=D&from=${from}&to=${to}&token=${key}`);
     if (!r.ok) return null;
     const j = await r.json();
     if (j?.s !== "ok" || !Array.isArray(j.c) || !j.c.length) return null;
-    // Walk newest → oldest, picking the candle whose date is <= target.
     for (let i = j.t.length - 1; i >= 0; i--) {
       const eff = new Date(j.t[i] * 1000).toISOString().slice(0, 10);
-      if (eff <= date) {
-        return { symbol, market, requestedDate: date, effectiveDate: eff, close: j.c[i], source: "finnhub" };
-      }
+      if (eff <= date) return { symbol, market, requestedDate: date, effectiveDate: eff, close: j.c[i], source: "finnhub" };
     }
     return null;
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
 async function alphaHist(symbol: string, market: MarketCode, date: string): Promise<HistoricalClose | null> {
   const key = process.env.ALPHA_VANTAGE_API_KEY;
   if (!key) return null;
   const sym = alphaSymbol(symbol, market);
-  // outputsize=full needed for trade dates older than ~100 days.
   const monthsAgo = (Date.now() - new Date(date + "T00:00:00Z").getTime()) / (30 * 86_400_000);
   const size = monthsAgo > 3 ? "full" : "compact";
   try {
-    const r = await fetch(
-      `https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=${encodeURIComponent(sym)}&outputsize=${size}&apikey=${key}`
-    );
+    const r = await fetch(`https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=${encodeURIComponent(sym)}&outputsize=${size}&apikey=${key}`);
     if (!r.ok) return null;
     const j = await r.json();
     const series = j?.["Time Series (Daily)"];
@@ -341,15 +243,11 @@ async function alphaHist(symbol: string, market: MarketCode, date: string): Prom
     for (const d of dates) {
       if (d <= date) {
         const close = parseFloat(series[d]["4. close"]);
-        if (isFinite(close) && close > 0) {
-          return { symbol, market, requestedDate: date, effectiveDate: d, close, source: "alphavantage" };
-        }
+        if (isFinite(close) && close > 0) return { symbol, market, requestedDate: date, effectiveDate: d, close, source: "alphavantage" };
       }
     }
     return null;
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
 function isoMinusDays(iso: string, n: number): string {
@@ -357,10 +255,7 @@ function isoMinusDays(iso: string, n: number): string {
   d.setUTCDate(d.getUTCDate() - n);
   return d.toISOString().slice(0, 10);
 }
-
-function today(): string {
-  return new Date().toISOString().slice(0, 10);
-}
+function today(): string { return new Date().toISOString().slice(0, 10); }
 function oneYearAgo(): string {
   const d = new Date();
   d.setUTCFullYear(d.getUTCFullYear() - 1);

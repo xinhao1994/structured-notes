@@ -25,7 +25,7 @@ export function KOSchedule({ tranche, quotes }: Props) {
           <h3 className="text-base font-semibold">Knock-out observations</h3>
         </div>
         <div className="text-[11px] text-[var(--text-muted)]">
-          start {(tranche.koStartPct * 100).toFixed(0)}% · stepdown −{(tranche.koStepdownPct * 100).toFixed(0)}% / obs
+          start {(tranche.koStartPct * 100).toFixed(0)}% · stepdown -{(tranche.koStepdownPct * 100).toFixed(0)}% / obs
         </div>
       </header>
 
@@ -41,7 +41,7 @@ export function KOSchedule({ tranche, quotes }: Props) {
                   <th key={u.symbol} className="!text-right">
                     {u.symbol}
                     <div className="text-[9px] font-normal normal-case tracking-normal text-[var(--text-muted)]">
-                      KO px · live Δ
+                      KO px - live delta
                     </div>
                   </th>
                 ))}
@@ -53,7 +53,6 @@ export function KOSchedule({ tranche, quotes }: Props) {
               const past = o.date < today;
               const isNext = o.n === nextN;
 
-              // Compute live-vs-KO delta per underlying for this row.
               const perSym = tranche.underlyings.map((u) => {
                 const koPx = o.koPriceBySymbol[u.symbol];
                 const live = quotes[u.symbol]?.price;
@@ -64,8 +63,6 @@ export function KOSchedule({ tranche, quotes }: Props) {
                 return { u, koPx, live, delta };
               });
 
-              // Worst-of is the underlying with the SMALLEST cushion above KO.
-              // For autocallables, all underlyings must be >= KO for autocall to trigger.
               const valid = perSym.filter((p) => p.delta != null) as Array<typeof perSym[number] & { delta: number }>;
               const worst = valid.length ? valid.reduce((a, b) => (a.delta < b.delta ? a : b)) : null;
 
@@ -86,8 +83,8 @@ export function KOSchedule({ tranche, quotes }: Props) {
                             )}
                             title={
                               delta >= 0
-                                ? `Spot is ${delta.toFixed(2)}% above this KO trigger — would knock out at this observation.`
-                                : `Spot is ${Math.abs(delta).toFixed(2)}% below this KO trigger — would NOT knock out at this observation.`
+                                ? `Spot is ${delta.toFixed(2)}% above this KO trigger - would knock out at this observation.`
+                                : `Spot is ${Math.abs(delta).toFixed(2)}% below this KO trigger - would NOT knock out at this observation.`
                             }
                           >
                             {delta >= 0 ? "▲ +" : "▼ "}{delta.toFixed(2)}%
@@ -116,7 +113,7 @@ export function KOSchedule({ tranche, quotes }: Props) {
                         <span className="ml-1 text-[10px] font-normal opacity-75">({worst.u.symbol})</span>
                       </span>
                     ) : (
-                      <span className="badge moderate">—</span>
+                      <span className="badge moderate">-</span>
                     )}
                   </td>
                 </tr>
@@ -128,7 +125,7 @@ export function KOSchedule({ tranche, quotes }: Props) {
 
       <p className="mt-2 text-[10.5px] text-[var(--text-muted)]">
         For each observation, the per-underlying column shows the KO price plus the current spot's distance from it
-        (▲ = above KO, ▼ = below KO). The Worst-of badge is driven by the underlying with the smallest cushion —
+        (▲ = above KO, ▼ = below KO). The Worst-of badge is driven by the underlying with the smallest cushion -
         autocall only triggers when all underlyings are at or above their KO levels on the observation date.
       </p>
     </section>
