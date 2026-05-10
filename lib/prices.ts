@@ -158,6 +158,7 @@ export async function fetchQuotes(items: { symbol: string; market: MarketCode }[
   return Promise.all(items.map((i) => fetchQuote(i.symbol, i.market)));
 }
 
+<<<<<<< HEAD
 // ─── historical close (for the trade-date initial fixing) ───────────────────
 export interface HistoricalClose {
   symbol: string;
@@ -256,6 +257,11 @@ function isoMinusDays(iso: string, n: number): string {
   return d.toISOString().slice(0, 10);
 }
 function today(): string { return new Date().toISOString().slice(0, 10); }
+=======
+function today(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+>>>>>>> parent of e41b707 (fix: actual initial fixing from trade-date close (was using live))
 function oneYearAgo(): string {
   const d = new Date();
   d.setUTCFullYear(d.getUTCFullYear() - 1);

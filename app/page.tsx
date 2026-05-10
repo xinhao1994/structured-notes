@@ -10,7 +10,6 @@ import { Analytics } from "@/components/Charts";
 import { ParseResult } from "@/lib/parser";
 import { useQuotes } from "@/lib/hooks/useQuotes";
 import { useSymbolResolver } from "@/lib/hooks/useSymbolResolver";
-import { useHistoricalFixings } from "@/lib/hooks/useHistoricalFixings";
 import { upsertTranche } from "@/lib/storage";
 import { SAMPLE_TRANCHE_TEXT } from "@/lib/sample";
 import { parseTrancheText } from "@/lib/parser";
@@ -31,6 +30,7 @@ export default function HomePage() {
   );
   const { quotes, loading, asOf, refresh } = useQuotes(items, 15_000);
 
+<<<<<<< HEAD
   const prevCloses = useMemo(() => {
     const m: Record<string, number | undefined> = {};
     for (const sym of Object.keys(quotes)) m[sym] = quotes[sym]?.prevClose ?? quotes[sym]?.price;
@@ -39,6 +39,28 @@ export default function HomePage() {
 
   const fixingResult = useHistoricalFixings(tranche, prevCloses);
   const trancheWithFixing: Tranche | null = fixingResult.tranche;
+=======
+  // Apply indicative initial fixing (use latest close until trade date passes)
+  // and switch to actual fixing automatically once trade date is reached.
+  const trancheWithFixing: Tranche | null = useMemo(() => {
+    if (!tranche) return null;
+    const today = new Date().toISOString().slice(0, 10);
+    const isPreTrade = today < tranche.tradeDate;
+    if (!Object.keys(quotes).length) return tranche;
+
+    const fixing: Record<string, number> = {};
+    for (const u of tranche.underlyings) {
+      const q = quotes[u.symbol];
+      if (q?.price != null) {
+        // Pre-trade: indicative = latest available close (prevClose preferred,
+        // else live). On/after trade date: actual = whatever the live price is
+        // at fixing time (the desk would override this with the official fix).
+        fixing[u.symbol] = isPreTrade ? (q.prevClose ?? q.price) : q.price;
+      }
+    }
+    return { ...tranche, initialFixing: fixing, isIndicativeFixing: isPreTrade };
+  }, [tranche, quotes]);
+>>>>>>> parent of e41b707 (fix: actual initial fixing from trade-date close (was using live))
 
   function handleParsed(r: ParseResult) {
     setParsed(r);
@@ -87,6 +109,7 @@ export default function HomePage() {
         </div>
       )}
 
+<<<<<<< HEAD
       {fixingResult.pending.length > 0 && (
         <div className="card mb-3 border-l-4 border-l-accent p-3 text-[12.5px] text-[var(--text-muted)]">
           Fetching trade-date close for {fixingResult.pending.join(", ")}...
@@ -103,6 +126,8 @@ export default function HomePage() {
         </div>
       )}
 
+=======
+>>>>>>> parent of e41b707 (fix: actual initial fixing from trade-date close (was using live))
       {trancheWithFixing && (
         <>
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
