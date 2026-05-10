@@ -1,14 +1,7 @@
-// Parser: free-form tranche text (as pasted from Bloomberg / dealer email)
-// → structured `Tranche`. Tolerant of order, line breaks, emoji flags, and
-// the formatting the user gave us in the spec.
-//
-// Design notes:
-// • Regexes are anchored to keywords (Strike, KO, Coupon, Tenor, EKI, Trade,
-//   Settlement, Tranche code, Offering) — order-independent.
-// • Tickers are extracted from a stock block: lines that contain a country
-//   marker like "US", "HK", "MY", ".SI", ".KL", etc.
-// • If a field is missing we fall back to industry defaults (T+7, monthly KO,
-//   stepdown 0%) and we surface that to the UI as a warning chip.
+// Parser: free-form tranche text → structured `Tranche`.
+// Tolerant of order, line breaks, emoji flags, capitalisation, corporate
+// suffixes (Inc / Holdings / Corp), and multi-market listings (Alibaba
+// → 9988 HK by default, BABA US if "US" is specified, etc.).
 
 import { addBusinessDays } from "./markets";
 import type { Currency, MarketCode, Tranche, Underlying } from "./types";
@@ -22,149 +15,218 @@ const CURRENCY_FROM_FLAG: Record<string, Currency> = {
   "🇦🇺": "AUD",
 };
 
-// Map common name → ticker for well-known issues.
-// This list is the cheap fast-path; anything not here goes to the
-// /api/symbol-search route (Finnhub) for live resolution.
-const NAME_TO_TICKER: Record<string, { sym: string; mkt: MarketCode }> = {
-  // ─── US tech ──────────────────────────────────────────────────────────
-  apple: { sym: "AAPL", mkt: "US" },
-  microsoft: { sym: "MSFT", mkt: "US" },
-  google: { sym: "GOOGL", mkt: "US" },
-  alphabet: { sym: "GOOGL", mkt: "US" },
-  amazon: { sym: "AMZN", mkt: "US" },
-  meta: { sym: "META", mkt: "US" },
-  facebook: { sym: "META", mkt: "US" },
-  nvidia: { sym: "NVDA", mkt: "US" },
-  tesla: { sym: "TSLA", mkt: "US" },
-  netflix: { sym: "NFLX", mkt: "US" },
-  broadcom: { sym: "AVGO", mkt: "US" },
-  oracle: { sym: "ORCL", mkt: "US" },
-  salesforce: { sym: "CRM", mkt: "US" },
-  cisco: { sym: "CSCO", mkt: "US" },
-  intel: { sym: "INTC", mkt: "US" },
-  amd: { sym: "AMD", mkt: "US" },
-  ibm: { sym: "IBM", mkt: "US" },
-  adobe: { sym: "ADBE", mkt: "US" },
-  qualcomm: { sym: "QCOM", mkt: "US" },
-  paypal: { sym: "PYPL", mkt: "US" },
-  uber: { sym: "UBER", mkt: "US" },
-  airbnb: { sym: "ABNB", mkt: "US" },
-  shopify: { sym: "SHOP", mkt: "US" },
-  palantir: { sym: "PLTR", mkt: "US" },
-  snowflake: { sym: "SNOW", mkt: "US" },
-  servicenow: { sym: "NOW", mkt: "US" },
-  arista: { sym: "ANET", mkt: "US" },
-  "arista networks": { sym: "ANET", mkt: "US" },
-  amphenol: { sym: "APH", mkt: "US" },
-  "western digital": { sym: "WDC", mkt: "US" },
-  sandisk: { sym: "SNDK", mkt: "US" },
-  micron: { sym: "MU", mkt: "US" },
-  "applied materials": { sym: "AMAT", mkt: "US" },
-  "lam research": { sym: "LRCX", mkt: "US" },
-  asml: { sym: "ASML", mkt: "US" },
-  tsmc: { sym: "TSM", mkt: "US" },
-  "taiwan semiconductor": { sym: "TSM", mkt: "US" },
+// ─── Name → multi-market listings ───────────────────────────────────────────
+// For each well-known company we list the ticker on each market it trades on,
+// plus a `default` market that applies when the user didn't specify one.
+// Default is set to where the bank typically books each name.
 
-  // ─── US financials / consumer / healthcare ────────────────────────────
-  jpmorgan: { sym: "JPM", mkt: "US" },
-  "jp morgan": { sym: "JPM", mkt: "US" },
-  "bank of america": { sym: "BAC", mkt: "US" },
-  "goldman sachs": { sym: "GS", mkt: "US" },
-  "morgan stanley": { sym: "MS", mkt: "US" },
-  "wells fargo": { sym: "WFC", mkt: "US" },
-  citigroup: { sym: "C", mkt: "US" },
-  visa: { sym: "V", mkt: "US" },
-  mastercard: { sym: "MA", mkt: "US" },
-  berkshire: { sym: "BRK.B", mkt: "US" },
-  walmart: { sym: "WMT", mkt: "US" },
-  costco: { sym: "COST", mkt: "US" },
-  "home depot": { sym: "HD", mkt: "US" },
-  mcdonalds: { sym: "MCD", mkt: "US" },
-  starbucks: { sym: "SBUX", mkt: "US" },
-  "coca cola": { sym: "KO", mkt: "US" },
-  "coca-cola": { sym: "KO", mkt: "US" },
-  pepsi: { sym: "PEP", mkt: "US" },
-  pepsico: { sym: "PEP", mkt: "US" },
-  disney: { sym: "DIS", mkt: "US" },
-  nike: { sym: "NKE", mkt: "US" },
-  boeing: { sym: "BA", mkt: "US" },
-  caterpillar: { sym: "CAT", mkt: "US" },
-  exxonmobil: { sym: "XOM", mkt: "US" },
-  exxon: { sym: "XOM", mkt: "US" },
-  chevron: { sym: "CVX", mkt: "US" },
-  pfizer: { sym: "PFE", mkt: "US" },
-  "johnson & johnson": { sym: "JNJ", mkt: "US" },
-  "johnson and johnson": { sym: "JNJ", mkt: "US" },
-  "eli lilly": { sym: "LLY", mkt: "US" },
-  unitedhealth: { sym: "UNH", mkt: "US" },
-  "procter & gamble": { sym: "PG", mkt: "US" },
-  merck: { sym: "MRK", mkt: "US" },
-  abbvie: { sym: "ABBV", mkt: "US" },
-  verizon: { sym: "VZ", mkt: "US" },
-  "at&t": { sym: "T", mkt: "US" },
+interface Listing {
+  US?: string;
+  HK?: string;
+  SG?: string;
+  JP?: string;
+  AU?: string;
+  MY?: string;
+  default: MarketCode;
+}
 
-  // ─── HK / China ───────────────────────────────────────────────────────
-  tencent: { sym: "0700", mkt: "HK" },
-  alibaba: { sym: "9988", mkt: "HK" },
-  hsbc: { sym: "0005", mkt: "HK" },
-  meituan: { sym: "3690", mkt: "HK" },
-  "ping an": { sym: "2318", mkt: "HK" },
-  "china mobile": { sym: "0941", mkt: "HK" },
-  "icbc": { sym: "1398", mkt: "HK" },
-  "byd": { sym: "1211", mkt: "HK" },
-  jd: { sym: "9618", mkt: "HK" },
-  netease: { sym: "9999", mkt: "HK" },
+const NAME_TO_TICKER: Record<string, Listing> = {
+  // ─── US tech (NASDAQ default) ───────────────────────────────────────────
+  apple: { US: "AAPL", default: "US" },
+  microsoft: { US: "MSFT", default: "US" },
+  google: { US: "GOOGL", default: "US" },
+  alphabet: { US: "GOOGL", default: "US" },
+  amazon: { US: "AMZN", default: "US" },
+  meta: { US: "META", default: "US" },
+  facebook: { US: "META", default: "US" },
+  nvidia: { US: "NVDA", default: "US" },
+  tesla: { US: "TSLA", default: "US" },
+  netflix: { US: "NFLX", default: "US" },
+  broadcom: { US: "AVGO", default: "US" },
+  oracle: { US: "ORCL", default: "US" },
+  salesforce: { US: "CRM", default: "US" },
+  cisco: { US: "CSCO", default: "US" },
+  intel: { US: "INTC", default: "US" },
+  amd: { US: "AMD", default: "US" },
+  ibm: { US: "IBM", default: "US" },
+  adobe: { US: "ADBE", default: "US" },
+  qualcomm: { US: "QCOM", default: "US" },
+  paypal: { US: "PYPL", default: "US" },
+  uber: { US: "UBER", default: "US" },
+  airbnb: { US: "ABNB", default: "US" },
+  shopify: { US: "SHOP", default: "US" },
+  palantir: { US: "PLTR", default: "US" },
+  snowflake: { US: "SNOW", default: "US" },
+  servicenow: { US: "NOW", default: "US" },
+  arista: { US: "ANET", default: "US" },
+  amphenol: { US: "APH", default: "US" },
+  "western digital": { US: "WDC", default: "US" },
+  sandisk: { US: "SNDK", default: "US" },
+  micron: { US: "MU", default: "US" },
+  "applied materials": { US: "AMAT", default: "US" },
+  "lam research": { US: "LRCX", default: "US" },
+  asml: { US: "ASML", default: "US" },
+  tsmc: { US: "TSM", default: "US" },
+  "taiwan semiconductor": { US: "TSM", default: "US" },
+  workday: { US: "WDAY", default: "US" },
+  intuit: { US: "INTU", default: "US" },
 
-  // ─── Malaysia ─────────────────────────────────────────────────────────
-  cimb: { sym: "1023", mkt: "MY" },
-  maybank: { sym: "1155", mkt: "MY" },
-  "public bank": { sym: "1295", mkt: "MY" },
-  "tenaga nasional": { sym: "5347", mkt: "MY" },
-  petronas: { sym: "5681", mkt: "MY" },
-  "ihh healthcare": { sym: "5225", mkt: "MY" },
+  // ─── US financials / consumer / healthcare ──────────────────────────────
+  jpmorgan: { US: "JPM", default: "US" },
+  "jp morgan": { US: "JPM", default: "US" },
+  "bank of america": { US: "BAC", default: "US" },
+  "goldman sachs": { US: "GS", default: "US" },
+  "morgan stanley": { US: "MS", default: "US" },
+  "wells fargo": { US: "WFC", default: "US" },
+  citigroup: { US: "C", default: "US" },
+  visa: { US: "V", default: "US" },
+  mastercard: { US: "MA", default: "US" },
+  berkshire: { US: "BRK.B", default: "US" },
+  walmart: { US: "WMT", default: "US" },
+  costco: { US: "COST", default: "US" },
+  "home depot": { US: "HD", default: "US" },
+  mcdonalds: { US: "MCD", default: "US" },
+  starbucks: { US: "SBUX", default: "US" },
+  "coca cola": { US: "KO", default: "US" },
+  pepsi: { US: "PEP", default: "US" },
+  pepsico: { US: "PEP", default: "US" },
+  disney: { US: "DIS", default: "US" },
+  nike: { US: "NKE", default: "US" },
+  boeing: { US: "BA", default: "US" },
+  caterpillar: { US: "CAT", default: "US" },
+  exxon: { US: "XOM", default: "US" },
+  exxonmobil: { US: "XOM", default: "US" },
+  chevron: { US: "CVX", default: "US" },
+  pfizer: { US: "PFE", default: "US" },
+  "johnson and johnson": { US: "JNJ", default: "US" },
+  "johnson & johnson": { US: "JNJ", default: "US" },
+  "eli lilly": { US: "LLY", default: "US" },
+  unitedhealth: { US: "UNH", default: "US" },
+  "procter and gamble": { US: "PG", default: "US" },
+  "procter & gamble": { US: "PG", default: "US" },
+  merck: { US: "MRK", default: "US" },
+  abbvie: { US: "ABBV", default: "US" },
+  verizon: { US: "VZ", default: "US" },
 
-  // ─── Singapore ────────────────────────────────────────────────────────
-  dbs: { sym: "D05", mkt: "SG" },
-  uob: { sym: "U11", mkt: "SG" },
-  ocbc: { sym: "O39", mkt: "SG" },
-  singtel: { sym: "Z74", mkt: "SG" },
-  capitaland: { sym: "C31", mkt: "SG" },
+  // ─── HK / China (Hang Seng default) ─────────────────────────────────────
+  // Dual-listed names give US ADR alongside HK — bank usually books HK.
+  alibaba: { HK: "9988", US: "BABA", default: "HK" },
+  tencent: { HK: "0700", default: "HK" },
+  meituan: { HK: "3690", default: "HK" },
+  jd: { HK: "9618", US: "JD", default: "HK" },
+  netease: { HK: "9999", US: "NTES", default: "HK" },
+  baidu: { HK: "9888", US: "BIDU", default: "HK" },
+  "trip.com": { HK: "9961", US: "TCOM", default: "HK" },
+  pinduoduo: { US: "PDD", default: "US" },
+  "ping an": { HK: "2318", default: "HK" },
+  "ping an insurance": { HK: "2318", default: "HK" },
+  "bank of china": { HK: "3988", default: "HK" },
+  "agricultural bank of china": { HK: "1288", default: "HK" },
+  "agricultural bank": { HK: "1288", default: "HK" },
+  icbc: { HK: "1398", default: "HK" },
+  "industrial and commercial bank of china": { HK: "1398", default: "HK" },
+  "china construction bank": { HK: "0939", default: "HK" },
+  ccb: { HK: "0939", default: "HK" },
+  "china mobile": { HK: "0941", default: "HK" },
+  "china life": { HK: "2628", default: "HK" },
+  "china merchants bank": { HK: "3968", default: "HK" },
+  hsbc: { HK: "0005", default: "HK" },
+  aia: { HK: "1299", default: "HK" },
+  "aia group": { HK: "1299", default: "HK" },
+  xiaomi: { HK: "1810", default: "HK" },
+  byd: { HK: "1211", default: "HK" },
+  "byd company": { HK: "1211", default: "HK" },
+  nio: { HK: "9866", US: "NIO", default: "HK" },
+  xpeng: { HK: "9868", US: "XPEV", default: "HK" },
+  "li auto": { HK: "2015", US: "LI", default: "HK" },
+  geely: { HK: "0175", default: "HK" },
+  "geely auto": { HK: "0175", default: "HK" },
+  "great wall motor": { HK: "2333", default: "HK" },
+  saic: { HK: "2333", default: "HK" },
+  smic: { HK: "0981", default: "HK" },
+  "hua hong": { HK: "1347", default: "HK" },
+  "kuaishou": { HK: "1024", default: "HK" },
+  bilibili: { HK: "9626", US: "BILI", default: "HK" },
+  weibo: { HK: "9898", US: "WB", default: "HK" },
+  ctrip: { HK: "9961", US: "TCOM", default: "HK" },
+  "anta sports": { HK: "2020", default: "HK" },
+  "li ning": { HK: "2331", default: "HK" },
+  "wharf reic": { HK: "1997", default: "HK" },
+  "swire pacific": { HK: "0019", default: "HK" },
+  "ck hutchison": { HK: "0001", default: "HK" },
+  "henderson land": { HK: "0012", default: "HK" },
+  "sun hung kai": { HK: "0016", default: "HK" },
+  "shk properties": { HK: "0016", default: "HK" },
+  "sands china": { HK: "1928", default: "HK" },
+  "galaxy entertainment": { HK: "0027", default: "HK" },
+  "wynn macau": { HK: "1128", default: "HK" },
+  cnooc: { HK: "0883", default: "HK" },
+  petrochina: { HK: "0857", default: "HK" },
+  sinopec: { HK: "0386", default: "HK" },
 
-  // ─── Japan ────────────────────────────────────────────────────────────
-  toyota: { sym: "7203", mkt: "JP" },
-  sony: { sym: "6758", mkt: "JP" },
-  softbank: { sym: "9984", mkt: "JP" },
-  nintendo: { sym: "7974", mkt: "JP" },
-  honda: { sym: "7267", mkt: "JP" },
-  "mitsubishi ufj": { sym: "8306", mkt: "JP" },
+  // ─── Singapore ──────────────────────────────────────────────────────────
+  dbs: { SG: "D05", default: "SG" },
+  "dbs group": { SG: "D05", default: "SG" },
+  uob: { SG: "U11", default: "SG" },
+  "united overseas bank": { SG: "U11", default: "SG" },
+  ocbc: { SG: "O39", default: "SG" },
+  "oversea-chinese banking": { SG: "O39", default: "SG" },
+  singtel: { SG: "Z74", default: "SG" },
+  capitaland: { SG: "C31", default: "SG" },
+  "capitaland investment": { SG: "9CI", default: "SG" },
+  "sgx": { SG: "S68", default: "SG" },
+  "wilmar": { SG: "F34", default: "SG" },
+  "keppel": { SG: "BN4", default: "SG" },
+  "city developments": { SG: "C09", default: "SG" },
+  "sembcorp": { SG: "U96", default: "SG" },
+  "sembcorp industries": { SG: "U96", default: "SG" },
+  sia: { SG: "C6L", default: "SG" },
+  "singapore airlines": { SG: "C6L", default: "SG" },
+  "thai beverage": { SG: "Y92", default: "SG" },
+  "yangzijiang": { SG: "BS6", default: "SG" },
 
-  // ─── Australia ────────────────────────────────────────────────────────
-  bhp: { sym: "BHP", mkt: "AU" },
-  cba: { sym: "CBA", mkt: "AU" },
-  "commonwealth bank": { sym: "CBA", mkt: "AU" },
-  "rio tinto": { sym: "RIO", mkt: "AU" },
-  woolworths: { sym: "WOW", mkt: "AU" },
-  westpac: { sym: "WBC", mkt: "AU" },
-  anz: { sym: "ANZ", mkt: "AU" },
-  nab: { sym: "NAB", mkt: "AU" },
-  fortescue: { sym: "FMG", mkt: "AU" },
+  // ─── Malaysia ───────────────────────────────────────────────────────────
+  cimb: { MY: "1023", default: "MY" },
+  maybank: { MY: "1155", default: "MY" },
+  "public bank": { MY: "1295", default: "MY" },
+  "tenaga nasional": { MY: "5347", default: "MY" },
+  petronas: { MY: "5681", default: "MY" },
+  "ihh healthcare": { MY: "5225", default: "MY" },
+
+  // ─── Japan ──────────────────────────────────────────────────────────────
+  toyota: { JP: "7203", default: "JP" },
+  sony: { JP: "6758", default: "JP" },
+  softbank: { JP: "9984", default: "JP" },
+  nintendo: { JP: "7974", default: "JP" },
+  honda: { JP: "7267", default: "JP" },
+  "mitsubishi ufj": { JP: "8306", default: "JP" },
+  keyence: { JP: "6861", default: "JP" },
+
+  // ─── Australia ──────────────────────────────────────────────────────────
+  bhp: { AU: "BHP", default: "AU" },
+  cba: { AU: "CBA", default: "AU" },
+  "commonwealth bank": { AU: "CBA", default: "AU" },
+  "rio tinto": { AU: "RIO", default: "AU" },
+  woolworths: { AU: "WOW", default: "AU" },
+  westpac: { AU: "WBC", default: "AU" },
+  anz: { AU: "ANZ", default: "AU" },
+  nab: { AU: "NAB", default: "AU" },
+  fortescue: { AU: "FMG", default: "AU" },
 };
 
 const MARKET_TOKENS: Record<string, MarketCode> = {
-  US: "US",
-  NYSE: "US",
-  NASDAQ: "US",
+  US: "US", NYSE: "US", NASDAQ: "US",
   HK: "HK",
-  MY: "MY",
-  KL: "MY",
-  SG: "SG",
-  SI: "SG",
-  JP: "JP",
-  TYO: "JP",
-  T: "JP",
-  AU: "AU",
-  ASX: "AU",
+  MY: "MY", KL: "MY",
+  SG: "SG", SI: "SG",
+  JP: "JP", TYO: "JP", T: "JP",
+  AU: "AU", ASX: "AU",
 };
+
+// 4-digit codes hint Hang Seng listings even without an "HK" tag.
+function looksLikeHkCode(s: string): boolean {
+  return /^\d{4}$/.test(s);
+}
 
 function pct(s: string | undefined): number | undefined {
   if (!s) return undefined;
@@ -173,33 +235,19 @@ function pct(s: string | undefined): number | undefined {
 }
 
 function parseDate(s: string): string | undefined {
-  // Accepts "12 May 2026", "8 - 12 May 2026", "12 May 2026, 4pm",
-  // and 2-digit-year forms like "08 May 26".
-  const m = s.match(
-    /(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{2,4})/
-  );
+  const m = s.match(/(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{2,4})/);
   if (!m) return undefined;
   const day = parseInt(m[1], 10);
   const monthName = m[2].toLowerCase();
   let year = parseInt(m[3], 10);
-  // 2-digit year: assume current century. "26" → 2026, "99" → 2099.
   if (year < 100) year += 2000;
-  const months = [
-    "jan", "feb", "mar", "apr", "may", "jun",
-    "jul", "aug", "sep", "oct", "nov", "dec",
-  ];
+  const months = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"];
   const idx = months.findIndex((mn) => monthName.startsWith(mn));
   if (idx < 0) return undefined;
-  const dt = new Date(Date.UTC(year, idx, day));
-  return dt.toISOString().slice(0, 10);
+  return new Date(Date.UTC(year, idx, day)).toISOString().slice(0, 10);
 }
 
 function parseOffering(line: string): { start?: string; end?: string } {
-  // Patterns:
-  //   "8 - 12 May 2026"     (dash range, same month/year)
-  //   "8 May - 12 May 2026" (full dates)
-  //   "8 May 2026 - 12 May 2026"
-  //   2-digit years also accepted (e.g. "8 - 12 May 26")
   const trimmed = line.replace(/^[Oo]ffering[:\s]*/, "").trim();
   const range = trimmed.match(
     /(\d{1,2})\s*(?:[A-Za-z]{3,9})?\s*(?:\d{2,4})?\s*[-–]\s*(\d{1,2}\s+[A-Za-z]{3,9}\s+\d{2,4})/
@@ -207,19 +255,14 @@ function parseOffering(line: string): { start?: string; end?: string } {
   if (range) {
     const end = parseDate(range[2]);
     if (!end) return {};
-    // Pull month/year from end and graft start day onto it
     const endMatch = range[2].match(/(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{2,4})/)!;
     const startDay = parseInt(range[1], 10);
-    const months = [
-      "jan", "feb", "mar", "apr", "may", "jun",
-      "jul", "aug", "sep", "oct", "nov", "dec",
-    ];
+    const months = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"];
     const idx = months.findIndex((m) => endMatch[2].toLowerCase().startsWith(m));
     if (idx < 0) return { end };
     let endYear = parseInt(endMatch[3], 10);
     if (endYear < 100) endYear += 2000;
-    const start = new Date(Date.UTC(endYear, idx, startDay))
-      .toISOString().slice(0, 10);
+    const start = new Date(Date.UTC(endYear, idx, startDay)).toISOString().slice(0, 10);
     return { start, end };
   }
   const single = parseDate(trimmed);
@@ -234,48 +277,125 @@ function detectCurrency(text: string): Currency | undefined {
   return (m?.[1] as Currency) || undefined;
 }
 
-function extractTickers(text: string): Underlying[] {
-  // Look in the body, after "Tranche code" and before "Strike".
-  // We grab non-empty lines that contain a market token OR look ticker-like.
-  // Strip leading/trailing emoji and ad-hoc decoration so a line like
-  // "💡 ANET US (Arista Networks) ⭐"
-  // still parses as ticker=ANET, market=US, name="ANET (Arista Networks)".
-  const lines = text.split(/\r?\n/)
+/** Strip emojis and other decorative symbols from a line. */
+function stripDecor(s: string): string {
+  // Strip emoji pictographs, skin-tone modifiers, regional-indicator flags,
+  // and the FE0F variation selector. CRITICAL: do NOT strip \p{Emoji_Component}
+  // because that Unicode class includes plain digits 0-9 (they\'re part of
+  // keycap emojis like 1\u{FE0F}\u{20E3}), which would mangle tranche codes
+  // like "MSIT260582" into "MSIT".
+  return s.replace(/[\p{Extended_Pictographic}\p{Emoji_Modifier}\u{FE0F}\u{200D}\u{20E3}]+/gu, "")
+          .replace(/[\u{1F1E6}-\u{1F1FF}]+/gu, "")
+          .replace(/\s+/g, " ");
+}
+
+/**
+ * Normalise a company name for dictionary lookup. Strips common corporate
+ * suffixes (Inc, Corp, Holdings, Ltd, Group, etc.) so "Applied Materials Inc"
+ * matches the "applied materials" entry, "ASML Holdings" matches "asml", etc.
+ */
+function normaliseName(s: string): string {
+  return s
+    .replace(/[.,]/g, " ")
+    .replace(/\b(inc|incorporated|corp|corporation|company|co|ltd|limited|plc|holdings?|holding|group|grp|sa|ag|gmbh|nv|spa|llc|sarl|berhad|bhd|kk|kabushiki kaisha)\b\.?/gi, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+/**
+ * Resolve a free-form name (and optional market hint) to {symbol, market}.
+ * Lookup order:
+ *   1. exact match in NAME_TO_TICKER
+ *   2. normalised-name match (suffixes stripped)
+ *   3. fall back to using the input as the ticker on the hinted market
+ */
+function resolveListing(name: string, marketHint?: MarketCode): {
+  symbol: string;
+  market: MarketCode;
+  resolved: boolean;
+} {
+  const exact = NAME_TO_TICKER[name.toLowerCase()];
+  const normalised = NAME_TO_TICKER[normaliseName(name)];
+  const hit = exact || normalised;
+
+  if (hit) {
+    const targetMkt: MarketCode = marketHint && (hit as any)[marketHint] ? marketHint : hit.default;
+    const sym = (hit as any)[targetMkt] as string | undefined;
+    if (sym) return { symbol: sym, market: targetMkt, resolved: true };
+    // Fallback: use default listing.
+    const def = (hit as any)[hit.default] as string;
+    return { symbol: def, market: hit.default, resolved: true };
+  }
+
+  // No dictionary match. Use the raw name as the ticker on the hinted market
+  // (or US by default). The post-parse symbol-search hook will try to upgrade
+  // it via Finnhub.
+  const upper = name.toUpperCase();
+  const looksLikeTicker = /^[A-Z0-9.&\-]{1,8}$/.test(upper);
+  return {
+    symbol: looksLikeTicker ? upper : upper,
+    market: marketHint ?? "US",
+    resolved: looksLikeTicker,
+  };
+}
+
+function extractTickers(text: string, exclude: Set<string>): Underlying[] {
+  // Lines that aren't fields are candidate underlyings. We strip emojis
+  // first so "💡 Alibaba HK ⭐" parses cleanly. The `exclude` set holds
+  // strings (issuer abbreviation, tranche code) that the caller has already
+  // identified — they must not be treated as underlyings.
+  const lines = text
+    .split(/\r?\n/)
     .map((l) => stripDecor(l).trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .filter((l) => !exclude.has(l) && !exclude.has(l.toUpperCase()));
+
   const out: Underlying[] = [];
   for (const raw of lines) {
-    if (/^(Strike|KO|Coupon|Tenor|EKI|Offering|Trade|Settlement|Tranche|MYR|USD|HKD|SGD|JPY|AUD)\b/i.test(raw)) {
+    if (/^(Strike|KO|Coupon|Tenor|EKI|Offering|Trade|Settlement|Tranche|MYR|USD|HKD|SGD|JPY|AUD)\b/i.test(raw)) continue;
+
+    // Format A: "TICKER MARKET" or "TICKER MARKET (Company Name)"
+    //   e.g. "TSM US", "0700 HK", "ASML US (ASML Holdings)"
+    const withMarket = raw.match(/^([A-Za-z0-9.&\- ]+?)\s+([A-Z]{1,4}|\.[A-Z]{1,3})(?:\s*\((.*?)\))?\s*$/);
+    if (withMarket) {
+      const left = withMarket[1].trim();
+      const tok = withMarket[2].replace(/^\./, "");
+      const market = MARKET_TOKENS[tok];
+      if (market) {
+        const longName = withMarket[3]?.trim();
+        // Try dictionary lookup first (so "Alibaba US" -> BABA, not ALIBABA).
+        // If no dict match AND the left side already looks like a real ticker,
+        // use it as-is.
+        const dictHit = resolveListing(longName ? longName : left, market);
+        const upperLeft = left.toUpperCase();
+        const looksLikeTicker = /^[A-Z0-9.&\-]{1,8}$/.test(upperLeft);
+        const final = dictHit.resolved
+          ? dictHit
+          : looksLikeTicker
+            ? { symbol: upperLeft, market, resolved: true }
+            : dictHit;
+        const rawName = longName ? `${left} (${longName})` : left;
+        out.push({ rawName, symbol: final.symbol, market: final.market, resolved: final.resolved });
+        continue;
+      }
+    }
+
+    // Format B: bare 4-digit code → Hang Seng listing
+    if (looksLikeHkCode(raw)) {
+      out.push({ rawName: raw, symbol: raw, market: "HK", resolved: true });
       continue;
     }
-    // Allow optional "(Company Name)" after the market token, e.g.
-    //   "ANET US (Arista Networks)"
-    //   "0700 HK"
-    //   "1155.KL (Maybank)"
-    const m = raw.match(/^([A-Za-z0-9.&\- ]+?)\s+([A-Z]{1,4}|\.[A-Z]{1,3})(?:\s*\((.*?)\))?\s*$/);
-    if (m) {
-      const ticker = m[1].trim();
-      const tok = m[2].replace(/^\./, "");
-      const mkt: MarketCode | undefined = MARKET_TOKENS[tok];
-      if (!mkt) continue;
-      const longName = m[3]?.trim();
-      const upper = ticker.toUpperCase();
-      const known =
-        NAME_TO_TICKER[ticker.toLowerCase()] ||
-        (longName ? NAME_TO_TICKER[longName.toLowerCase()] : undefined);
-      const looksLikeTicker = /^[A-Z0-9.&\-]{1,8}$/.test(upper);
-      const symbol = known?.sym || (looksLikeTicker ? upper : upper);
-      const resolved = !!known || looksLikeTicker;
-      const rawName = longName ? `${ticker} (${longName})` : ticker;
-      out.push({ rawName, symbol, market: mkt, resolved });
-      continue;
-    }
-    const known = NAME_TO_TICKER[raw.toLowerCase()];
-    if (known) {
-      out.push({ rawName: raw, symbol: known.sym, market: known.mkt, resolved: true });
+
+    // Format C: bare company name → look up default listing
+    //   e.g. "Applied Materials Inc", "Alibaba", "ASML Holdings"
+    const looked = resolveListing(raw);
+    if (looked.resolved) {
+      out.push({ rawName: raw, symbol: looked.symbol, market: looked.market, resolved: true });
     }
   }
-  // Dedupe
+
+  // Dedupe by (symbol, market)
   const seen = new Set<string>();
   return out.filter((u) => {
     const k = u.symbol + ":" + u.market;
@@ -283,17 +403,6 @@ function extractTickers(text: string): Underlying[] {
     seen.add(k);
     return true;
   });
-}
-
-/**
- * Remove emojis and other decorative symbols. Keeps letters, numbers,
- * common punctuation, and spaces. Used so that lines like "💡MSI 👶🏻🦥"
- * or "ANET US (Arista Networks) ⭐" parse cleanly.
- */
-function stripDecor(s: string): string {
-  return s.replace(/[\p{Extended_Pictographic}\p{Emoji_Modifier}\p{Emoji_Component}]+/gu, "")
-          .replace(/[\u{1F1E6}-\u{1F1FF}]+/gu, "")
-          .replace(/\s+/g, " ");
 }
 
 function parseField(text: string, key: RegExp): string | undefined {
@@ -315,35 +424,37 @@ export function parseTrancheText(input: string): ParseResult {
   const warnings: ParseWarning[] = [];
   const text = input.trim();
 
-  // Strip decorative emojis from each line for issuer detection so a header
-  // like "💡 MSI 🦥" still resolves to "MSI".
-  const lines = text.split(/\r?\n/).map((l) => stripDecor(l).trim()).filter(Boolean);
-  const issuer = lines.find((l) => /^[A-Z]{2,8}$/.test(l));
+  const issuerLines = text.split(/\r?\n/).map((l) => stripDecor(l).trim()).filter(Boolean);
+  const issuer = issuerLines.find((l) => /^[A-Z]{2,8}$/.test(l));
 
   const trancheCode =
     parseField(text, /Tranche\s*code[:\s]+([A-Z0-9-]+)/i) ||
+    parseField(text, /\b(MSIT\d+|[A-Z]{2,4}\d{6,})\b/) ||
     `T${Date.now().toString().slice(-7)}`;
 
   const offeringLine =
     parseField(text, /Offering[:\s]+([^\n]+?)(?=\s+Trade[:\s]|\n|$)/i) ||
-    parseField(text, /Offering[:\s]+([^\n]+)/i) || "";
-  const { start: offeringStart, end: offeringEnd } = parseOffering(offeringLine);
+    parseField(text, /Offering[:\s]+([^\n]+)/i) ||
+    "";
+  let { start: offeringStart, end: offeringEnd } = parseOffering(offeringLine);
 
-  // Capture "Trade: 12 May 2026, 4pm" up to next field or newline.
+  // "Offering & Trade 8 May 2026" — single-day window where offering = trade
+  const combined = parseField(text, /Offering\s*&\s*Trade[:\s]+([^\n]+)/i);
   const tradeRaw =
+    combined ||
     parseField(text, /Trade[:\s]+([^\n]+?)(?=\s+(?:Settlement|Tranche|Offering)\b|$)/i) ||
     parseField(text, /Trade[:\s]+([^\n]+)/i) ||
     "";
   const tradeDate = parseDate(tradeRaw);
+  if (combined && tradeDate && !offeringEnd) offeringEnd = tradeDate;
+
   const tradeCutoffMatch = tradeRaw.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i);
   let tradeCutoff: string | undefined;
   if (tradeCutoffMatch) {
     const rawHour = parseInt(tradeCutoffMatch[1], 10);
     const isPm = tradeCutoffMatch[3].toLowerCase() === "pm";
     const hour24 = (rawHour % 12) + (isPm ? 12 : 0);
-    const hh = String(hour24).padStart(2, "0");
-    const mm = (tradeCutoffMatch[2] || "00").padStart(2, "0");
-    tradeCutoff = `${hh}:${mm}`;
+    tradeCutoff = `${String(hour24).padStart(2, "0")}:${(tradeCutoffMatch[2] || "00").padStart(2, "0")}`;
   }
 
   const settleRaw = parseField(text, /Settlement[:\s]+([^\n]+)/i) || "T+7";
@@ -354,7 +465,7 @@ export function parseTrancheText(input: string): ParseResult {
   const couponPa = couponMatch ? parseFloat(couponMatch[1]) / 100 : 0;
   if (!couponMatch) warnings.push({ field: "coupon", message: "Coupon not found — defaulted to 0%." });
 
-  const tenorMatch = text.match(/Tenor\s+(\d+(?:\.\d+)?)\s*(M|Y|months|years|month|year)/i);
+  const tenorMatch = text.match(/Tenor\s+(\d+(?:\.\d+)?)\s*(M|Y|months|years|month|year|m|y)/i);
   let tenorMonths = 12;
   if (tenorMatch) {
     const n = parseFloat(tenorMatch[1]);
@@ -369,16 +480,23 @@ export function parseTrancheText(input: string): ParseResult {
 
   const koLine = parseField(text, /KO\s+([^\n]+)/i) || "";
   const koStartPct = pct(koLine.match(/([0-9.]+\s*%)/)?.[1]) ?? 1.0;
-  const stepdownPct = pct(koLine.match(/stepdown\s+([0-9.]+\s*%)/i)?.[1]) ?? 0;
+  // Stepdown can be written as "stepdown 4%" OR "4% stepdown" OR "4 stepdown".
+  const stepdownPct =
+    pct(koLine.match(/stepdown\s+([0-9.]+\s*%)/i)?.[1]) ??
+    pct(koLine.match(/([0-9.]+\s*%)\s+stepdown/i)?.[1]) ??
+    0;
 
-  const koObsFreqMonths = 1; // industry default; overridable later
+  const koObsFreqMonths = 1;
 
   const currency = detectCurrency(text) || "USD";
   if (!detectCurrency(text)) {
     warnings.push({ field: "currency", message: "Currency not found — defaulted to USD." });
   }
 
-  const underlyings = extractTickers(text);
+  const underlyings = extractTickers(text, new Set([
+    issuer ?? "",
+    trancheCode,
+  ].filter(Boolean) as string[]));
   if (!underlyings.length) {
     warnings.push({ field: "underlyings", message: "No underlyings detected — please verify." });
   }
