@@ -18,6 +18,50 @@ export interface ProductTableHandle {
   copyTsv: () => Promise<void>;
 }
 
+/**
+ * Capture the table at its full natural width, even on mobile where the
+ * outer container is horizontally scrolled. We temporarily override the
+ * scroll container's overflow + width during the snapshot, then restore.
+ */
+async function captureFullTable(node: HTMLElement): Promise<string> {
+  const scrollEl = node.querySelector<HTMLElement>(".scroll-x");
+  const tableEl = node.querySelector<HTMLElement>("table");
+  const fullWidth = Math.max(
+    tableEl?.scrollWidth ?? 0,
+    scrollEl?.scrollWidth ?? 0,
+    node.scrollWidth
+  );
+
+  // Snapshot prior styles so we can restore them.
+  const prev = {
+    nodeWidth: node.style.width,
+    scrollOverflow: scrollEl?.style.overflow ?? "",
+    scrollWidth: scrollEl?.style.width ?? "",
+  };
+
+  if (scrollEl) {
+    scrollEl.style.overflow = "visible";
+    scrollEl.style.width = `${fullWidth}px`;
+  }
+  node.style.width = `${fullWidth}px`;
+
+  try {
+    return await htmlToImage.toPng(node, {
+      backgroundColor: "white",
+      pixelRatio: 2,
+      width: fullWidth,
+      style: { width: `${fullWidth}px` },
+      cacheBust: true,
+    });
+  } finally {
+    node.style.width = prev.nodeWidth;
+    if (scrollEl) {
+      scrollEl.style.overflow = prev.scrollOverflow;
+      scrollEl.style.width = prev.scrollWidth;
+    }
+  }
+}
+
 export const ProductTable = forwardRef<ProductTableHandle, Props>(function ProductTable(
   { tranche, quotes },
   ref
@@ -25,42 +69,62 @@ export const ProductTable = forwardRef<ProductTableHandle, Props>(function Produ
   const tableRef = useRef<HTMLDivElement>(null);
   const rows = tableRows(tranche, quotes);
 
+  async function doExportPng() {
+    if (!tableRef.current) return;
+    const dataUrl = await captureFullTable(tableRef.current);
+    download(dataUrl, `${tranche.trancheCode}.png`);
+  }
+
+  async function doExportPdf() {
+    if (!tableRef.current) return;
+    const dataUrl = await captureFullTable(tableRef.current);
+    const img = new Image();
+    img.src = dataUrl;
+    await new Promise((r) => (img.onload = r));
+    // Pick orientation from aspect ratio so mobile-wide tables aren't squashed.
+    const isLandscape = img.width >= img.height;
+    const pdf = new jsPDF({
+      orientation: isLandscape ? "landscape" : "portrait",
+      unit: "pt",
+      format: "a4",
+    });
+    const pageW = pdf.internal.pageSize.getWidth();
+    const pageH = pdf.internal.pageSize.getHeight();
+    const margin = 30;
+    const titleH = 24;
+    const availW = pageW - 2 * margin;
+    const availH = pageH - 2 * margin - titleH;
+    const ratio = img.width / img.height;
+    let drawW = availW;
+    let drawH = drawW / ratio;
+    if (drawH > availH) {
+      drawH = availH;
+      drawW = drawH * ratio;
+    }
+    const offX = margin + (availW - drawW) / 2;
+    pdf.setFontSize(11);
+    pdf.text(`Tranche ${tranche.trancheCode}`, margin, margin);
+    pdf.addImage(dataUrl, "PNG", offX, margin + titleH, drawW, drawH);
+    pdf.save(`${tranche.trancheCode}.pdf`);
+  }
+
+  async function doCopyTsv() {
+    const header = ["Stock", "Initial Fixing", "Live Price", "Δ vs Initial", "52W High", "52W Low", "EKI Price", "Strike Price"].join("\t");
+    const lines = rows.map((r) => {
+      const delta = r.initial && r.live ? `${(((r.live - r.initial) / r.initial) * 100).toFixed(2)}%` : "";
+      return [
+        `${r.underlying.rawName} ${r.underlying.market}`,
+        r.initial ?? "", r.live ?? "", delta,
+        r.high52 ?? "", r.low52 ?? "", r.eki ?? "", r.strike ?? "",
+      ].join("\t");
+    });
+    try { await navigator.clipboard.writeText([header, ...lines].join("\n")); } catch {}
+  }
+
   useImperativeHandle(ref, () => ({
-    async exportPng() {
-      if (!tableRef.current) return;
-      const dataUrl = await htmlToImage.toPng(tableRef.current, {
-        backgroundColor: "white", pixelRatio: 2,
-      });
-      download(dataUrl, `${tranche.trancheCode}.png`);
-    },
-    async exportPdf() {
-      if (!tableRef.current) return;
-      const dataUrl = await htmlToImage.toPng(tableRef.current, {
-        backgroundColor: "white", pixelRatio: 2,
-      });
-      const pdf = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
-      const img = new Image();
-      img.src = dataUrl;
-      await new Promise((r) => (img.onload = r));
-      const w = pdf.internal.pageSize.getWidth() - 60;
-      const h = (img.height * w) / img.width;
-      pdf.text(`Tranche ${tranche.trancheCode}`, 30, 30);
-      pdf.addImage(dataUrl, "PNG", 30, 50, w, h);
-      pdf.save(`${tranche.trancheCode}.pdf`);
-    },
-    async copyTsv() {
-      const header = ["Stock", "Initial Fixing", "Live Price", "Δ vs Initial", "52W High", "52W Low", "EKI Price", "Strike Price"].join("\t");
-      const lines = rows.map((r) => {
-        const delta = r.initial && r.live ? `${(((r.live - r.initial) / r.initial) * 100).toFixed(2)}%` : "";
-        return [
-          `${r.underlying.rawName} ${r.underlying.market}`,
-          r.initial ?? "", r.live ?? "", delta,
-          r.high52 ?? "", r.low52 ?? "", r.eki ?? "", r.strike ?? "",
-        ].join("\t");
-      });
-      const text = [header, ...lines].join("\n");
-      try { await navigator.clipboard.writeText(text); } catch {}
-    },
+    exportPng: doExportPng,
+    exportPdf: doExportPdf,
+    copyTsv: doCopyTsv,
   }));
 
   return (
@@ -73,49 +137,13 @@ export const ProductTable = forwardRef<ProductTableHandle, Props>(function Produ
           <h3 className="text-base font-semibold">Underlying basket</h3>
         </div>
         <div className="no-print flex gap-2">
-          <button
-            onClick={async () => {
-              const node = tableRef.current!;
-              const dataUrl = await htmlToImage.toPng(node, { backgroundColor: "white", pixelRatio: 2 });
-              download(dataUrl, `${tranche.trancheCode}.png`);
-            }}
-            className="btn h-9 px-3 text-xs" title="Export as PNG"
-          >
+          <button onClick={doExportPng} className="btn h-9 px-3 text-xs" title="Export full table as PNG">
             <FileImage size={14} /> PNG
           </button>
-          <button
-            onClick={async () => {
-              const node = tableRef.current!;
-              const dataUrl = await htmlToImage.toPng(node, { backgroundColor: "white", pixelRatio: 2 });
-              const pdf = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
-              const img = new Image();
-              img.src = dataUrl;
-              await new Promise((r) => (img.onload = r));
-              const w = pdf.internal.pageSize.getWidth() - 60;
-              const h = (img.height * w) / img.width;
-              pdf.text(`Tranche ${tranche.trancheCode}`, 30, 30);
-              pdf.addImage(dataUrl, "PNG", 30, 50, w, h);
-              pdf.save(`${tranche.trancheCode}.pdf`);
-            }}
-            className="btn h-9 px-3 text-xs" title="Export as PDF"
-          >
+          <button onClick={doExportPdf} className="btn h-9 px-3 text-xs" title="Export full table as PDF">
             <FileText size={14} /> PDF
           </button>
-          <button
-            onClick={async () => {
-              const header = ["Stock", "Initial Fixing", "Live Price", "Δ vs Initial", "52W High", "52W Low", "EKI Price", "Strike Price"].join("\t");
-              const lines = rows.map((r) => {
-                const delta = r.initial && r.live ? `${(((r.live - r.initial) / r.initial) * 100).toFixed(2)}%` : "";
-                return [
-                  `${r.underlying.rawName} ${r.underlying.market}`,
-                  r.initial ?? "", r.live ?? "", delta,
-                  r.high52 ?? "", r.low52 ?? "", r.eki ?? "", r.strike ?? "",
-                ].join("\t");
-              });
-              try { await navigator.clipboard.writeText([header, ...lines].join("\n")); } catch {}
-            }}
-            className="btn h-9 px-3 text-xs" title="Copy as TSV"
-          >
+          <button onClick={doCopyTsv} className="btn h-9 px-3 text-xs" title="Copy table as TSV">
             <Copy size={14} /> Copy
           </button>
         </div>
