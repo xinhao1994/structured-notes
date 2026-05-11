@@ -41,16 +41,16 @@ export default function HomePage() {
   );
   const { quotes, loading, asOf, refresh } = useQuotes(items, 15_000);
 
-  // Compute the "latest available close" per underlying — used for indicative
-  // fixing (pre-trade) and as a fallback if a historical close lookup fails.
-  // When market is OPEN, q.price is intraday → use q.prevClose. When CLOSED,
-  // q.price IS already the most recent close.
+  // Latest available price per underlying.
+  // For future-dated tranches (pre-trade), the user wants this to mirror the
+  // live trading price — current intraday when market is open, last close
+  // when market is closed. q.price already represents exactly that.
+  // It's also the fallback when a historical-close lookup fails.
   const liveCloses = useMemo(() => {
     const m: Record<string, number | undefined> = {};
     for (const sym of Object.keys(quotes)) {
       const q = quotes[sym];
-      if (!q) continue;
-      m[sym] = q.marketOpen ? (q.prevClose ?? q.price) : q.price;
+      if (q) m[sym] = q.price;
     }
     return m;
   }, [quotes]);
