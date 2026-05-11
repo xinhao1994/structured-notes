@@ -40,6 +40,9 @@ const NAME_TO_TICKER: Record<string, Listing> = {
   meta: { US: "META", default: "US" },
   facebook: { US: "META", default: "US" },
   nvidia: { US: "NVDA", default: "US" },
+  nvdia: { US: "NVDA", default: "US" },           // common misspelling
+  nvida: { US: "NVDA", default: "US" },           // common misspelling
+  "nivida": { US: "NVDA", default: "US" },        // common misspelling
   tesla: { US: "TSLA", default: "US" },
   netflix: { US: "NFLX", default: "US" },
   broadcom: { US: "AVGO", default: "US" },

@@ -205,7 +205,7 @@ function chainForMarket(market: MarketCode) {
     : [fromYahoo, fromFinnhub, fromAlpha];
 }
 
-export async function fetchQuote(symbol: string, market: MarketCode): Promise<PriceQuote> {
+export async function fetchQuote(symbol: string, market: MarketCode): Promise<PriceQuote | null> {
   const cached = readCache(symbol, market);
   if (cached) return cached;
   for (const f of chainForMarket(market)) {
@@ -216,13 +216,16 @@ export async function fetchQuote(symbol: string, market: MarketCode): Promise<Pr
       return out;
     }
   }
-  const mock = fromMock(symbol, market);
-  writeCache(mock);
-  return mock;
+  // Every real provider failed. We DO NOT fall back to mock data — that
+  // would hide the problem behind a plausible-looking fake number. Return
+  // null so the UI can show "Price unavailable" and the user knows to
+  // verify the ticker (most common cause: misspelling like "NVDIA" → NVDA).
+  return null;
 }
 
 export async function fetchQuotes(items: { symbol: string; market: MarketCode }[]): Promise<PriceQuote[]> {
-  return Promise.all(items.map((i) => fetchQuote(i.symbol, i.market)));
+  const all = await Promise.all(items.map((i) => fetchQuote(i.symbol, i.market)));
+  return all.filter((q): q is PriceQuote => q !== null);
 }
 
 function today(): string { return new Date().toISOString().slice(0, 10); }
