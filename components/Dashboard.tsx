@@ -56,8 +56,12 @@ export function Dashboard({ tranche, quotes }: Props) {
           const koPx = ko && init ? init * ko.koPct : undefined;
           const dailyPct = q?.price != null && q.prevClose ? ((q.price - q.prevClose) / q.prevClose) * 100 : undefined;
           const aboveStrikePct = q?.price != null && strike ? ((q.price - strike) / strike) * 100 : undefined;
-          const aboveEkiPct = q?.price != null && ki ? ((q.price - ki) / ki) * 100 : undefined;
-          const distToKoPct = q?.price != null && koPx ? ((koPx - q.price) / q.price) * 100 : undefined;
+          // All three metrics use the same convention: positive value = spot is
+          // that % above the level. So "Above KO" = (spot − KO) / KO, positive
+          // when spot would trigger autocall. "Dist to EKI" = (spot − EKI) / EKI,
+          // positive = cushion above the knock-in barrier (safer).
+          const distToEkiPct = q?.price != null && ki ? ((q.price - ki) / ki) * 100 : undefined;
+          const aboveKoPct = q?.price != null && koPx ? ((q.price - koPx) / koPx) * 100 : undefined;
           const mktState = isMarketOpen(u.market);
           return (
             <article key={u.symbol} className="rounded-xl border border-[var(--line)] bg-[var(--surface-2)] p-3">
@@ -85,8 +89,8 @@ export function Dashboard({ tranche, quotes }: Props) {
               </div>
               <dl className="mt-3 grid grid-cols-3 gap-2 text-[11px]">
                 <Mini label="Above strike" value={pctOrDash(aboveStrikePct)} positive={aboveStrikePct} />
-                <Mini label="Above EKI" value={pctOrDash(aboveEkiPct)} positive={aboveEkiPct} />
-                <Mini label="Dist. to KO" value={pctOrDash(distToKoPct)} positive={distToKoPct} />
+                <Mini label="Dist. to EKI" value={pctOrDash(distToEkiPct)} positive={distToEkiPct} />
+                <Mini label="Above KO" value={pctOrDash(aboveKoPct)} positive={aboveKoPct} />
               </dl>
             </article>
           );
