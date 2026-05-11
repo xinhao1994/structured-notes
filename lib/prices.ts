@@ -98,7 +98,7 @@ async function fromYahoo(symbol: string, market: MarketCode): Promise<PriceQuote
       {
         headers: {
           // Yahoo sometimes 401s requests without a UA.
-          "User-Agent": "Mozilla/5.0 (compatible; SNDesk/1.0)",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
           "Accept": "application/json",
         },
         next: { revalidate: 0 },
@@ -111,7 +111,9 @@ async function fromYahoo(symbol: string, market: MarketCode): Promise<PriceQuote
     const meta = result.meta;
     const last = meta?.regularMarketPrice;
     if (!last || !isFinite(last)) return null;
-    const prev = meta?.chartPreviousClose ?? meta?.previousClose;
+    // previousClose is the prior-trading-day close (what we want); chartPreviousClose
+    // is the close before the chart range began (1y ago) — only useful as last resort.
+    const prev = meta?.previousClose ?? meta?.chartPreviousClose;
     const high52 = meta?.fiftyTwoWeekHigh;
     const low52 = meta?.fiftyTwoWeekLow;
     return {
@@ -195,8 +197,11 @@ function fromMock(symbol: string, market: MarketCode): PriceQuote {
 function chainForMarket(market: MarketCode) {
   // For non-US markets we trust Yahoo first because Finnhub free tier doesn't
   // reliably cover HKEX/SGX/TSE/ASX/KLSE.
+  // Yahoo Finance has the most reliable free coverage across ALL markets,
+  // so it goes first. Polygon and Finnhub are layered on top for US (paid
+  // tiers if available). Alpha Vantage is last because of its 25/day limit.
   return market === "US"
-    ? [fromPolygon, fromFinnhub, fromYahoo, fromAlpha]
+    ? [fromYahoo, fromPolygon, fromFinnhub, fromAlpha]
     : [fromYahoo, fromFinnhub, fromAlpha];
 }
 

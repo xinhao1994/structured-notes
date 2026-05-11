@@ -47,7 +47,14 @@ export default function HomePage() {
     const fixing: Record<string, number> = {};
     for (const u of tranche.underlyings) {
       const q = quotes[u.symbol];
-      if (q?.price != null) fixing[u.symbol] = q.prevClose ?? q.price;
+      if (q?.price != null) {
+        // Initial fixing = latest available close.
+        // - Market currently OPEN  → q.price is live intraday → use q.prevClose (prior day's close).
+        // - Market currently CLOSED → q.price IS the most recent close → use it directly.
+        // This ensures that on Monday morning MY time (before US opens),
+        // we correctly use Friday's close, not Thursday's.
+        fixing[u.symbol] = q.marketOpen ? (q.prevClose ?? q.price) : q.price;
+      }
     }
     return { ...tranche, initialFixing: fixing, isIndicativeFixing: isPreTrade };
   }, [tranche, quotes]);
