@@ -10,6 +10,7 @@ import { Analytics } from "@/components/Charts";
 import { ParseResult } from "@/lib/parser";
 import { useQuotes } from "@/lib/hooks/useQuotes";
 import { useSymbolResolver } from "@/lib/hooks/useSymbolResolver";
+import { useTradeDateFixing } from "@/lib/hooks/useTradeDateFixing";
 import { upsertTranche, getCurrentParsedText, setCurrentParsedText } from "@/lib/storage";
 import { SAMPLE_TRANCHE_TEXT } from "@/lib/sample";
 import { parseTrancheText } from "@/lib/parser";
@@ -40,24 +41,24 @@ export default function HomePage() {
   );
   const { quotes, loading, asOf, refresh } = useQuotes(items, 15_000);
 
-  const trancheWithFixing: Tranche | null = useMemo(() => {
-    if (!tranche) return null;
-    const today = new Date().toISOString().slice(0, 10);
-    const isPreTrade = today < tranche.tradeDate;
-    const fixing: Record<string, number> = {};
-    for (const u of tranche.underlyings) {
-      const q = quotes[u.symbol];
-      if (q?.price != null) {
-        // Initial fixing = latest available close.
-        // - Market currently OPEN  → q.price is live intraday → use q.prevClose (prior day's close).
-        // - Market currently CLOSED → q.price IS the most recent close → use it directly.
-        // This ensures that on Monday morning MY time (before US opens),
-        // we correctly use Friday's close, not Thursday's.
-        fixing[u.symbol] = q.marketOpen ? (q.prevClose ?? q.price) : q.price;
-      }
+  // Compute the "latest available close" per underlying — used for indicative
+  // fixing (pre-trade) and as a fallback if a historical close lookup fails.
+  // When market is OPEN, q.price is intraday → use q.prevClose. When CLOSED,
+  // q.price IS already the most recent close.
+  const liveCloses = useMemo(() => {
+    const m: Record<string, number | undefined> = {};
+    for (const sym of Object.keys(quotes)) {
+      const q = quotes[sym];
+      if (!q) continue;
+      m[sym] = q.marketOpen ? (q.prevClose ?? q.price) : q.price;
     }
-    return { ...tranche, initialFixing: fixing, isIndicativeFixing: isPreTrade };
-  }, [tranche, quotes]);
+    return m;
+  }, [quotes]);
+
+  // Pre-trade → indicative (latest close).
+  // Post-trade → ACTUAL close fetched from /api/trade-close on the trade date.
+  const fixingResult = useTradeDateFixing(tranche, liveCloses);
+  const trancheWithFixing: Tranche | null = fixingResult.tranche;
 
   function handleParsed(r: ParseResult, _rawText: string) {
     setParsed(r);
@@ -102,6 +103,22 @@ export default function HomePage() {
           </div>
           <p className="text-[var(--text-muted)]">
             Use the real ticker (e.g. <code className="font-mono">WDC US</code> instead of <code className="font-mono">Western Digital US</code>).
+          </p>
+        </div>
+      )}
+
+      {fixingResult.pending.length > 0 && (
+        <div className="card mb-3 border-l-4 border-l-accent p-3 text-[12.5px] text-[var(--text-muted)]">
+          Fetching trade-date close for {fixingResult.pending.join(", ")}...
+        </div>
+      )}
+      {fixingResult.errors.length > 0 && (
+        <div className="card mb-3 border-l-4 border-l-warning p-3 text-[12.5px]">
+          <div className="mb-1 flex items-center gap-2 font-semibold text-warning">
+            <AlertTriangle size={14} /> Trade-date close unavailable for: {fixingResult.errors.join(", ")}
+          </div>
+          <p className="text-[var(--text-muted)]">
+            Falling back to latest close.
           </p>
         </div>
       )}

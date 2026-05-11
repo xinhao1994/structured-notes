@@ -271,3 +271,104 @@ function oneYearAgo(): string {
   d.setUTCFullYear(d.getUTCFullYear() - 1);
   return d.toISOString().slice(0, 10);
 }
+
+// ─── historical close (for past trade-date initial fixing) ─────────────────
+export interface HistoricalClose {
+  symbol: string;
+  market: MarketCode;
+  requestedDate: string;
+  effectiveDate: string;
+  close: number;
+  source: "yahoo" | "stooq" | "alphavantage";
+}
+
+const histCache = new Map<string, HistoricalClose>();
+function histKey(s: string, m: MarketCode, d: string) { return `${m}:${s}:${d}`; }
+
+/**
+ * Yahoo chart endpoint with explicit period1/period2 — pulls daily closes
+ * around the target date and returns the close on (or just before) it.
+ */
+async function yahooHist(symbol: string, market: MarketCode, date: string): Promise<HistoricalClose | null> {
+  const sym = yahooSymbol(symbol, market);
+  const target = new Date(date + "T00:00:00Z").getTime();
+  // Pull 14 days before and 2 days after — covers weekend/holiday snap-back.
+  const period1 = Math.floor((target - 14 * 86_400_000) / 1000);
+  const period2 = Math.floor((target + 2 * 86_400_000) / 1000);
+  try {
+    const r = await fetch(
+      `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?period1=${period1}&period2=${period2}&interval=1d`,
+      {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+          "Accept": "application/json",
+        },
+        next: { revalidate: 0 },
+      }
+    );
+    if (!r.ok) return null;
+    const j = await r.json();
+    const result = j?.chart?.result?.[0];
+    if (!result) return null;
+    const timestamps: number[] = result.timestamp || [];
+    const closes: (number | null)[] = result.indicators?.quote?.[0]?.close || [];
+    // Find newest bar with date <= target.
+    for (let i = timestamps.length - 1; i >= 0; i--) {
+      const eff = new Date(timestamps[i] * 1000).toISOString().slice(0, 10);
+      if (eff <= date && closes[i] != null && isFinite(closes[i]!)) {
+        return { symbol, market, requestedDate: date, effectiveDate: eff, close: closes[i]!, source: "yahoo" };
+      }
+    }
+    return null;
+  } catch { return null; }
+}
+
+/**
+ * Stooq historical via the daily CSV with date range. Endpoint:
+ *   https://stooq.com/q/d/l/?s={sym}&i=d&d1={YYYYMMDD}&d2={YYYYMMDD}
+ */
+async function stooqHist(symbol: string, market: MarketCode, date: string): Promise<HistoricalClose | null> {
+  const sym = stooqSymbol(symbol, market);
+  const target = new Date(date + "T00:00:00Z");
+  const start = new Date(target.getTime() - 14 * 86_400_000);
+  const fmt = (d: Date) => d.toISOString().slice(0, 10).replace(/-/g, "");
+  try {
+    const r = await fetch(
+      `https://stooq.com/q/d/l/?s=${encodeURIComponent(sym)}&i=d&d1=${fmt(start)}&d2=${fmt(target)}`,
+      {
+        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36" },
+        next: { revalidate: 0 },
+      }
+    );
+    if (!r.ok) return null;
+    const text = await r.text();
+    const lines = text.trim().split(/\r?\n/);
+    if (lines.length < 2) return null;
+    // Header: Date,Open,High,Low,Close,Volume
+    // Walk newest → oldest.
+    for (let i = lines.length - 1; i >= 1; i--) {
+      const cols = lines[i].split(",");
+      if (cols.length < 5) continue;
+      const eff = cols[0];
+      const close = parseFloat(cols[4]);
+      if (eff && eff <= date && isFinite(close) && close > 0) {
+        return { symbol, market, requestedDate: date, effectiveDate: eff, close, source: "stooq" };
+      }
+    }
+    return null;
+  } catch { return null; }
+}
+
+export async function fetchHistoricalClose(
+  symbol: string, market: MarketCode, date: string
+): Promise<HistoricalClose | null> {
+  const k = histKey(symbol, market, date);
+  const hit = histCache.get(k);
+  if (hit) return hit;
+  for (const f of [yahooHist, stooqHist]) {
+    const r = await f(symbol, market, date);
+    if (r) { histCache.set(k, r); return r; }
+  }
+  return null;
+}
+
