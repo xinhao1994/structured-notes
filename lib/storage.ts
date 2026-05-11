@@ -78,3 +78,30 @@ export function setCurrentParsedText(text: string): void {
   try { window.localStorage.setItem(CURRENT_KEY, text); } catch {}
 }
 
+// ─── manual initial-fixing overrides ───────────────────────────────────────
+// Lets the user type in an authoritative initial-fixing value when the
+// historical-data API returns something they disagree with (e.g. after a
+// stock split / spin-off, or when reference data they trust differs).
+// Keyed by tranche code so overrides survive parse refreshes.
+const OVERRIDE_KEY = "snd.fixingOverrides.v1";
+
+export function getFixingOverrides(trancheCode: string): Record<string, number> {
+  if (typeof window === "undefined") return {};
+  try {
+    const all = JSON.parse(window.localStorage.getItem(OVERRIDE_KEY) || "{}") as Record<string, Record<string, number>>;
+    return all[trancheCode] || {};
+  } catch { return {}; }
+}
+
+export function setFixingOverride(trancheCode: string, symbol: string, value: number | null): void {
+  if (typeof window === "undefined") return;
+  try {
+    const all = JSON.parse(window.localStorage.getItem(OVERRIDE_KEY) || "{}") as Record<string, Record<string, number>>;
+    if (!all[trancheCode]) all[trancheCode] = {};
+    if (value == null) delete all[trancheCode][symbol];
+    else all[trancheCode][symbol] = value;
+    if (Object.keys(all[trancheCode]).length === 0) delete all[trancheCode];
+    window.localStorage.setItem(OVERRIDE_KEY, JSON.stringify(all));
+  } catch {}
+}
+

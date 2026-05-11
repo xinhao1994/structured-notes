@@ -11,7 +11,7 @@ import { ParseResult } from "@/lib/parser";
 import { useQuotes } from "@/lib/hooks/useQuotes";
 import { useSymbolResolver } from "@/lib/hooks/useSymbolResolver";
 import { useTradeDateFixing } from "@/lib/hooks/useTradeDateFixing";
-import { upsertTranche, getCurrentParsedText, setCurrentParsedText } from "@/lib/storage";
+import { upsertTranche, getCurrentParsedText, setCurrentParsedText, getFixingOverrides, setFixingOverride } from "@/lib/storage";
 import { SAMPLE_TRANCHE_TEXT } from "@/lib/sample";
 import { parseTrancheText } from "@/lib/parser";
 import type { Tranche } from "@/lib/types";
@@ -58,7 +58,32 @@ export default function HomePage() {
   // Pre-trade → indicative (latest close).
   // Post-trade → ACTUAL close fetched from /api/trade-close on the trade date.
   const fixingResult = useTradeDateFixing(tranche, liveCloses);
-  const trancheWithFixing: Tranche | null = fixingResult.tranche;
+  const baseTranche: Tranche | null = fixingResult.tranche;
+
+  // Manual override layer: any value the user has typed in the Initial Fixing
+  // column overrides whatever the auto-fetch returned. Re-reads on every
+  // render so changes from ProductTable's inline edits are reflected immediately.
+  const [overrideTick, setOverrideTick] = useState(0);
+  const refreshOverrides = () => setOverrideTick((n) => n + 1);
+
+  const trancheWithFixing: Tranche | null = useMemo(() => {
+    if (!baseTranche) return null;
+    const overrides = getFixingOverrides(baseTranche.trancheCode);
+    if (Object.keys(overrides).length === 0) return baseTranche;
+    const fixing = { ...(baseTranche.initialFixing ?? {}) };
+    for (const sym of Object.keys(overrides)) {
+      if (isFinite(overrides[sym]) && overrides[sym] > 0) fixing[sym] = overrides[sym];
+    }
+    return { ...baseTranche, initialFixing: fixing };
+    // overrideTick included so changes from ProductTable trigger recompute
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [baseTranche, overrideTick]);
+
+  function handleSetOverride(symbol: string, value: number | null) {
+    if (!baseTranche) return;
+    setFixingOverride(baseTranche.trancheCode, symbol, value);
+    refreshOverrides();
+  }
 
   function handleParsed(r: ParseResult, _rawText: string) {
     setParsed(r);
@@ -150,7 +175,7 @@ export default function HomePage() {
             </div>
           )}
 
-          <ProductTable tranche={trancheWithFixing} quotes={quotes} />
+          <ProductTable tranche={trancheWithFixing} quotes={quotes} onOverrideFixing={handleSetOverride} />
           <Dashboard tranche={trancheWithFixing} quotes={quotes} />
           <KOSchedule tranche={trancheWithFixing} quotes={quotes} />
           <Analytics tranche={trancheWithFixing} quotes={quotes} />
