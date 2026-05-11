@@ -307,6 +307,52 @@ function normaliseName(s: string): string {
 }
 
 /**
+ * Levenshtein edit distance — minimum number of single-character insertions,
+ * deletions, or substitutions to turn `a` into `b`. Used for typo-tolerant
+ * dictionary lookup so "applie material" → "applied materials" → AMAT.
+ */
+function levenshtein(a: string, b: string): number {
+  const m = a.length, n = b.length;
+  if (!m) return n;
+  if (!n) return m;
+  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost);
+    }
+  }
+  return dp[m][n];
+}
+
+/**
+ * Find the dictionary entry closest to `query` within `maxDistance` edits.
+ * Returns the matched listing or undefined if no entry is close enough.
+ * Threshold scales with query length so short names need exact match.
+ */
+function findFuzzyMatch(query: string): { listing: Listing; matchedKey: string } | undefined {
+  const norm = normaliseName(query);
+  if (norm.length < 4) return undefined;                 // too short to fuzzy
+  // ceil(len/3) gives sensible thresholds: 4-6 chars → 2 edits, 7-9 → 3,
+  // 10+ → 3 (capped). Catches typos like "googel"/"alibba" while not
+  // collapsing distinct names into each other.
+  const maxDistance = Math.min(3, Math.max(1, Math.ceil(norm.length / 3)));
+  let best: { key: string; distance: number } | undefined;
+  for (const key of Object.keys(NAME_TO_TICKER)) {
+    // Cheap reject — skip entries with wildly different length
+    if (Math.abs(key.length - norm.length) > maxDistance) continue;
+    const d = levenshtein(norm, key);
+    if (d <= maxDistance && (!best || d < best.distance)) {
+      best = { key, distance: d };
+      if (d === 0) break;
+    }
+  }
+  return best ? { listing: NAME_TO_TICKER[best.key], matchedKey: best.key } : undefined;
+}
+
+/**
  * Resolve a free-form name (and optional market hint) to {symbol, market}.
  * Lookup order:
  *   1. exact match in NAME_TO_TICKER
@@ -320,7 +366,24 @@ function resolveListing(name: string, marketHint?: MarketCode): {
 } {
   const exact = NAME_TO_TICKER[name.toLowerCase()];
   const normalised = NAME_TO_TICKER[normaliseName(name)];
-  const hit = exact || normalised;
+  // Fuzzy fallback catches typos like "applie material" → "applied materials"
+  // and "arista net" → "arista". Threshold scales with name length so short
+  // queries don't match unrelated short entries.
+  // Try the full-name fuzzy first, then fall back to the first significant
+  // word — that handles "arista net" → "arista" → ANET.
+  let fuzzy = undefined as ReturnType<typeof findFuzzyMatch>;
+  if (!exact && !normalised) {
+    fuzzy = findFuzzyMatch(name);
+    if (!fuzzy) {
+      const firstWord = normaliseName(name).split(" ")[0];
+      if (firstWord && firstWord.length >= 4) {
+        fuzzy = NAME_TO_TICKER[firstWord]
+          ? { listing: NAME_TO_TICKER[firstWord], matchedKey: firstWord }
+          : findFuzzyMatch(firstWord);
+      }
+    }
+  }
+  const hit = exact || normalised || fuzzy?.listing;
 
   if (hit) {
     const targetMkt: MarketCode = marketHint && (hit as any)[marketHint] ? marketHint : hit.default;

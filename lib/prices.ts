@@ -48,6 +48,41 @@ function alphaSymbol(symbol: string, market: MarketCode): string {
   if (market === "US") return symbol.toUpperCase();
   return `${symbol.toUpperCase()}${def.alphaVantageSuffix ?? ""}`;
 }
+function stooqSymbol(symbol: string, market: MarketCode): string {
+  const suffix: Record<MarketCode, string> = { US: ".us", HK: ".hk", JP: ".jp", AU: ".au", SG: ".sg", MY: ".kl" };
+  return `${symbol.toLowerCase()}${suffix[market]}`;
+}
+
+/**
+ * Stooq — free, no API key, CSV endpoint. Independent of Yahoo, so it
+ * serves as a sanity-check / fallback when Yahoo is unreachable or quirky.
+ * Endpoint: stooq.com/q/l/?s={symbol}&f=sd2t2ohlcv&h&e=csv
+ */
+async function fromStooq(symbol: string, market: MarketCode): Promise<PriceQuote | null> {
+  const sym = stooqSymbol(symbol, market);
+  try {
+    const r = await fetch(`https://stooq.com/q/l/?s=${encodeURIComponent(sym)}&f=sd2t2ohlcv&h&e=csv`, {
+      headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36" },
+      next: { revalidate: 0 },
+    });
+    if (!r.ok) return null;
+    const text = await r.text();
+    const lines = text.trim().split(/\r?\n/);
+    if (lines.length < 2) return null;
+    const cols = lines[1].split(",");
+    if (cols.length < 7) return null;
+    const close = parseFloat(cols[6]);
+    if (!isFinite(close) || close === 0) return null;
+    return {
+      symbol, market, price: close,
+      currency: MARKETS[market].currency,
+      asOf: new Date().toISOString(),
+      marketOpen: isMarketOpen(market).open,
+      source: "stooq",
+    };
+  } catch { return null; }
+}
+
 function yahooSymbol(symbol: string, market: MarketCode): string {
   if (market === "US") return symbol.toUpperCase();
   // Yahoo conventions: HK -> .HK, SG -> .SI, JP -> .T, AU -> .AX, MY -> .KL
@@ -200,9 +235,11 @@ function chainForMarket(market: MarketCode) {
   // Yahoo Finance has the most reliable free coverage across ALL markets,
   // so it goes first. Polygon and Finnhub are layered on top for US (paid
   // tiers if available). Alpha Vantage is last because of its 25/day limit.
+  // Yahoo is primary (most accurate, no key). Stooq is a free independent
+  // cross-check. Polygon/Finnhub/AlphaVantage layer in if keys are present.
   return market === "US"
-    ? [fromYahoo, fromPolygon, fromFinnhub, fromAlpha]
-    : [fromYahoo, fromFinnhub, fromAlpha];
+    ? [fromYahoo, fromStooq, fromPolygon, fromFinnhub, fromAlpha]
+    : [fromYahoo, fromStooq, fromFinnhub, fromAlpha];
 }
 
 export async function fetchQuote(symbol: string, market: MarketCode): Promise<PriceQuote | null> {
