@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { listPocket } from "@/lib/storage";
+import { listPocket, getCurrentParsedText } from "@/lib/storage";
 import { clientCalc, formatCcy, MIN_LOT, validateLot } from "@/lib/calc";
 import type { Currency, Tranche } from "@/lib/types";
 import { parseTrancheText } from "@/lib/parser";
@@ -12,9 +12,12 @@ const CCYS: Currency[] = ["USD", "HKD", "MYR", "SGD", "JPY", "AUD"];
 
 export default function CalculatorPage() {
   const pocket = typeof window !== "undefined" ? listPocket() : [];
-  const sampleTranche = parseTrancheText(SAMPLE_TRANCHE_TEXT).tranche;
+  // Use the most-recently-parsed tranche from the Desk page as the default
+  // option. Falls back to the sample if the user hasn't parsed anything yet.
+  const currentText = typeof window !== "undefined" ? (getCurrentParsedText() ?? SAMPLE_TRANCHE_TEXT) : SAMPLE_TRANCHE_TEXT;
+  const sampleTranche = parseTrancheText(currentText).tranche;
   const choices: { id: string; label: string; tranche: Tranche }[] = [
-    { id: "sample", label: `Sample · ${sampleTranche.trancheCode}`, tranche: sampleTranche },
+    { id: "sample", label: `Current parse · ${sampleTranche.trancheCode}`, tranche: sampleTranche },
     ...pocket.map((p) => ({
       id: p.id,
       label: `${p.tranche.trancheCode} · ${p.tranche.currency} · ${(p.tranche.couponPa * 100).toFixed(1)}%`,

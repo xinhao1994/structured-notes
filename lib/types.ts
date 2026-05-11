@@ -68,7 +68,7 @@ export interface PriceQuote {
   currency?: string;
   asOf: string;
   marketOpen: boolean;
-  source: "polygon" | "finnhub" | "alphavantage" | "cache" | "mock";
+  source: "polygon" | "finnhub" | "yahoo" | "alphavantage" | "cache" | "mock";
   cached?: boolean;
   delayed?: boolean;
 }

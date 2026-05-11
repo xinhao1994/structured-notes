@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { ProductParser } from "@/components/ProductParser";
 import { ProductTable } from "@/components/ProductTable";
@@ -10,15 +10,25 @@ import { Analytics } from "@/components/Charts";
 import { ParseResult } from "@/lib/parser";
 import { useQuotes } from "@/lib/hooks/useQuotes";
 import { useSymbolResolver } from "@/lib/hooks/useSymbolResolver";
-import { upsertTranche } from "@/lib/storage";
+import { upsertTranche, getCurrentParsedText, setCurrentParsedText } from "@/lib/storage";
 import { SAMPLE_TRANCHE_TEXT } from "@/lib/sample";
 import { parseTrancheText } from "@/lib/parser";
 import type { Tranche } from "@/lib/types";
 import { BookmarkPlus, BellRing, AlertTriangle, Wallet, Check } from "lucide-react";
 
 export default function HomePage() {
-  const [parsed, setParsed] = useState<ParseResult | null>(() => parseTrancheText(SAMPLE_TRANCHE_TEXT));
+  // Don't parse anything during SSR (localStorage isn't there). We hydrate the
+  // parsed tranche on first client render so the latest paste survives
+  // navigating Desk → Pocket → Desk.
+  const [parsed, setParsed] = useState<ParseResult | null>(null);
   const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    const saved = getCurrentParsedText();
+    const text = saved && saved.trim() ? saved : SAMPLE_TRANCHE_TEXT;
+    setParsed(parseTrancheText(text));
+    if (!saved) setCurrentParsedText(text);   // remember the sample so the calc default is consistent
+  }, []);
 
   const parsedTranche = parsed?.tranche;
   const { resolved: tranche, pending: resolverPending, errors: resolverErrors } =
@@ -30,8 +40,6 @@ export default function HomePage() {
   );
   const { quotes, loading, asOf, refresh } = useQuotes(items, 15_000);
 
-  // Initial fixing: pre-trade -> indicative (latest close); on/after trade -> use latest live as actual.
-  // (Historical-close lookup will be added back once the stuck file permissions are cleared.)
   const trancheWithFixing: Tranche | null = useMemo(() => {
     if (!tranche) return null;
     const today = new Date().toISOString().slice(0, 10);
@@ -39,14 +47,12 @@ export default function HomePage() {
     const fixing: Record<string, number> = {};
     for (const u of tranche.underlyings) {
       const q = quotes[u.symbol];
-      if (q?.price != null) {
-        fixing[u.symbol] = isPreTrade ? (q.prevClose ?? q.price) : (q.prevClose ?? q.price);
-      }
+      if (q?.price != null) fixing[u.symbol] = q.prevClose ?? q.price;
     }
     return { ...tranche, initialFixing: fixing, isIndicativeFixing: isPreTrade };
   }, [tranche, quotes]);
 
-  function handleParsed(r: ParseResult) {
+  function handleParsed(r: ParseResult, _rawText: string) {
     setParsed(r);
     setSaved(false);
   }
@@ -133,10 +139,7 @@ export default function HomePage() {
 function NotifyButton({ tranche }: { tranche: Tranche }) {
   const [granted, setGranted] = useState<boolean | null>(null);
   useEffect(() => {
-    if (typeof window === "undefined" || !("Notification" in window)) {
-      setGranted(false);
-      return;
-    }
+    if (typeof window === "undefined" || !("Notification" in window)) { setGranted(false); return; }
     setGranted(Notification.permission === "granted");
   }, []);
   async function ask() {

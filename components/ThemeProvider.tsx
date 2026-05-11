@@ -15,8 +15,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   // by setting on first client render.
   useEffect(() => {
     const stored = (typeof window !== "undefined" && localStorage.getItem("snd.theme")) as Theme | null;
-    const system: Theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-    const initial: Theme = stored ?? system;
+    // Default to dark mode (Bloomberg-terminal feel). System preference respected only if user previously chose light/dark explicitly.
+    const initial: Theme = stored ?? "dark";
     setTheme(initial);
     document.documentElement.classList.toggle("dark", initial === "dark");
   }, []);

@@ -53,11 +53,18 @@ export function togglePin(id: string): void {
   );
 }
 
-/** Patch fields on a saved tranche. Used by the inline tranche-code editor. */
-export function updateTrancheFields(id: string, updates: Partial<Tranche>): void {
-  savePocket(
-    listPocket().map((e) =>
-      e.id === id ? { ...e, tranche: { ...e.tranche, ...updates } } : e
-    )
-  );
+// ─── current-tranche persistence (raw paste) ────────────────────────────────
+// We persist the raw text of the most-recently-parsed tranche so that
+// navigating Desk → Pocket → Desk doesn't lose it, and so the Calculator
+// page can default to it. Cleared only when the user parses a new one.
+const CURRENT_KEY = "snd.current.parsedText.v1";
+
+export function getCurrentParsedText(): string | null {
+  if (typeof window === "undefined") return null;
+  try { return window.localStorage.getItem(CURRENT_KEY); } catch { return null; }
 }
+export function setCurrentParsedText(text: string): void {
+  if (typeof window === "undefined") return;
+  try { window.localStorage.setItem(CURRENT_KEY, text); } catch {}
+}
+

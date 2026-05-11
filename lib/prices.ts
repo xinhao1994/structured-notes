@@ -1,5 +1,11 @@
 // Multi-provider price client with cache + failover.
-//   Polygon.io (primary) → Finnhub (secondary) → Alpha Vantage (backup)
+//
+// Order per market:
+//   US:    Polygon → Finnhub → Yahoo → Alpha Vantage → mock
+//   HK/SG/JP/AU/MY:  Yahoo (free, accurate) → Finnhub (paid HK) → Alpha Vantage → mock
+//
+// Yahoo Finance is critical for HK because Finnhub's free tier doesn't
+// reliably return HKEX quotes. Yahoo is free, no key required, and accurate.
 // Server-side only.
 
 import { MARKETS, isMarketOpen } from "./markets";
@@ -15,9 +21,7 @@ function ttlMs(market: MarketCode): number {
   const closed = parseInt(process.env.PRICE_CLOSED_TTL_SECONDS || "600", 10);
   return (open ? live : closed) * 1000;
 }
-function cacheKey(symbol: string, market: MarketCode): string {
-  return `${market}:${symbol}`;
-}
+function cacheKey(symbol: string, market: MarketCode): string { return `${market}:${symbol}`; }
 function readCache(symbol: string, market: MarketCode): PriceQuote | null {
   const k = cacheKey(symbol, market);
   const hit = cache.get(k);
@@ -29,6 +33,7 @@ function writeCache(q: PriceQuote): void {
   cache.set(cacheKey(q.symbol, q.market), { q, until: Date.now() + ttlMs(q.market) });
 }
 
+// ─── symbol formatters ──────────────────────────────────────────────────────
 function polygonSymbol(symbol: string, market: MarketCode): string | null {
   if (market !== "US") return null;
   return symbol.toUpperCase();
@@ -43,7 +48,16 @@ function alphaSymbol(symbol: string, market: MarketCode): string {
   if (market === "US") return symbol.toUpperCase();
   return `${symbol.toUpperCase()}${def.alphaVantageSuffix ?? ""}`;
 }
+function yahooSymbol(symbol: string, market: MarketCode): string {
+  if (market === "US") return symbol.toUpperCase();
+  // Yahoo conventions: HK -> .HK, SG -> .SI, JP -> .T, AU -> .AX, MY -> .KL
+  const suffix: Record<MarketCode, string> = { US: "", HK: ".HK", SG: ".SI", JP: ".T", AU: ".AX", MY: ".KL" };
+  let base = symbol.toUpperCase();
+  // HK 4-digit codes work as-is for Yahoo (e.g. 0700.HK, 9988.HK).
+  return `${base}${suffix[market]}`;
+}
 
+// ─── provider implementations ───────────────────────────────────────────────
 async function fromPolygon(symbol: string, market: MarketCode): Promise<PriceQuote | null> {
   const key = process.env.POLYGON_API_KEY;
   if (!key) return null;
@@ -68,6 +82,47 @@ async function fromPolygon(symbol: string, market: MarketCode): Promise<PriceQuo
       asOf: new Date().toISOString(),
       marketOpen: isMarketOpen(market).open,
       source: "polygon",
+    };
+  } catch { return null; }
+}
+
+/**
+ * Yahoo Finance — free, no API key, reliable HK/SG/JP/AU/MY coverage.
+ * Uses the unofficial /v8/finance/chart endpoint.
+ */
+async function fromYahoo(symbol: string, market: MarketCode): Promise<PriceQuote | null> {
+  const sym = yahooSymbol(symbol, market);
+  try {
+    const r = await fetch(
+      `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=1y`,
+      {
+        headers: {
+          // Yahoo sometimes 401s requests without a UA.
+          "User-Agent": "Mozilla/5.0 (compatible; SNDesk/1.0)",
+          "Accept": "application/json",
+        },
+        next: { revalidate: 0 },
+      }
+    );
+    if (!r.ok) return null;
+    const j = await r.json();
+    const result = j?.chart?.result?.[0];
+    if (!result) return null;
+    const meta = result.meta;
+    const last = meta?.regularMarketPrice;
+    if (!last || !isFinite(last)) return null;
+    const prev = meta?.chartPreviousClose ?? meta?.previousClose;
+    const high52 = meta?.fiftyTwoWeekHigh;
+    const low52 = meta?.fiftyTwoWeekLow;
+    return {
+      symbol, market, price: last,
+      prevClose: isFinite(prev) ? prev : undefined,
+      high52: isFinite(high52) ? high52 : undefined,
+      low52: isFinite(low52) ? low52 : undefined,
+      currency: meta?.currency ?? MARKETS[market].currency,
+      asOf: new Date((meta?.regularMarketTime ?? Date.now() / 1000) * 1000).toISOString(),
+      marketOpen: isMarketOpen(market).open,
+      source: "yahoo",
     };
   } catch { return null; }
 }
@@ -136,10 +191,19 @@ function fromMock(symbol: string, market: MarketCode): PriceQuote {
   };
 }
 
+// ─── public API ─────────────────────────────────────────────────────────────
+function chainForMarket(market: MarketCode) {
+  // For non-US markets we trust Yahoo first because Finnhub free tier doesn't
+  // reliably cover HKEX/SGX/TSE/ASX/KLSE.
+  return market === "US"
+    ? [fromPolygon, fromFinnhub, fromYahoo, fromAlpha]
+    : [fromYahoo, fromFinnhub, fromAlpha];
+}
+
 export async function fetchQuote(symbol: string, market: MarketCode): Promise<PriceQuote> {
   const cached = readCache(symbol, market);
   if (cached) return cached;
-  for (const f of [fromPolygon, fromFinnhub, fromAlpha]) {
+  for (const f of chainForMarket(market)) {
     const q = await f(symbol, market);
     if (q && isFinite(q.price) && q.price > 0) {
       const out = { ...q, delayed: !q.marketOpen };

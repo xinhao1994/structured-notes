@@ -8,13 +8,49 @@ import type { MarketCode } from "@/lib/types";
 import clsx from "clsx";
 
 const FLAG: Record<MarketCode, string> = {
-  US: "🇺🇸",
-  HK: "🇭🇰",
-  MY: "🇲🇾",
-  SG: "🇸🇬",
-  JP: "🇯🇵",
-  AU: "🇦🇺",
+  US: "🇺🇸", HK: "🇭🇰", MY: "🇲🇾", SG: "🇸🇬", JP: "🇯🇵", AU: "🇦🇺",
 };
+
+function labelFor(r: string): string {
+  switch (r) {
+    case "weekend": return "Weekend";
+    case "holiday": return "Holiday";
+    case "lunch": return "Lunch";
+    case "pre": return "Pre-mkt";
+    case "post": return "Closed";
+    default: return "Closed";
+  }
+}
+
+interface Snap {
+  code: MarketCode;
+  currency: string;
+  localTime: string;
+  localDate: string;
+  open: boolean;
+  reason: string;
+}
+
+function TickerCell({ s }: { s: Snap }) {
+  return (
+    <div className="flex min-w-[170px] items-center gap-2 border-r border-[var(--line)] px-3 py-2">
+      <span aria-hidden className="text-base">{FLAG[s.code]}</span>
+      <div className="leading-tight">
+        <div className="text-[11px] font-semibold uppercase tracking-wide">
+          {s.code}
+          <span className="ml-1 text-[10px] font-normal text-[var(--text-muted)]">{s.currency}</span>
+        </div>
+        <div className="tabular text-[11px] text-[var(--text-muted)]">{s.localDate} · {s.localTime}</div>
+      </div>
+      <div className="ml-auto flex items-center gap-1.5">
+        <span className={clsx("live-dot", !s.open && "closed")} />
+        <span className={clsx("text-[10px] font-semibold uppercase tracking-wide", s.open ? "text-success" : "text-danger")}>
+          {s.open ? "Open" : labelFor(s.reason)}
+        </span>
+      </div>
+    </div>
+  );
+}
 
 export function Header() {
   const { theme, toggle } = useTheme();
@@ -26,7 +62,7 @@ export function Header() {
   }, []);
 
   const my = malaysiaNowParts(now);
-  const snaps = marketSnapshots(now);
+  const snaps = marketSnapshots(now) as Snap[];
 
   return (
     <header className="sticky top-0 z-40 border-b border-[var(--line)] bg-[var(--surface)]/80 backdrop-blur-md">
@@ -38,62 +74,29 @@ export function Header() {
           </div>
           <div className="leading-tight">
             <div className="text-[13px] font-semibold tracking-wide">SN Desk</div>
-            <div className="text-[10px] uppercase tracking-[.12em] text-[var(--text-muted)]">
-              Structured Notes
-            </div>
+            <div className="text-[10px] uppercase tracking-[.12em] text-[var(--text-muted)]">Structured notes</div>
           </div>
         </div>
 
         <div className="hidden items-center gap-3 sm:flex">
           <div className="text-right leading-tight">
             <div className="text-[13px] font-medium">{my.date}</div>
-            <div className="tabular text-[11px] text-[var(--text-muted)]">
-              {my.time} · MY ({my.tz})
-            </div>
+            <div className="tabular text-[11px] text-[var(--text-muted)]">{my.time} · MY ({my.tz})</div>
           </div>
         </div>
 
-        <button
-          onClick={toggle}
-          className="btn h-9"
-          aria-label="Toggle theme"
-          title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
-        >
+        <button onClick={toggle} className="btn h-9" aria-label="Toggle theme" title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}>
           {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
         </button>
       </div>
 
-      {/* Row 2 — market strip (mobile-friendly horizontal scroll) */}
-      <div className="scroll-x border-t border-[var(--line)]">
-        <div className="mx-auto flex w-max max-w-6xl items-stretch gap-0 px-4 sm:px-6">
-          {snaps.map((s) => (
-            <div
-              key={s.code}
-              className="flex min-w-[150px] items-center gap-2 border-r border-[var(--line)] px-3 py-2 last:border-r-0"
-            >
-              <span aria-hidden className="text-base">{FLAG[s.code]}</span>
-              <div className="leading-tight">
-                <div className="text-[11px] font-semibold uppercase tracking-wide">
-                  {s.code}
-                  <span className="ml-1 text-[10px] font-normal text-[var(--text-muted)]">
-                    {s.currency}
-                  </span>
-                </div>
-                <div className="tabular text-[11px] text-[var(--text-muted)]">
-                  {s.localDate} · {s.localTime}
-                </div>
-              </div>
-              <div className="ml-auto flex items-center gap-1.5">
-                <span className={clsx("live-dot", !s.open && "closed")} />
-                <span className={clsx(
-                  "text-[10px] font-semibold uppercase tracking-wide",
-                  s.open ? "text-success" : "text-danger"
-                )}>
-                  {s.open ? "Open" : labelFor(s.reason)}
-                </span>
-              </div>
-            </div>
-          ))}
+      {/* Row 2 — Bloomberg-style auto-scrolling market ticker */}
+      <div className="ticker-strip border-t border-[var(--line)]">
+        <div className="ticker-track">
+          {/* Two copies of the full market list, in a single inline-flex track,
+              translated -50% over the keyframe — yields a seamless infinite loop. */}
+          {snaps.map((s) => <TickerCell key={`a-${s.code}`} s={s} />)}
+          {snaps.map((s) => <TickerCell key={`b-${s.code}`} s={s} />)}
         </div>
       </div>
 
@@ -105,15 +108,4 @@ export function Header() {
       </div>
     </header>
   );
-}
-
-function labelFor(r: string): string {
-  switch (r) {
-    case "weekend": return "Weekend";
-    case "holiday": return "Holiday";
-    case "lunch": return "Lunch";
-    case "pre": return "Pre-mkt";
-    case "post": return "Closed";
-    default: return "Closed";
-  }
 }
