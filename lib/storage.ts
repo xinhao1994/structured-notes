@@ -53,6 +53,16 @@ export function togglePin(id: string): void {
   );
 }
 
+
+/** Patch fields on a saved tranche. Used by the inline tranche-code + notes editors. */
+export function updateTrancheFields(id: string, updates: Partial<Tranche>): void {
+  savePocket(
+    listPocket().map((e) =>
+      e.id === id ? { ...e, tranche: { ...e.tranche, ...updates } } : e
+    )
+  );
+}
+
 // ─── current-tranche persistence (raw paste) ────────────────────────────────
 // We persist the raw text of the most-recently-parsed tranche so that
 // navigating Desk → Pocket → Desk doesn't lose it, and so the Calculator
