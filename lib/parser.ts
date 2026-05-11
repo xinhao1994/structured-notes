@@ -528,11 +528,11 @@ export function parseTrancheText(input: string): ParseResult {
   const settleMatch = settleRaw.match(/T\s*\+\s*(\d+)/i);
   const settlementOffset = settleMatch ? parseInt(settleMatch[1], 10) : 7;
 
-  const couponMatch = text.match(/Coupon\s+(\d+(?:\.\d+)?)\s*%(?:\s*p\.?a\.?)?/i);
+  const couponMatch = text.match(/Coupon\s*:?\s+(\d+(?:\.\d+)?)\s*%(?:\s*p\.?a\.?)?/i);
   const couponPa = couponMatch ? parseFloat(couponMatch[1]) / 100 : 0;
   if (!couponMatch) warnings.push({ field: "coupon", message: "Coupon not found — defaulted to 0%." });
 
-  const tenorMatch = text.match(/Tenor\s+(\d+(?:\.\d+)?)\s*(M|Y|months|years|month|year|m|y)/i);
+  const tenorMatch = text.match(/Tenor\s*:?\s+(\d+(?:\.\d+)?)\s*(M|Y|months|years|month|year|m|y)/i);
   let tenorMonths = 12;
   if (tenorMatch) {
     const n = parseFloat(tenorMatch[1]);
@@ -542,14 +542,14 @@ export function parseTrancheText(input: string): ParseResult {
     warnings.push({ field: "tenor", message: "Tenor not found — defaulted to 12M." });
   }
 
-  const strikePct = pct(parseField(text, /Strike\s+([0-9.]+\s*%)/i)) ?? 1.0;
-  const ekiPct = pct(parseField(text, /EKI\s+([0-9.]+\s*%)/i)) ?? 0.6;
+  const strikePct = pct(parseField(text, /Strike\s*:?\s+([0-9.]+\s*%)/i)) ?? 1.0;
+  const ekiPct = pct(parseField(text, /EKI\s*:?\s+([0-9.]+\s*%)/i)) ?? 0.6;
 
-  const koLine = parseField(text, /KO\s+([^\n]+)/i) || "";
+  const koLine = parseField(text, /KO\s*:?\s+([^\n]+)/i) || "";
   const koStartPct = pct(koLine.match(/([0-9.]+\s*%)/)?.[1]) ?? 1.0;
   // Stepdown can be written as "stepdown 4%" OR "4% stepdown" OR "4 stepdown".
   const stepdownPct =
-    pct(koLine.match(/stepdown\s+([0-9.]+\s*%)/i)?.[1]) ??
+    pct(koLine.match(/stepdown\s*:?\s+([0-9.]+\s*%)/i)?.[1]) ??
     pct(koLine.match(/([0-9.]+\s*%)\s+stepdown/i)?.[1]) ??
     0;
 
