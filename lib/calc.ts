@@ -2,7 +2,7 @@
 // schedule, calculator and risk widgets. Pure functions; no side effects;
 // no I/O. Easy to unit-test.
 
-import { addMonthsBizSnap } from "./markets";
+import { addMyBusinessDays, addMonthsThenSnapMy } from "./markets";
 import type {
   Currency,
   KoObservation,
@@ -53,9 +53,31 @@ export function koSchedule(t: Tranche): KoObservation[] {
   const obs: KoObservation[] = [];
   const freq = Math.max(1, t.koObsFreqMonths);
   const total = Math.floor(t.tenorMonths / freq);
+
+  // Issuer convention (MSI, derived empirically):
+  //   Obs 1  = trade date + 1 calendar month, then + 4 MY business days
+  //            (skipping MY weekends + public holidays).
+  //   Obs N  = Obs (N−1) + 1 calendar month, snapped forward to next MY
+  //            business day if it lands on a weekend/holiday.
+  // The "+ 4 biz days" only applies to obs 1; subsequent observations
+  // anchor to the month-anniversary of obs 1, so the day-of-month stays
+  // consistent (e.g. May 7, Jun 8, Jul 7, ...).
+  let prevDate: string | null = null;
+
   for (let i = 1; i <= total; i++) {
     const koPct = Math.max(0, t.koStartPct - (i - 1) * t.koStepdownPct);
-    const date = addMonthsBizSnap(t.tradeDate, i * freq, t.underlyings[0]?.market ?? "US");
+    let date: string;
+    if (i === 1) {
+      // Obs 1 = trade + 1 month + 4 MY business days (skipping weekends + holidays).
+      // The +1m anniversary itself is rolled to next biz day if needed, then
+      // we walk forward 4 MY business days from there.
+      const anniversary = addMonthsThenSnapMy(t.tradeDate, freq);
+      date = addMyBusinessDays(anniversary, 4);
+    } else {
+      // Obs N = Obs (N-1) + 1 calendar month, snapped forward to next MY biz day.
+      date = addMonthsThenSnapMy(prevDate!, freq);
+    }
+    prevDate = date;
     const koPriceBySymbol: Record<string, number> = {};
     if (t.initialFixing) {
       for (const u of t.underlyings) {

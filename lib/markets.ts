@@ -295,3 +295,73 @@ export function addMonthsBizSnap(
   }
   return ymd;
 }
+
+/**
+ * Add `n` MY business days to an ISO date, skipping weekends and MY public
+ * holidays. The start date is not counted. Used to derive valuation dates
+ * from the +1-month anniversary of the trade date.
+ *
+ * Example: addMyBusinessDays("2026-04-30", 4) → "2026-05-07"
+ *   (skip May 1 Labour Day + weekend May 2-3, then count Mon..Thu = 4 days)
+ */
+export function addMyBusinessDays(iso: string, n: number): string {
+  const holidays = new Set(getMyHolidays());
+  const d = new Date(iso + "T00:00:00Z");
+  let added = 0;
+  while (added < n) {
+    d.setUTCDate(d.getUTCDate() + 1);
+    const dow = d.getUTCDay();
+    const ymd = d.toISOString().slice(0, 10);
+    if (dow !== 0 && dow !== 6 && !holidays.has(ymd)) added++;
+  }
+  return d.toISOString().slice(0, 10);
+}
+
+/** Expose the MY holiday list. */
+function getMyHolidays(): string[] {
+  // Mirrors the HOLIDAYS.MY list. Inlined here so this file can be imported
+  // standalone if needed in the future.
+  return [
+    "2025-01-01","2025-01-29","2025-02-01","2025-03-31","2025-04-01","2025-05-01",
+    "2025-05-12","2025-06-02","2025-06-07","2025-06-27","2025-08-31","2025-09-05",
+    "2025-09-16","2025-10-20","2025-12-25",
+    "2026-01-01","2026-02-17","2026-02-18","2026-03-21","2026-05-01","2026-05-22",
+    "2026-05-27","2026-05-31","2026-06-27","2026-08-31","2026-09-16","2026-09-25",
+    "2026-11-08","2026-12-25",
+  ];
+}
+
+/**
+ * Snap an ISO date forward to the next MY business day if it falls on a
+ * weekend or MY public holiday. Returns unchanged if already a biz day.
+ */
+export function snapForwardMy(iso: string): string {
+  const holidays = new Set(getMyHolidays());
+  let ymd = iso;
+  while (true) {
+    const d = new Date(ymd + "T00:00:00Z");
+    const dow = d.getUTCDay();
+    if (dow !== 0 && dow !== 6 && !holidays.has(ymd)) return ymd;
+    d.setUTCDate(d.getUTCDate() + 1);
+    ymd = d.toISOString().slice(0, 10);
+  }
+}
+
+/**
+ * Add `months` calendar months to an ISO date (preserving day-of-month
+ * where possible) and snap forward to the next MY business day. Used for
+ * cascading subsequent valuation dates from the first one.
+ */
+export function addMonthsThenSnapMy(iso: string, months: number): string {
+  const [y, m, d] = iso.split("-").map((s) => parseInt(s, 10));
+  // CLAMP day to end-of-month rather than letting JS roll forward.
+  // e.g. Mar 31 + 1 month = Apr 30 (NOT May 1), because April has 30 days.
+  const targetMonthAbs = m - 1 + months;
+  const targetY = y + Math.floor(targetMonthAbs / 12);
+  const targetM = ((targetMonthAbs % 12) + 12) % 12;
+  const lastDayOfTargetMonth = new Date(Date.UTC(targetY, targetM + 1, 0)).getUTCDate();
+  const day = Math.min(d, lastDayOfTargetMonth);
+  const target = new Date(Date.UTC(targetY, targetM, day));
+  return snapForwardMy(target.toISOString().slice(0, 10));
+}
+
