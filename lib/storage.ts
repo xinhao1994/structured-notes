@@ -105,3 +105,34 @@ export function setFixingOverride(trancheCode: string, symbol: string, value: nu
   } catch {}
 }
 
+// ─── client calculator settings (persisted per tranche) ────────────────────
+// Remembers the user's last currency + principal so navigating away and back
+// doesn't reset their input. Keyed by tranche code so the calculator picks
+// up where they left off for each tranche.
+const CALC_KEY = "snd.calcSettings.v1";
+
+export interface CalcSettings {
+  trancheId?: string;
+  currency?: string;
+  principal?: number;
+  /** Which observation # the tranche knocked out at (null = not yet KO'd). */
+  knockedOutAt?: number | null;
+  /** Index into the message-template carousel. */
+  msgTemplateIdx?: number;
+}
+
+export function getCalcSettings(): CalcSettings {
+  if (typeof window === "undefined") return {};
+  try {
+    return (JSON.parse(window.localStorage.getItem(CALC_KEY) || "{}") || {}) as CalcSettings;
+  } catch { return {}; }
+}
+
+export function setCalcSettings(patch: Partial<CalcSettings>): void {
+  if (typeof window === "undefined") return;
+  try {
+    const cur = getCalcSettings();
+    window.localStorage.setItem(CALC_KEY, JSON.stringify({ ...cur, ...patch }));
+  } catch {}
+}
+

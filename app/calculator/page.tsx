@@ -1,38 +1,106 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { listPocket, getCurrentParsedText } from "@/lib/storage";
+import { useEffect, useMemo, useState } from "react";
+import {
+  listPocket, getCurrentParsedText, getCalcSettings, setCalcSettings,
+} from "@/lib/storage";
 import { clientCalc, formatCcy, MIN_LOT, validateLot } from "@/lib/calc";
 import type { Currency, Tranche } from "@/lib/types";
 import { parseTrancheText } from "@/lib/parser";
 import { SAMPLE_TRANCHE_TEXT } from "@/lib/sample";
-import { Calculator, AlertTriangle, CheckCircle2 } from "lucide-react";
+import {
+  Calculator, AlertTriangle, CheckCircle2, MessageSquare, RefreshCw, Copy, Check, Trophy,
+} from "lucide-react";
 
 const CCYS: Currency[] = ["USD", "HKD", "MYR", "SGD", "JPY", "AUD"];
 
 export default function CalculatorPage() {
-  const pocket = typeof window !== "undefined" ? listPocket() : [];
-  // Use the most-recently-parsed tranche from the Desk page as the default
-  // option. Falls back to the sample if the user hasn't parsed anything yet.
-  const currentText = typeof window !== "undefined" ? (getCurrentParsedText() ?? SAMPLE_TRANCHE_TEXT) : SAMPLE_TRANCHE_TEXT;
-  const sampleTranche = parseTrancheText(currentText).tranche;
-  const choices: { id: string; label: string; tranche: Tranche }[] = [
-    { id: "sample", label: `Current parse · ${sampleTranche.trancheCode}`, tranche: sampleTranche },
-    ...pocket.map((p) => ({
-      id: p.id,
-      label: `${p.tranche.trancheCode} · ${p.tranche.currency} · ${(p.tranche.couponPa * 100).toFixed(1)}%`,
-      tranche: p.tranche,
-    })),
-  ];
+  const [pocket, setPocketList] = useState<ReturnType<typeof listPocket>>([]);
+  const [sampleTranche, setSampleTranche] = useState<Tranche | null>(null);
 
-  const [trancheId, setTrancheId] = useState<string>(choices[0]?.id ?? "sample");
+  // Hydrate from localStorage after first client render (avoid SSR mismatch).
+  useEffect(() => {
+    setPocketList(listPocket());
+    const text = getCurrentParsedText() ?? SAMPLE_TRANCHE_TEXT;
+    setSampleTranche(parseTrancheText(text).tranche);
+  }, []);
+
+  const choices = useMemo(() => {
+    const items: { id: string; label: string; tranche: Tranche }[] = [];
+    if (sampleTranche) {
+      items.push({
+        id: "sample",
+        label: `Current parse · ${sampleTranche.trancheCode}`,
+        tranche: sampleTranche,
+      });
+    }
+    for (const p of pocket) {
+      items.push({
+        id: p.id,
+        label: `${p.tranche.trancheCode} · ${p.tranche.currency} · ${(p.tranche.couponPa * 100).toFixed(1)}%`,
+        tranche: p.tranche,
+      });
+    }
+    return items;
+  }, [sampleTranche, pocket]);
+
+  // Restore last-used state from localStorage (currency/principal/KO obs/template).
+  const saved = typeof window !== "undefined" ? getCalcSettings() : {};
+
+  const [trancheId, setTrancheId] = useState<string>(saved.trancheId ?? "sample");
   const tranche = choices.find((c) => c.id === trancheId)?.tranche ?? sampleTranche;
 
-  const [currency, setCurrency] = useState<Currency>(tranche.currency);
-  const [principal, setPrincipal] = useState<number>(MIN_LOT[tranche.currency]);
+  const [currency, setCurrency] = useState<Currency>((saved.currency as Currency) ?? "USD");
+  const [principal, setPrincipal] = useState<number>(saved.principal ?? 0);
+  const [knockedOutAt, setKnockedOutAt] = useState<number | null>(saved.knockedOutAt ?? null);
+  const [tplIdx, setTplIdx] = useState<number>(saved.msgTemplateIdx ?? 0);
+  const [clientName, setClientName] = useState<string>("");
+  const [copied, setCopied] = useState(false);
+
+  // When the tranche switches, default currency + principal to that tranche's
+  // currency + its min lot, but only if we don't have a stored value for it.
+  useEffect(() => {
+    if (!tranche) return;
+    if (!saved.currency) setCurrency(tranche.currency);
+    if (!saved.principal) setPrincipal(MIN_LOT[tranche.currency]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tranche?.trancheCode]);
+
+  // Persist on every change.
+  useEffect(() => { setCalcSettings({ trancheId }); }, [trancheId]);
+  useEffect(() => { setCalcSettings({ currency }); }, [currency]);
+  useEffect(() => { setCalcSettings({ principal }); }, [principal]);
+  useEffect(() => { setCalcSettings({ knockedOutAt }); }, [knockedOutAt]);
+  useEffect(() => { setCalcSettings({ msgTemplateIdx: tplIdx }); }, [tplIdx]);
 
   const validation = validateLot(currency, principal);
-  const calc = useMemo(() => clientCalc(tranche, currency, principal), [tranche, currency, principal]);
+  const calc = useMemo(
+    () => (tranche ? clientCalc(tranche, currency, principal) : null),
+    [tranche, currency, principal]
+  );
+
+  // KO message generation — only meaningful when knockedOutAt is set.
+  const message = useMemo(() => {
+    if (!tranche || !calc || !knockedOutAt) return null;
+    return buildKoMessage(tranche, currency, principal, knockedOutAt, calc.monthlyCoupon, tplIdx, clientName);
+  }, [tranche, calc, currency, principal, knockedOutAt, tplIdx, clientName]);
+
+  async function copyMessage() {
+    if (!message) return;
+    try {
+      await navigator.clipboard.writeText(message);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {}
+  }
+
+  if (!tranche) {
+    return (
+      <p className="text-[var(--text-muted)] mt-6 text-center">
+        Loading calculator...
+      </p>
+    );
+  }
 
   return (
     <>
@@ -87,7 +155,7 @@ export default function CalculatorPage() {
             </span>
             <input
               type="number"
-              value={principal}
+              value={principal || ""}
               min={MIN_LOT[currency]}
               step={1000}
               onChange={(e) => setPrincipal(parseInt(e.target.value, 10) || 0)}
@@ -109,31 +177,110 @@ export default function CalculatorPage() {
       </section>
 
       {/* Result cards */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <ResultCard label="Monthly coupon" value={formatCcy(currency, calc.monthlyCoupon)} />
-        <ResultCard label="Total coupon (tenor)" value={formatCcy(currency, calc.totalCoupon)} />
-        <ResultCard label="Annualized return" value={`${calc.annualizedReturnPct.toFixed(2)}%`} />
-        <ResultCard label="Estimated payout" value={formatCcy(currency, calc.estimatedPayout)} />
-      </div>
+      {calc && (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <ResultCard label="Monthly coupon" value={formatCcy(currency, calc.monthlyCoupon)} />
+          <ResultCard label="Total coupon (tenor)" value={formatCcy(currency, calc.totalCoupon)} />
+          <ResultCard label="Annualized return" value={`${calc.annualizedReturnPct.toFixed(2)}%`} />
+          <ResultCard label="Estimated payout" value={formatCcy(currency, calc.estimatedPayout)} />
+        </div>
+      )}
+
+      {/* ─── KO MESSAGE GENERATOR ─────────────────────────────────────────── */}
+      <section className="card mt-4 p-4">
+        <header className="mb-3 flex items-center gap-2">
+          <Trophy size={16} className="text-success" />
+          <h3 className="text-base font-semibold">Knock-out client message</h3>
+        </header>
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <label className="block">
+            <span className="text-[11px] uppercase tracking-wider text-[var(--text-muted)]">Client name (optional)</span>
+            <input
+              type="text"
+              value={clientName}
+              onChange={(e) => setClientName(e.target.value)}
+              placeholder="e.g. Mr Tan"
+              className="input mt-1"
+            />
+          </label>
+          <label className="block">
+            <span className="text-[11px] uppercase tracking-wider text-[var(--text-muted)]">Knocked out at obs #</span>
+            <select
+              value={knockedOutAt ?? ""}
+              onChange={(e) => setKnockedOutAt(e.target.value ? parseInt(e.target.value, 10) : null)}
+              className="input mt-1"
+            >
+              <option value="">— not yet —</option>
+              {Array.from({ length: tranche.tenorMonths }, (_, i) => i + 1).map((n) => (
+                <option key={n} value={n}>Observation #{n}</option>
+              ))}
+            </select>
+          </label>
+          <div className="block">
+            <span className="text-[11px] uppercase tracking-wider text-[var(--text-muted)]">Coupon earned</span>
+            <div className="input mt-1 tabular font-semibold flex items-center">
+              {knockedOutAt && calc
+                ? `${formatCcy(currency, calc.monthlyCoupon * knockedOutAt)} (${knockedOutAt} × ${formatCcy(currency, calc.monthlyCoupon)})`
+                : "—"}
+            </div>
+          </div>
+        </div>
+
+        {message ? (
+          <div className="mt-3">
+            <div className="rounded-xl border border-[var(--line)] bg-[var(--surface-2)] p-3 text-[13px] leading-relaxed whitespace-pre-wrap">
+              {message}
+            </div>
+            <div className="mt-2 flex items-center justify-between">
+              <div className="text-[11px] text-[var(--text-muted)]">
+                Style {tplIdx + 1} of {TEMPLATE_COUNT} — {TEMPLATE_NAMES[tplIdx]}
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setTplIdx((i) => (i + 1) % TEMPLATE_COUNT)}
+                  className="btn h-9 px-3 text-xs"
+                  title="Cycle to next message style"
+                >
+                  <RefreshCw size={14} /> Refresh
+                </button>
+                <button onClick={copyMessage} className="btn btn-primary h-9 px-3 text-xs">
+                  {copied ? <Check size={14} /> : <Copy size={14} />}
+                  {copied ? "Copied!" : "Copy message"}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <p className="mt-3 text-[12px] text-[var(--text-muted)]">
+            <MessageSquare size={12} className="inline mr-1" />
+            Select which observation the tranche knocked out at to generate a message you can copy to your client.
+          </p>
+        )}
+      </section>
 
       <section className="card mt-4 p-4">
         <h3 className="mb-2 text-base font-semibold">Scenarios</h3>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <ScenarioCard
-            tone="positive"
-            title="Best case · KO at first observation"
-            body={`Receives 1 month coupon (${formatCcy(currency, calc.monthlyCoupon)}) + principal. Annualized ${(calc.annualizedReturnPct).toFixed(1)}% never crystallises.`}
-          />
-          <ScenarioCard
-            tone="neutral"
-            title="Base case · runs to maturity"
-            body={`All ${tranche.tenorMonths} coupons paid: ${formatCcy(currency, calc.totalCoupon)}. Final payout ${formatCcy(currency, calc.estimatedPayout)}.`}
-          />
-          <ScenarioCard
-            tone="negative"
-            title="Worst case · KI breached, no recovery"
-            body={`Coupons retained ${formatCcy(currency, calc.totalCoupon)}; principal redemption ≈ ${formatCcy(currency, calc.worstCasePayout - calc.totalCoupon)}. Net ${formatCcy(currency, calc.worstCasePayout)}.`}
-          />
+          {calc && (
+            <>
+              <ScenarioCard
+                tone="positive"
+                title="Best case · KO at first observation"
+                body={`Receives 1 month coupon (${formatCcy(currency, calc.monthlyCoupon)}) + principal. Annualized ${(calc.annualizedReturnPct).toFixed(1)}% never crystallises.`}
+              />
+              <ScenarioCard
+                tone="neutral"
+                title="Base case · runs to maturity"
+                body={`All ${tranche.tenorMonths} coupons paid: ${formatCcy(currency, calc.totalCoupon)}. Final payout ${formatCcy(currency, calc.estimatedPayout)}.`}
+              />
+              <ScenarioCard
+                tone="negative"
+                title="Worst case · KI breached, no recovery"
+                body={`Coupons retained ${formatCcy(currency, calc.totalCoupon)}; principal redemption ≈ ${formatCcy(currency, calc.worstCasePayout - calc.totalCoupon)}. Net ${formatCcy(currency, calc.worstCasePayout)}.`}
+              />
+            </>
+          )}
         </div>
       </section>
 
@@ -155,14 +302,8 @@ function ResultCard({ label, value }: { label: string; value: string }) {
 }
 
 function ScenarioCard({
-  title,
-  body,
-  tone,
-}: {
-  title: string;
-  body: string;
-  tone: "positive" | "neutral" | "negative";
-}) {
+  title, body, tone,
+}: { title: string; body: string; tone: "positive" | "neutral" | "negative"; }) {
   const ring =
     tone === "positive" ? "border-l-4 border-l-success" :
     tone === "negative" ? "border-l-4 border-l-danger" :
@@ -173,4 +314,103 @@ function ScenarioCard({
       <div className="mt-1 text-[12px] text-[var(--text-muted)]">{body}</div>
     </div>
   );
+}
+
+// ─── client-message templates ──────────────────────────────────────────────
+// Multiple wordings cycled by the Refresh button. Layman → professional →
+// brief → detailed → congratulatory → neutral.
+
+const TEMPLATE_NAMES = [
+  "Friendly / layman",
+  "Professional / formal",
+  "Brief / SMS-style",
+  "Detailed breakdown",
+  "Congratulatory",
+  "Neutral status update",
+];
+const TEMPLATE_COUNT = TEMPLATE_NAMES.length;
+
+function buildKoMessage(
+  t: Tranche,
+  ccy: Currency,
+  principal: number,
+  obsN: number,
+  monthlyCoupon: number,
+  templateIdx: number,
+  clientName: string,
+): string {
+  const couponEarned = monthlyCoupon * obsN;
+  const totalPayout = principal + couponEarned;
+  const annPct = principal > 0 ? (couponEarned / principal) * (12 / obsN) * 100 : 0;
+  const sumPct = principal > 0 ? (couponEarned / principal) * 100 : 0;
+  const monthsWord = obsN === 1 ? "month" : "months";
+  const obsOrdinal = ordinal(obsN);
+  const fc = (n: number) => formatCcy(ccy, n);
+  const greet = clientName ? clientName : "valued client";
+  const greetCap = clientName ? clientName : "Valued Client";
+
+  switch (templateIdx % TEMPLATE_COUNT) {
+    case 0: // Friendly / layman
+      return `Hi ${greet}! 🎉
+
+Great news — your structured note (${t.trancheCode}) has been automatically redeemed at observation #${obsN}, which means it matured early at a profit!
+
+You've earned ${obsN} ${monthsWord} of coupon: ${fc(couponEarned)} on top of your ${fc(principal)} principal. Your full ${fc(totalPayout)} is being returned to your account.
+
+In simple terms: the underlying stocks performed well, so the bank pays you back early with a nice yield. That's a ${sumPct.toFixed(2)}% return in just ${obsN} ${monthsWord} (annualised ${annPct.toFixed(2)}%).
+
+Let me know if you'd like to look at similar opportunities — happy to walk you through them.`;
+
+    case 1: // Professional / formal
+      return `Dear ${greetCap},
+
+We are pleased to inform you that your structured product tranche ${t.trancheCode} has triggered an early redemption (knock-out event) at observation #${obsN}.
+
+Total coupon income earned across ${obsN} monthly periods: ${fc(couponEarned)}, representing an annualised return of ${annPct.toFixed(2)}% (${sumPct.toFixed(2)}% absolute).
+
+Principal of ${fc(principal)} together with accrued coupons (total ${fc(totalPayout)}) will be credited to your settlement account in due course.
+
+Please do not hesitate to contact me should you wish to discuss reinvestment opportunities.
+
+Kind regards.`;
+
+    case 2: // Brief / SMS-style
+      return `Hi ${greet}, tranche ${t.trancheCode} has knocked out at obs #${obsN}. Coupon earned: ${fc(couponEarned)} over ${obsN} ${monthsWord}. Principal ${fc(principal)} + coupon = ${fc(totalPayout)} returning soon. Annualised ${annPct.toFixed(2)}%.`;
+
+    case 3: // Detailed breakdown
+      return `Update on your tranche ${t.trancheCode}:
+
+✅ Status: Knocked out (early redemption) at observation #${obsN}
+📅 Observation: ${obsOrdinal} monthly observation
+💰 Coupon income: ${obsN} × ${fc(monthlyCoupon)} = ${fc(couponEarned)}
+💵 Principal returned: ${fc(principal)}
+📈 Total proceeds: ${fc(totalPayout)}
+📊 Return: ${sumPct.toFixed(2)}% over ${obsN} ${monthsWord} (annualised ${annPct.toFixed(2)}%)
+
+Funds will be settled to your account per the original T+${t.settlementOffset} schedule. Let me know once you'd like to review redeployment options.`;
+
+    case 4: // Congratulatory
+      return `Congratulations ${greetCap}! 🎊
+
+Your structured note tranche ${t.trancheCode} has just achieved an early redemption (auto-call) at the ${obsOrdinal} observation. This is an excellent outcome — you're now entitled to ${obsN} ${monthsWord} of coupon payments totalling ${fc(couponEarned)}, in addition to your full principal of ${fc(principal)} being returned.
+
+That works out to a ${sumPct.toFixed(2)}% return realised in just ${obsN} ${monthsWord} — an annualised ${annPct.toFixed(2)}%. A strong result for your portfolio.
+
+Looking forward to discussing the next opportunity with you.`;
+
+    case 5: // Neutral status update
+      return `Tranche ${t.trancheCode} — status update:
+
+Knocked out at observation #${obsN}. Coupon income earned: ${fc(couponEarned)} (${obsN} ${monthsWord} × ${fc(monthlyCoupon)}). Principal returned in full: ${fc(principal)}. Total payout: ${fc(totalPayout)}. Realised return ${sumPct.toFixed(2)}% / annualised ${annPct.toFixed(2)}%.
+
+Settlement per T+${t.settlementOffset}. Reach out for redeployment options.`;
+
+    default:
+      return "";
+  }
+}
+
+function ordinal(n: number): string {
+  const s = ["th", "st", "nd", "rd"], v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
 }

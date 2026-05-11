@@ -94,7 +94,17 @@ export function KOSchedule({ tranche, quotes }: Props) {
                     ))}
                   <td>
                     {past ? (
-                      <span className="badge moderate">Passed</span>
+                      worst && worst.delta >= 0 ? (
+                        <span className="badge safe" title={`Worst-of (${worst.u.symbol}) is currently above this KO trigger.`}>
+                          Knocked out
+                        </span>
+                      ) : worst ? (
+                        <span className="badge moderate" title={`Worst-of (${worst.u.symbol}) is ${Math.abs(worst.delta).toFixed(2)}% below this KO trigger — no autocall at this obs.`}>
+                          Survived
+                        </span>
+                      ) : (
+                        <span className="badge moderate">Passed</span>
+                      )
                     ) : worst ? (
                       <span
                         className={clsx(
