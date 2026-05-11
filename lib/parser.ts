@@ -238,7 +238,8 @@ function pct(s: string | undefined): number | undefined {
 }
 
 function parseDate(s: string): string | undefined {
-  const m = s.match(/(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{2,4})/);
+  // Accept ordinal suffixes: "1st", "2nd", "3rd", "4th"-"31st" May 2026.
+  const m = s.match(/(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]{3,9})\s+(\d{2,4})/i);
   if (!m) return undefined;
   const day = parseInt(m[1], 10);
   const monthName = m[2].toLowerCase();
@@ -253,12 +254,12 @@ function parseDate(s: string): string | undefined {
 function parseOffering(line: string): { start?: string; end?: string } {
   const trimmed = line.replace(/^[Oo]ffering[:\s]*/, "").trim();
   const range = trimmed.match(
-    /(\d{1,2})\s*(?:[A-Za-z]{3,9})?\s*(?:\d{2,4})?\s*[-–]\s*(\d{1,2}\s+[A-Za-z]{3,9}\s+\d{2,4})/
+    /(\d{1,2})(?:st|nd|rd|th)?\s*(?:[A-Za-z]{3,9})?\s*(?:\d{2,4})?\s*[-–]\s*(\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]{3,9}\s+\d{2,4})/i
   );
   if (range) {
     const end = parseDate(range[2]);
     if (!end) return {};
-    const endMatch = range[2].match(/(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{2,4})/)!;
+    const endMatch = range[2].match(/(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]{3,9})\s+(\d{2,4})/i)!;
     const startDay = parseInt(range[1], 10);
     const months = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"];
     const idx = months.findIndex((m) => endMatch[2].toLowerCase().startsWith(m));
