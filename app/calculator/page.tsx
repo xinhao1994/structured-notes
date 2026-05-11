@@ -321,6 +321,7 @@ function ScenarioCard({
 // brief → detailed → congratulatory → neutral.
 
 const TEMPLATE_NAMES = [
+  "Client-friendly (default)",
   "Friendly / layman",
   "Professional / formal",
   "Brief / SMS-style",
@@ -349,8 +350,60 @@ function buildKoMessage(
   const greet = clientName ? clientName : "valued client";
   const greetCap = clientName ? clientName : "Valued Client";
 
+  // Helpers for the per-month coupon breakdown in the default template.
+  const monthNames = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const tradeD = new Date(t.tradeDate + "T00:00:00Z");
+  const tradeMonth = monthNames[tradeD.getUTCMonth()];
+  const tradeYear = tradeD.getUTCFullYear();
+  // Currency symbol the way RMs typically write it (MYR -> "RM").
+  const ccySym = ccy === "MYR" ? "RM" : ccy;
+  const flag = ccy === "MYR" ? "🇲🇾" : ccy === "USD" ? "🇺🇸" : ccy === "HKD" ? "🇭🇰" :
+               ccy === "SGD" ? "🇸🇬" : ccy === "JPY" ? "🇯🇵" : "🇦🇺";
+  // Format principal as "100k" when it's a round multiple of 1000; else full number.
+  const principalLabel = principal % 1000 === 0 && principal >= 1000
+    ? `${(principal / 1000).toLocaleString("en-US")}k`
+    : principal.toLocaleString("en-US", { maximumFractionDigits: 0 });
+  const cfmt = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  // Build per-month coupon breakdown (month after trade -> KO observation month).
+  const couponLines: string[] = [];
+  for (let i = 1; i <= obsN; i++) {
+    const d = new Date(tradeD);
+    d.setUTCMonth(d.getUTCMonth() + i);
+    const m = monthNames[d.getUTCMonth()];
+    const y = d.getUTCFullYear();
+    couponLines.push(`${m} ${y} coupon : ${ccySym} ${cfmt(monthlyCoupon)} ✅`);
+  }
+  // Underlyings list — strip any "(Long Name)" annotation for readability.
+  const underlyingList = t.underlyings
+    .map((u) => `  ${u.rawName.replace(/\s*\([^)]*\)/, "")}`)
+    .join("\n");
+
   switch (templateIdx % TEMPLATE_COUNT) {
-    case 0: // Friendly / layman
+    case 0: // ★ Client-friendly default — coupon-by-month breakdown with ✅
+      return `Morning ${greetCap}, good news!
+
+The below tranche has knocked out and total earned coupon as below:
+
+${t.trancheCode}
+${ccySym} ${flag}
+${underlyingList}
+Tenor ${t.tenorMonths} months
+Coupon ${(t.couponPa * 100).toFixed(1)}% p.a.
+Strike ${(t.strikePct * 100).toFixed(0)}%
+KO ${(t.koStartPct * 100).toFixed(0)}%, monthly stepdown ${(t.koStepdownPct * 100).toFixed(0)}%
+EKI ${(t.ekiPct * 100).toFixed(0)}%
+
+${couponLines.join("\n")}
+
+Coupon total 🟰 ${ccySym} ${cfmt(couponEarned)}
+
+Credit back total :
+${ccySym} ${principalLabel} + ${ccySym} ${cfmt(couponEarned)} = ${ccySym} ${cfmt(totalPayout)}
+
+Good news 👍🏻 this above tranche we did on ${tradeMonth} ${tradeYear} has knocked out / early terminated 😉`;
+
+    case 1: // Friendly / layman
       return `Hi ${greet}! 🎉
 
 Great news — your structured note (${t.trancheCode}) has been automatically redeemed at observation #${obsN}, which means it matured early at a profit!
@@ -361,7 +414,7 @@ In simple terms: the underlying stocks performed well, so the bank pays you back
 
 Let me know if you'd like to look at similar opportunities — happy to walk you through them.`;
 
-    case 1: // Professional / formal
+    case 2: // Professional / formal
       return `Dear ${greetCap},
 
 We are pleased to inform you that your structured product tranche ${t.trancheCode} has triggered an early redemption (knock-out event) at observation #${obsN}.
@@ -374,10 +427,10 @@ Please do not hesitate to contact me should you wish to discuss reinvestment opp
 
 Kind regards.`;
 
-    case 2: // Brief / SMS-style
+    case 3: // Brief / SMS-style
       return `Hi ${greet}, tranche ${t.trancheCode} has knocked out at obs #${obsN}. Coupon earned: ${fc(couponEarned)} over ${obsN} ${monthsWord}. Principal ${fc(principal)} + coupon = ${fc(totalPayout)} returning soon. Annualised ${annPct.toFixed(2)}%.`;
 
-    case 3: // Detailed breakdown
+    case 4: // Detailed breakdown
       return `Update on your tranche ${t.trancheCode}:
 
 ✅ Status: Knocked out (early redemption) at observation #${obsN}
@@ -389,7 +442,7 @@ Kind regards.`;
 
 Funds will be settled to your account per the original T+${t.settlementOffset} schedule. Let me know once you'd like to review redeployment options.`;
 
-    case 4: // Congratulatory
+    case 5: // Congratulatory
       return `Congratulations ${greetCap}! 🎊
 
 Your structured note tranche ${t.trancheCode} has just achieved an early redemption (auto-call) at the ${obsOrdinal} observation. This is an excellent outcome — you're now entitled to ${obsN} ${monthsWord} of coupon payments totalling ${fc(couponEarned)}, in addition to your full principal of ${fc(principal)} being returned.
@@ -398,7 +451,7 @@ That works out to a ${sumPct.toFixed(2)}% return realised in just ${obsN} ${mont
 
 Looking forward to discussing the next opportunity with you.`;
 
-    case 5: // Neutral status update
+    case 6: // Neutral status update
       return `Tranche ${t.trancheCode} — status update:
 
 Knocked out at observation #${obsN}. Coupon income earned: ${fc(couponEarned)} (${obsN} ${monthsWord} × ${fc(monthlyCoupon)}). Principal returned in full: ${fc(principal)}. Total payout: ${fc(totalPayout)}. Realised return ${sumPct.toFixed(2)}% / annualised ${annPct.toFixed(2)}%.
