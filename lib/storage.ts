@@ -119,6 +119,12 @@ export interface CalcSettings {
   knockedOutAt?: number | null;
   /** Index into the message-template carousel. */
   msgTemplateIdx?: number;
+  /** The tranche code that the persisted currency/principal/KO state belong
+   *  to. When the Calculator opens and the current tranche's code differs
+   *  from this value, the calculator resets currency, principal, and KO
+   *  observation to the new tranche's defaults instead of keeping stale
+   *  values from a previous tranche. */
+  forTrancheCode?: string;
 }
 
 export function getCalcSettings(): CalcSettings {

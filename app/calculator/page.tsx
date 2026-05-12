@@ -58,18 +58,29 @@ export default function CalculatorPage() {
   const [clientName, setClientName] = useState<string>("");
   const [copied, setCopied] = useState(false);
 
-  // When the tranche switches, default currency + principal to that tranche's
-  // currency + its min lot, but only if we don't have a stored value for it.
-  // Also auto-default `knockedOutAt` to the value detected by Desk's KO
-  // schedule (when that tranche has knocked out on a past observation).
-  // The user can still override via the dropdown below — auto-default kicks
-  // in only on tranche switch.
+  // Sync the calculator to whatever tranche is currently selected. The rule:
+  //   - If this is the same tranche the user last interacted with (same
+  //     trancheCode persisted in calcSettings.forTrancheCode), KEEP their
+  //     custom currency / principal / KO override — they may have dialled
+  //     in a 250k principal or manually picked a KO obs and we don't want
+  //     a remount (e.g. Pocket → back to Calculator) to wipe that.
+  //   - If this is a DIFFERENT tranche (user just parsed a new one on
+  //     Desk, or picked a different one from the dropdown), force-reset:
+  //         currency  → tranche.currency
+  //         principal → MIN_LOT[tranche.currency]
+  //         knockedOutAt → Desk-detected KO observation (or null)
+  //     and record the new trancheCode so the next remount knows it was
+  //     handled.
   useEffect(() => {
     if (!tranche) return;
-    if (!saved.currency) setCurrency(tranche.currency);
-    if (!saved.principal) setPrincipal(MIN_LOT[tranche.currency]);
-    const detected = getKnockedOutByTranche(tranche.trancheCode);
-    if (detected != null) setKnockedOutAt(detected);
+    const cur = getCalcSettings();
+    const isNewTranche = cur.forTrancheCode !== tranche.trancheCode;
+    if (isNewTranche) {
+      setCurrency(tranche.currency);
+      setPrincipal(MIN_LOT[tranche.currency]);
+      setKnockedOutAt(getKnockedOutByTranche(tranche.trancheCode));
+      setCalcSettings({ forTrancheCode: tranche.trancheCode });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tranche?.trancheCode]);
 
