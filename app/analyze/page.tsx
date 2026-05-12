@@ -94,15 +94,39 @@ export default function AnalyzePage() {
   );
 }
 
+// localStorage keys for the last-viewed ticker. Lets the page remember what
+// the RM was just reading, so navigating Analyze → Desk → Analyze doesn't
+// reset the view to NVDA.
+const LAST_TICKER_KEY = "snd.analyze.lastSymbol.v1";
+const LAST_MARKET_KEY = "snd.analyze.lastMarket.v1";
+
+function readLastViewed(): { symbol: string | null; market: MarketCode | null } {
+  if (typeof window === "undefined") return { symbol: null, market: null };
+  try {
+    const s = window.localStorage.getItem(LAST_TICKER_KEY);
+    const m = window.localStorage.getItem(LAST_MARKET_KEY);
+    return { symbol: s, market: (m as MarketCode) || null };
+  } catch { return { symbol: null, market: null }; }
+}
+function writeLastViewed(symbol: string, market: MarketCode): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(LAST_TICKER_KEY, symbol);
+    window.localStorage.setItem(LAST_MARKET_KEY, market);
+  } catch {}
+}
+
 function AnalyzePageContent() {
-  // Read ?symbol=NVDA&market=US so deep links from Desk / Pocket land directly
-  // on the right stock instead of always defaulting to NVDA.
+  // Source-of-truth precedence:
+  //   1. URL param ?symbol= (deep-link from Desk / Pocket — wins, fresh intent)
+  //   2. localStorage (the last ticker the user was reading)
+  //   3. NVDA default (first-time visit demo)
   const searchParams = useSearchParams();
   const urlSymbol = searchParams?.get("symbol") ?? null;
-  const urlMarket = (searchParams?.get("market") ?? "US").toUpperCase() as MarketCode;
+  const urlMarket = (searchParams?.get("market") ?? "").toUpperCase() as MarketCode;
 
-  const [input, setInput] = useState(urlSymbol || "NVDA");
-  const [market, setMarket] = useState<MarketCode>(urlMarket);
+  const [input, setInput] = useState("NVDA");
+  const [market, setMarket] = useState<MarketCode>("US");
   const [data, setData] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -117,20 +141,32 @@ function AnalyzePageContent() {
       }
       const j = await r.json() as Profile;
       setData(j);
+      // Persist on success so this becomes the new "last viewed". We use the
+      // resolved canonical symbol (e.g. "NVDA" not "NVIDIA") so subsequent
+      // visits hit the cached endpoint directly.
+      writeLastViewed(j.symbol || symbol, j.market || mkt);
     } catch (e: any) {
       setError(e?.message || "Could not load stock profile");
       setData(null);
     } finally { setLoading(false); }
   }
 
-  // Re-load whenever the deep-link params change (Desk → Analyze taps,
-  // or Desk → Pocket → Analyze flows). When no symbol param is present,
-  // default to NVDA so the page still demos itself.
+  // Decide which ticker + market to load on mount / URL change.
+  // Precedence: URL > localStorage > NVDA.
   useEffect(() => {
-    const sym = urlSymbol || "NVDA";
+    let sym: string;
+    let mkt: MarketCode;
+    if (urlSymbol) {
+      sym = urlSymbol;
+      mkt = (urlMarket || "US") as MarketCode;
+    } else {
+      const last = readLastViewed();
+      sym = last.symbol || "NVDA";
+      mkt = last.market || "US";
+    }
     setInput(sym);
-    setMarket(urlMarket);
-    load(sym, urlMarket);
+    setMarket(mkt);
+    load(sym, mkt);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [urlSymbol, urlMarket]);
 
