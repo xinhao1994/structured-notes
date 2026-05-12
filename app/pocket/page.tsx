@@ -5,9 +5,10 @@ import Link from "next/link";
 import {
   Search, Trash2, Pin, PinOff, Filter, Pencil, Check, X,
   Shield, AlertTriangle, ShieldAlert, Activity, Wallet, Calendar, StickyNote,
+  Download, Upload, Cloud,
 } from "lucide-react";
 import {
-  listPocket, removePocket, togglePin, updateTrancheFields, type PocketEntry,
+  listPocket, removePocket, togglePin, updateTrancheFields, savePocket, type PocketEntry,
 } from "@/lib/storage";
 import { useQuotes } from "@/lib/hooks/useQuotes";
 import { assessRisk, currentKoLevel, formatPx } from "@/lib/calc";
@@ -110,6 +111,52 @@ export default function PocketPage() {
     setNotesEditingId(null); setList(listPocket());
   }
 
+  // ─── backup / restore ────────────────────────────────────────────────────
+  // Until full cloud sync (Supabase + Google + WebAuthn) ships, the user can
+  // back up their Pocket as a JSON file and re-import it if their browser
+  // data gets cleared. Round-trips the exact PocketEntry shape — including
+  // pinned state, notes, and timestamps — so nothing is lost.
+  function handleExport() {
+    const data = listPocket();
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const stamp = new Date().toISOString().slice(0, 10);
+    a.href = url;
+    a.download = `pocket-backup-${stamp}.json`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function handleImport(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(String(reader.result));
+        if (!Array.isArray(parsed)) throw new Error("not an array");
+        // Merge by id — imported entries replace existing ones with the same
+        // id, otherwise are prepended. Keeps the user's most recent saves on
+        // top while not losing local work.
+        const existing = listPocket();
+        const byId = new Map<string, PocketEntry>(existing.map((x) => [x.id, x]));
+        for (const e of parsed as PocketEntry[]) {
+          if (e && typeof e.id === "string" && e.tranche) byId.set(e.id, e);
+        }
+        const merged = Array.from(byId.values());
+        savePocket(merged);
+        setList(merged);
+        alert(`Imported ${parsed.length} tranche${parsed.length === 1 ? "" : "s"}. Total now: ${merged.length}.`);
+      } catch (err) {
+        alert("Could not read backup file — please pick a valid pocket-backup-*.json file.");
+      }
+    };
+    reader.readAsText(file);
+    // Reset the input so re-selecting the same file fires onChange again.
+    e.target.value = "";
+  }
+
   return (
     <>
       <header className="mb-3 flex items-center justify-between gap-2">
@@ -121,11 +168,41 @@ export default function PocketPage() {
             <Wallet size={18} /> Pocket
           </h1>
         </div>
-        <div className="text-[11px] text-[var(--text-muted)]">
-          {loading ? "Refreshing..." : asOf ? `Last ${new Date(asOf).toLocaleTimeString()}` : ""}
-          <button onClick={refresh} className="ml-2 underline">refresh</button>
+        <div className="flex items-center gap-2 text-[11px] text-[var(--text-muted)]">
+          <span className="hidden sm:inline">
+            {loading ? "Refreshing..." : asOf ? `Last ${new Date(asOf).toLocaleTimeString()}` : ""}
+          </span>
+          <button onClick={refresh} className="underline">refresh</button>
         </div>
       </header>
+
+      {/* Backup / restore controls — interim until cloud sync (Supabase auth +
+          Google login + biometric) is wired. Lets the user survive a browser
+          data clear by downloading a JSON snapshot and re-importing it. */}
+      <section className="card mb-3 flex flex-wrap items-center justify-between gap-2 p-3 text-[12px]">
+        <div className="flex items-center gap-1.5 text-[var(--text-muted)]">
+          <Cloud size={14} />
+          <span>
+            <strong className="text-[var(--text)]">Backup &amp; restore.</strong>{" "}
+            Cloud sync with Google + biometric is on the roadmap — for now,
+            export to file so a browser clear doesn&apos;t lose your Pocket.
+          </span>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={handleExport}
+            className="btn h-8 px-3 text-[12px]"
+            disabled={summary.total === 0}
+            title={summary.total === 0 ? "Nothing to export yet" : "Download Pocket as JSON"}
+          >
+            <Download size={13} /> Export
+          </button>
+          <label className="btn h-8 cursor-pointer px-3 text-[12px]">
+            <Upload size={13} /> Import
+            <input type="file" accept="application/json,.json" onChange={handleImport} className="hidden" />
+          </label>
+        </div>
+      </section>
 
       {summary.total === 0 && (
         <div className="card p-6 text-center text-[13px] text-[var(--text-muted)]">

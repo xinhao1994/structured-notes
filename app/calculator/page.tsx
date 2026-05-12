@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   listPocket, getCurrentParsedText, getCalcSettings, setCalcSettings,
+  getKnockedOutByTranche,
 } from "@/lib/storage";
 import { clientCalc, formatCcy, MIN_LOT, validateLot } from "@/lib/calc";
 import type { Currency, Tranche } from "@/lib/types";
@@ -59,10 +60,16 @@ export default function CalculatorPage() {
 
   // When the tranche switches, default currency + principal to that tranche's
   // currency + its min lot, but only if we don't have a stored value for it.
+  // Also auto-default `knockedOutAt` to the value detected by Desk's KO
+  // schedule (when that tranche has knocked out on a past observation).
+  // The user can still override via the dropdown below — auto-default kicks
+  // in only on tranche switch.
   useEffect(() => {
     if (!tranche) return;
     if (!saved.currency) setCurrency(tranche.currency);
     if (!saved.principal) setPrincipal(MIN_LOT[tranche.currency]);
+    const detected = getKnockedOutByTranche(tranche.trancheCode);
+    if (detected != null) setKnockedOutAt(detected);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tranche?.trancheCode]);
 
@@ -126,6 +133,9 @@ export default function CalculatorPage() {
                 if (t) {
                   setCurrency(t.currency);
                   setPrincipal(MIN_LOT[t.currency]);
+                  // Pull Desk-detected KO observation # for this tranche, if any.
+                  const detected = getKnockedOutByTranche(t.trancheCode);
+                  setKnockedOutAt(detected);
                 }
               }}
               className="input mt-1"
@@ -205,7 +215,14 @@ export default function CalculatorPage() {
             />
           </label>
           <label className="block">
-            <span className="text-[11px] uppercase tracking-wider text-[var(--text-muted)]">Knocked out at obs #</span>
+            <span className="text-[11px] uppercase tracking-wider text-[var(--text-muted)]">
+              Knocked out at obs #
+              {knockedOutAt != null && getKnockedOutByTranche(tranche.trancheCode) === knockedOutAt && (
+                <span className="ml-2 rounded-full bg-success/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-success">
+                  auto · from Desk
+                </span>
+              )}
+            </span>
             <select
               value={knockedOutAt ?? ""}
               onChange={(e) => setKnockedOutAt(e.target.value ? parseInt(e.target.value, 10) : null)}

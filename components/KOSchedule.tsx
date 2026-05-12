@@ -1,8 +1,10 @@
 "use client";
 
+import { useEffect } from "react";
 import clsx from "clsx";
 import type { PriceQuote, Tranche } from "@/lib/types";
 import { koSchedule, formatPx } from "@/lib/calc";
+import { setKnockedOutByTranche } from "@/lib/storage";
 
 interface Props {
   tranche: Tranche;
@@ -14,6 +16,36 @@ export function KOSchedule({ tranche, quotes }: Props) {
   const today = new Date().toISOString().slice(0, 10);
   const showInitialFx = !!tranche.initialFixing;
   const nextN = sched.find((x) => x.date >= today)?.n;
+
+  // Detect the most recent PAST observation where the worst-of underlying was
+  // at or above the KO trigger — i.e. the tranche knocked out at obs #N. We
+  // persist N keyed by tranche code so the Calculator page defaults the
+  // "Knocked out at obs #" dropdown to it. User can still override.
+  // Saves null when no past observation crossed the trigger, so the dropdown
+  // stays on "— not yet —".
+  useEffect(() => {
+    let detected: number | null = null;
+    for (const o of sched) {
+      if (o.date >= today) break;
+      // Recompute worst-of for this past observation using current quotes.
+      // For a true post-mortem we'd use historical closes, but live spot is
+      // a usable proxy for "did this trigger" given the tranche is still being
+      // tracked — most KOs are unambiguous (worst-of well above trigger).
+      let worstDelta: number | null = null;
+      for (const u of tranche.underlyings) {
+        const koPx = o.koPriceBySymbol[u.symbol];
+        const live = quotes[u.symbol]?.price;
+        if (koPx == null || live == null) continue;
+        const d = ((live - koPx) / koPx) * 100;
+        if (worstDelta == null || d < worstDelta) worstDelta = d;
+      }
+      if (worstDelta != null && worstDelta >= 0) detected = o.n;
+    }
+    setKnockedOutByTranche(tranche.trancheCode, detected);
+    // Re-run when quotes/tranche change. Trancheode keys the storage so
+    // switching tranches doesn't bleed values between them.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tranche.trancheCode, JSON.stringify(quotes)]);
 
   return (
     <section className="card mt-4 p-4">

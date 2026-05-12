@@ -136,3 +136,30 @@ export function setCalcSettings(patch: Partial<CalcSettings>): void {
   } catch {}
 }
 
+
+// ─── per-tranche knock-out detection ───────────────────────────────────────
+// Set by the Desk KOSchedule when it observes that the worst-of underlying was
+// above the KO trigger on a past observation date. Read by the Calculator so
+// its "Knocked out at obs #" dropdown defaults to the Desk-detected value
+// (instead of forcing the user to scroll/select manually). User can still
+// override via the dropdown — see CalcSettings.knockedOutAt above for that.
+const KO_DETECTED_KEY = "snd.koDetected.v1";
+
+export function getKnockedOutByTranche(trancheCode: string): number | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const all = JSON.parse(window.localStorage.getItem(KO_DETECTED_KEY) || "{}") as Record<string, number>;
+    return typeof all[trancheCode] === "number" ? all[trancheCode] : null;
+  } catch { return null; }
+}
+
+export function setKnockedOutByTranche(trancheCode: string, n: number | null): void {
+  if (typeof window === "undefined") return;
+  try {
+    const all = JSON.parse(window.localStorage.getItem(KO_DETECTED_KEY) || "{}") as Record<string, number>;
+    if (n == null) delete all[trancheCode];
+    else all[trancheCode] = n;
+    window.localStorage.setItem(KO_DETECTED_KEY, JSON.stringify(all));
+  } catch {}
+}
+

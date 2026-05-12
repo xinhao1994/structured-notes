@@ -66,6 +66,9 @@ const NAME_TO_TICKER: Record<string, Listing> = {
   "western digital": { US: "WDC", default: "US" },
   sandisk: { US: "SNDK", default: "US" },
   micron: { US: "MU", default: "US" },
+  marvell: { US: "MRVL", default: "US" },
+  "marvell technology": { US: "MRVL", default: "US" },
+  "marvell technologies": { US: "MRVL", default: "US" },
   "applied materials": { US: "AMAT", default: "US" },
   "lam research": { US: "LRCX", default: "US" },
   asml: { US: "ASML", default: "US" },
@@ -215,6 +218,60 @@ const NAME_TO_TICKER: Record<string, Listing> = {
   anz: { AU: "ANZ", default: "AU" },
   nab: { AU: "NAB", default: "AU" },
   fortescue: { AU: "FMG", default: "AU" },
+
+  // ─── Bare ticker aliases ────────────────────────────────────────────────
+  // Allows the user to type just "NVDA" or "MRVL" on a line without the
+  // "US" market tag and still resolve correctly. Lowercase keys because
+  // NAME_TO_TICKER lookup lowercases the input.
+  nvda: { US: "NVDA", default: "US" },
+  amzn: { US: "AMZN", default: "US" },
+  mrvl: { US: "MRVL", default: "US" },
+  aapl: { US: "AAPL", default: "US" },
+  msft: { US: "MSFT", default: "US" },
+  googl: { US: "GOOGL", default: "US" },
+  goog: { US: "GOOG", default: "US" },
+  tsla: { US: "TSLA", default: "US" },
+  nflx: { US: "NFLX", default: "US" },
+  avgo: { US: "AVGO", default: "US" },
+  orcl: { US: "ORCL", default: "US" },
+  crm: { US: "CRM", default: "US" },
+  csco: { US: "CSCO", default: "US" },
+  intc: { US: "INTC", default: "US" },
+  qcom: { US: "QCOM", default: "US" },
+  adbe: { US: "ADBE", default: "US" },
+  pypl: { US: "PYPL", default: "US" },
+  shop: { US: "SHOP", default: "US" },
+  pltr: { US: "PLTR", default: "US" },
+  snow: { US: "SNOW", default: "US" },
+  anet: { US: "ANET", default: "US" },
+  aph: { US: "APH", default: "US" },
+  wdc: { US: "WDC", default: "US" },
+  sndk: { US: "SNDK", default: "US" },
+  amat: { US: "AMAT", default: "US" },
+  lrcx: { US: "LRCX", default: "US" },
+  tsm: { US: "TSM", default: "US" },
+  wday: { US: "WDAY", default: "US" },
+  intu: { US: "INTU", default: "US" },
+  jpm: { US: "JPM", default: "US" },
+  bac: { US: "BAC", default: "US" },
+  gs: { US: "GS", default: "US" },
+  wfc: { US: "WFC", default: "US" },
+  wmt: { US: "WMT", default: "US" },
+  cost: { US: "COST", default: "US" },
+  sbux: { US: "SBUX", default: "US" },
+  pep: { US: "PEP", default: "US" },
+  dis: { US: "DIS", default: "US" },
+  nke: { US: "NKE", default: "US" },
+  ba: { US: "BA", default: "US" },
+  xom: { US: "XOM", default: "US" },
+  cvx: { US: "CVX", default: "US" },
+  pfe: { US: "PFE", default: "US" },
+  jnj: { US: "JNJ", default: "US" },
+  lly: { US: "LLY", default: "US" },
+  unh: { US: "UNH", default: "US" },
+  pg: { US: "PG", default: "US" },
+  mrk: { US: "MRK", default: "US" },
+  abbv: { US: "ABBV", default: "US" },
 };
 
 const MARKET_TOKENS: Record<string, MarketCode> = {
@@ -512,8 +569,13 @@ export function parseTrancheText(input: string): ParseResult {
     parseField(text, /Trade[:\s]+([^\n]+?)(?=\s+(?:Settlement|Tranche|Offering)\b|$)/i) ||
     parseField(text, /Trade[:\s]+([^\n]+)/i) ||
     "";
-  const tradeDate = parseDate(tradeRaw);
+  let tradeDate = parseDate(tradeRaw);
   if (combined && tradeDate && !offeringEnd) offeringEnd = tradeDate;
+  // Fallback: if no Trade date was provided but we have an Offering end date,
+  // use the offering end as the trade date. Distributors often state only an
+  // offering window (e.g. "Offering: 1–8 May 2026") and the trade settles on
+  // the closing day. Reduces parser warnings + makes settlement math work.
+  if (!tradeDate && offeringEnd) tradeDate = offeringEnd;
 
   const tradeCutoffMatch = tradeRaw.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i);
   let tradeCutoff: string | undefined;
@@ -528,11 +590,15 @@ export function parseTrancheText(input: string): ParseResult {
   const settleMatch = settleRaw.match(/T\s*\+\s*(\d+)/i);
   const settlementOffset = settleMatch ? parseInt(settleMatch[1], 10) : 7;
 
-  const couponMatch = text.match(/Coupon\s*:?\s+(\d+(?:\.\d+)?)\s*%(?:\s*p\.?a\.?)?/i);
+  // Coupon synonyms: "Coupon", "Yield", "Interest" — all commonly used by
+  // distributors and bank sales notes for the same field.
+  const couponMatch = text.match(/(?:Coupon|Yield|Interest)\s*:?\s+(\d+(?:\.\d+)?)\s*%(?:\s*p\.?a\.?)?/i);
   const couponPa = couponMatch ? parseFloat(couponMatch[1]) / 100 : 0;
   if (!couponMatch) warnings.push({ field: "coupon", message: "Coupon not found — defaulted to 0%." });
 
-  const tenorMatch = text.match(/Tenor\s*:?\s+(\d+(?:\.\d+)?)\s*(M|Y|months|years|month|year|m|y)/i);
+  // Tenor synonyms: "Tenor" or "Tenure" — the latter is a common spelling
+  // variant in Asian banking notes.
+  const tenorMatch = text.match(/(?:Tenor|Tenure)\s*:?\s+(\d+(?:\.\d+)?)\s*(M|Y|months|years|month|year|m|y)/i);
   let tenorMonths = 12;
   if (tenorMatch) {
     const n = parseFloat(tenorMatch[1]);
