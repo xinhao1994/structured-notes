@@ -350,10 +350,18 @@ export default function PocketPage() {
                   {t.underlyings.map((u) => {
                     const q = quotes[u.symbol];
                     return (
-                      <span key={u.symbol} className="ml-2 first:ml-0">
-                        <span className="text-[var(--text)] font-medium">{u.symbol}</span>{" "}
-                        {formatPx(q?.price, q?.currency)}
-                      </span>
+                      // Each underlying symbol is a deep link → /analyze.
+                      // Tap the symbol on a Pocket card to jump straight to
+                      // that stock's research dashboard.
+                      <Link
+                        key={u.symbol}
+                        href={`/analyze?symbol=${encodeURIComponent(u.symbol)}&market=${u.market}`}
+                        className="ml-2 inline-block hover:text-accent first:ml-0"
+                        title="Open in Stock Analyze"
+                      >
+                        <span className="text-[var(--text)] font-medium hover:underline">{u.symbol}</span>{" "}
+                        <span className="text-[var(--text-muted)]">{formatPx(q?.price, q?.currency)}</span>
+                      </Link>
                     );
                   })}
                 </div>

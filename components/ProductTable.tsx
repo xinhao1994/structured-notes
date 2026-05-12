@@ -1,7 +1,8 @@
 "use client";
 
 import { forwardRef, useImperativeHandle, useRef, useState } from "react";
-import { Copy, FileImage, FileText, Pencil, Check, X, RotateCcw } from "lucide-react";
+import Link from "next/link";
+import { Copy, FileImage, FileText, Pencil, Check, X, RotateCcw, LineChart } from "lucide-react";
 import * as htmlToImage from "html-to-image";
 import jsPDF from "jspdf";
 import type { Tranche, PriceQuote } from "@/lib/types";
@@ -150,12 +151,19 @@ export const ProductTable = forwardRef<ProductTableHandle, Props>(function Produ
                 return (
                   <tr key={r.underlying.symbol}>
                     <td>
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium">{r.underlying.rawName}</span>
+                      {/* Underlying name is a deep-link → /analyze with that symbol pre-loaded.
+                          Saves the RM from copy-pasting tickers between pages. */}
+                      <Link
+                        href={`/analyze?symbol=${encodeURIComponent(r.underlying.symbol)}&market=${r.underlying.market}`}
+                        className="group inline-flex items-center gap-2 hover:text-accent"
+                        title="Open in Stock Analyze"
+                      >
+                        <span className="font-medium underline-offset-2 group-hover:underline">{r.underlying.rawName}</span>
                         <span className="rounded bg-ink-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-ink-700">
                           {r.underlying.market}
                         </span>
-                      </div>
+                        <LineChart size={12} className="opacity-0 transition-opacity group-hover:opacity-70" />
+                      </Link>
                     </td>
                     <td className="tabular text-ink-700">
                       {isEditing ? (

@@ -19,6 +19,7 @@
 // Every section has a Copy button (WhatsApp-ready), charts have PNG export.
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   LineChart, Search, AlertTriangle, Copy, Check, Download,
   Building2, TrendingUp, BarChart3, Target, Sparkles, MapPin,
@@ -83,8 +84,14 @@ interface Profile {
 }
 
 export default function AnalyzePage() {
-  const [input, setInput] = useState("NVDA");
-  const [market, setMarket] = useState<MarketCode>("US");
+  // Read ?symbol=NVDA&market=US so deep links from Desk / Pocket land directly
+  // on the right stock instead of always defaulting to NVDA.
+  const searchParams = useSearchParams();
+  const urlSymbol = searchParams?.get("symbol") ?? null;
+  const urlMarket = (searchParams?.get("market") ?? "US").toUpperCase() as MarketCode;
+
+  const [input, setInput] = useState(urlSymbol || "NVDA");
+  const [market, setMarket] = useState<MarketCode>(urlMarket);
   const [data, setData] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -105,7 +112,16 @@ export default function AnalyzePage() {
     } finally { setLoading(false); }
   }
 
-  useEffect(() => { load("NVDA", "US"); /* eslint-disable-line react-hooks/exhaustive-deps */ }, []);
+  // Re-load whenever the deep-link params change (Desk → Analyze taps,
+  // or Desk → Pocket → Analyze flows). When no symbol param is present,
+  // default to NVDA so the page still demos itself.
+  useEffect(() => {
+    const sym = urlSymbol || "NVDA";
+    setInput(sym);
+    setMarket(urlMarket);
+    load(sym, urlMarket);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlSymbol, urlMarket]);
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();

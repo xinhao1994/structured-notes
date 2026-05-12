@@ -1,7 +1,8 @@
 "use client";
 
 import clsx from "clsx";
-import { ArrowDown, ArrowUp, CalendarClock, CircleDollarSign, Clock, Hash, Landmark, Repeat } from "lucide-react";
+import Link from "next/link";
+import { ArrowDown, ArrowUp, CalendarClock, CircleDollarSign, Clock, Hash, Landmark, Repeat, LineChart } from "lucide-react";
 import type { PriceQuote, Tranche } from "@/lib/types";
 import { assessRisk, currentKoLevel, formatPx } from "@/lib/calc";
 import { isMarketOpen, MARKETS } from "@/lib/markets";
@@ -68,9 +69,17 @@ export function Dashboard({ tranche, quotes }: Props) {
               <header className="mb-2 flex items-center justify-between gap-2">
                 <div className="min-w-0">
                   <div className="text-[11px] font-semibold uppercase tracking-wide text-[var(--text-muted)]">{MARKETS[u.market].label}</div>
-                  <div className="truncate font-semibold">
-                    {u.rawName} <span className="text-[var(--text-muted)] text-xs">{u.symbol}</span>
-                  </div>
+                  {/* Tap-target: opens /analyze with this underlying pre-loaded.
+                      Lets the RM jump from a tranche underlying into deep stock research. */}
+                  <Link
+                    href={`/analyze?symbol=${encodeURIComponent(u.symbol)}&market=${u.market}`}
+                    className="group inline-flex items-center gap-1 truncate font-semibold hover:text-accent"
+                    title="Open in Stock Analyze"
+                  >
+                    <span className="truncate underline-offset-2 group-hover:underline">{u.rawName}</span>
+                    <span className="text-[var(--text-muted)] text-xs">{u.symbol}</span>
+                    <LineChart size={11} className="opacity-0 transition-opacity group-hover:opacity-70" />
+                  </Link>
                 </div>
                 <div className="flex flex-shrink-0 flex-col items-end gap-1">
                   <span className={clsx("rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase", mktState.open ? "bg-successBg text-success dark:bg-success/15 dark:text-[#6dd49a]" : "bg-ink-100 text-ink-600 dark:bg-ink-700 dark:text-ink-300")}>
