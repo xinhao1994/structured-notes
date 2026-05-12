@@ -1,21 +1,25 @@
 // Server route: /api/stock-profile?symbol=NVDA&market=US
 //
-// Strategy: be permissive about what the user types ("NVDA", "NVIDIA",
-// "sandisk", "Western Digital") and aggressive about getting SOMETHING
-// back. We layer multiple sources so the page is rarely empty:
+// Yahoo's quoteSummary endpoint started requiring a "crumb" + cookie pair
+// in 2023 — it works in browsers but returns 401/403 from Vercel functions
+// without that handshake. We do the full handshake here, cache the crumb
+// in module scope so warm Lambdas reuse it, and fall back to Finnhub
+// (existing FINNHUB_API_KEY) and Stooq when Yahoo refuses.
 //
+// Data layering:
 //   1. Symbol resolution
-//        a. Looks-like-ticker? Use as-is.
-//        b. Yahoo search endpoint  (handles "NVIDIA" → "NVDA")
-//        c. Stooq lookup as last resort
-//   2. Yahoo quoteSummary (primary — gives sector, financials, earnings)
-//   3. Yahoo quote v7 (fallback — gives price/cap/52w when quoteSummary
-//        returns empty modules)
-//   4. Yahoo chart (5y history + 30d perf)
-//   5. Stooq fallback for chart if Yahoo chart fails
+//        a. Looks-like-ticker → use as-is.
+//        b. Yahoo /v1/finance/search (no auth needed)
+//   2. Fundamentals + profile
+//        a. Yahoo quoteSummary WITH crumb (primary)
+//        b. Yahoo quote v7 WITH crumb (fallback)
+//        c. Finnhub /stock/profile2 + /stock/metric + /stock/earnings (fallback)
+//   3. Price history
+//        a. Yahoo chart v8 (no auth needed) — usually works
+//        b. Stooq CSV
 //
-// We only 502 when EVERYTHING fails. Otherwise we return partial data
-// with a `warnings` array so the UI knows what's missing.
+// We only 502 when everything fails. Otherwise return partial data with
+// a `warnings` array.
 
 import { NextRequest, NextResponse } from "next/server";
 import type { MarketCode } from "@/lib/types";
@@ -23,127 +27,173 @@ import type { MarketCode } from "@/lib/types";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
+const YAHOO_HOSTS = ["query1.finance.yahoo.com", "query2.finance.yahoo.com"];
 
-// Yahoo uses two hosts that occasionally diverge on availability. We try
-// both. query2 is the newer one but query1 sometimes has data for older
-// tickers.
-const YAHOO_HOSTS = ["query2.finance.yahoo.com", "query1.finance.yahoo.com"];
+/* ────────────────────────────────────────────────────────────────────────
+   Yahoo crumb cache — module scope so warm Lambdas reuse it.
+   Crumbs are session-scoped; we refetch on 401/403.
+   ──────────────────────────────────────────────────────────────────────── */
+interface YahooSession { cookie: string; crumb: string; fetchedAt: number; }
+let yahooSession: YahooSession | null = null;
+const SESSION_TTL_MS = 30 * 60 * 1000; // 30 min
 
-/** Append the right Yahoo suffix per market. HK keeps leading zeros. */
-function yahooSymbol(symbol: string, market: MarketCode): string {
-  const suf: Record<MarketCode, string> = {
-    US: "", HK: ".HK", JP: ".T", AU: ".AX", SG: ".SI", MY: ".KL",
-  };
-  // HK tickers are typically 4 digits with leading zeros (e.g. 0700, 0005).
-  // Do NOT strip them — Yahoo's HK URLs use the padded form.
-  return symbol.toUpperCase() + suf[market];
+async function getYahooSession(force = false): Promise<YahooSession | null> {
+  if (!force && yahooSession && Date.now() - yahooSession.fetchedAt < SESSION_TTL_MS) {
+    return yahooSession;
+  }
+  try {
+    // Step 1: hit fc.yahoo.com to get the A1 / A3 cookies.
+    const r1 = await fetch("https://fc.yahoo.com/", {
+      headers: { "User-Agent": UA, "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" },
+      redirect: "manual",
+      next: { revalidate: 0 },
+    });
+    // Collect Set-Cookie headers from the response.
+    const setCookie = (r1.headers as any).getSetCookie?.() ?? [r1.headers.get("set-cookie")].filter(Boolean);
+    const cookies = (Array.isArray(setCookie) ? setCookie : [setCookie])
+      .filter(Boolean)
+      .map((c: string) => c.split(";")[0])
+      .join("; ");
+    if (!cookies) return null;
+
+    // Step 2: get the crumb using that cookie.
+    const r2 = await fetch("https://query1.finance.yahoo.com/v1/test/getcrumb", {
+      headers: { "User-Agent": UA, Cookie: cookies, Accept: "*/*" },
+      next: { revalidate: 0 },
+    });
+    if (!r2.ok) return null;
+    const crumb = (await r2.text()).trim();
+    if (!crumb || crumb.length > 64) return null;
+
+    yahooSession = { cookie: cookies, crumb, fetchedAt: Date.now() };
+    return yahooSession;
+  } catch {
+    return null;
+  }
 }
 
-interface YahooModuleResp {
-  quoteSummary?: { result?: Array<Record<string, any>>; error?: any };
-}
-interface YahooChartResp {
-  chart?: {
-    result?: Array<{ meta?: any; timestamp?: number[]; indicators?: { quote?: Array<{ close?: (number | null)[] }> } }>;
-    error?: any;
-  };
-}
-interface YahooSearchResp {
-  quotes?: Array<{ symbol: string; longname?: string; shortname?: string; exchange?: string; quoteType?: string }>;
-}
-interface YahooQuoteV7Resp {
-  quoteResponse?: { result?: Array<Record<string, any>>; error?: any };
-}
-
-async function tryFetch<T>(urls: string[]): Promise<T | null> {
-  // Try each URL in order, returning the first 200 + non-empty body.
-  for (const u of urls) {
-    try {
-      const r = await fetch(u, { headers: { "User-Agent": UA, Accept: "application/json" }, next: { revalidate: 0 } });
-      if (!r.ok) continue;
-      const j = (await r.json()) as T;
-      return j;
-    } catch { /* try next host */ }
+async function yahooAuthedGet<T>(path: string, params: Record<string, string>): Promise<T | null> {
+  // Try with crumb (first call gets/uses cached, second call refreshes if 401).
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const session = await getYahooSession(attempt > 0);
+    const search = new URLSearchParams({ ...params, ...(session ? { crumb: session.crumb } : {}) });
+    for (const host of YAHOO_HOSTS) {
+      try {
+        const r = await fetch(`https://${host}${path}?${search.toString()}`, {
+          headers: {
+            "User-Agent": UA,
+            Accept: "application/json",
+            ...(session ? { Cookie: session.cookie } : {}),
+          },
+          next: { revalidate: 0 },
+        });
+        if (r.status === 401 || r.status === 403) break; // try next attempt (refresh crumb)
+        if (!r.ok) continue;
+        const j = (await r.json()) as T;
+        return j;
+      } catch { /* try next host */ }
+    }
   }
   return null;
 }
 
-/**
- * Convert free-form input into a Yahoo-valid ticker. Returns a list of
- * candidate symbols (with market suffix). Caller iterates until one
- * yields data.
- *
- * Steps:
- *   1. Looks-like-ticker (≤6 chars, alphanumeric) → use as-is for the
- *      hinted market, plus the bare form for US fallback.
- *   2. Yahoo search — handles "NVIDIA" → "NVDA", "Sandisk" → "SNDK",
- *      "Western Digital" → "WDC".
- *   3. If everything fails, return the raw upper-cased input as a last try.
- */
+/** Unauthenticated GET — for endpoints Yahoo doesn't gate (search, chart). */
+async function yahooOpenGet<T>(path: string, params: Record<string, string>): Promise<T | null> {
+  const search = new URLSearchParams(params);
+  for (const host of YAHOO_HOSTS) {
+    try {
+      const r = await fetch(`https://${host}${path}?${search.toString()}`, {
+        headers: { "User-Agent": UA, Accept: "application/json" },
+        next: { revalidate: 0 },
+      });
+      if (!r.ok) continue;
+      const j = (await r.json()) as T;
+      return j;
+    } catch {}
+  }
+  return null;
+}
+
+/* ────────────────────────────────────────────────────────────────────────
+   Type helpers + Yahoo response shapes
+   ──────────────────────────────────────────────────────────────────────── */
+interface YahooModuleResp { quoteSummary?: { result?: Array<Record<string, any>>; error?: any }; }
+interface YahooChartResp {
+  chart?: { result?: Array<{ meta?: any; timestamp?: number[]; indicators?: { quote?: Array<{ close?: (number | null)[] }> } }>; error?: any };
+}
+interface YahooSearchResp {
+  quotes?: Array<{ symbol: string; longname?: string; shortname?: string; exchange?: string; quoteType?: string }>;
+}
+interface YahooQuoteV7Resp { quoteResponse?: { result?: Array<Record<string, any>>; error?: any }; }
+
+function yahooSymbol(symbol: string, market: MarketCode): string {
+  const suf: Record<MarketCode, string> = { US: "", HK: ".HK", JP: ".T", AU: ".AX", SG: ".SI", MY: ".KL" };
+  return symbol.toUpperCase() + suf[market];
+}
+
+/* ────────────────────────────────────────────────────────────────────────
+   Symbol resolution
+   ──────────────────────────────────────────────────────────────────────── */
 async function resolveCandidates(raw: string, market: MarketCode): Promise<string[]> {
   const upper = raw.toUpperCase().trim();
   const out = new Set<string>();
   const looksLikeTicker = /^[A-Z0-9.\-]{1,8}$/.test(upper);
 
+  // STRICT market matching. Previously we added all equity matches as
+  // fallbacks, which meant a US search for "NVIDIA" was trying Nvidia's
+  // German (.DE), Amsterdam (.AS), Hamburg (.HM) listings too. Those
+  // exchanges return 502 from Yahoo on Vercel, eating up retries.
   if (looksLikeTicker) {
     out.add(yahooSymbol(upper, market));
-    if (market !== "US") out.add(upper); // also try without suffix (US ADR)
   }
 
-  // Yahoo search — typically resolves company names → first ticker hit.
-  // Filter to EQUITY quotes; prefer the requested market when possible.
-  const searchHosts = YAHOO_HOSTS.map(
-    (h) => `https://${h}/v1/finance/search?q=${encodeURIComponent(raw)}&quotesCount=8&newsCount=0`
-  );
-  const s = await tryFetch<YahooSearchResp>(searchHosts);
+  const s = await yahooOpenGet<YahooSearchResp>("/v1/finance/search", {
+    q: raw, quotesCount: "10", newsCount: "0",
+  });
   if (s?.quotes?.length) {
     const equities = s.quotes.filter((q) => q.quoteType === "EQUITY" || q.quoteType === "ETF");
-    // Push market-matching first, then everything else.
-    const preferredSuffix = market === "US" ? "" : yahooSymbol("", market).slice(0);
+    const wantSuffix = market === "US" ? "" : yahooSymbol("", market);
     for (const q of equities) {
       if (market === "US") {
-        if (!q.symbol.includes(".")) out.add(q.symbol);
-      } else if (q.symbol.endsWith(preferredSuffix)) {
+        // US: no exchange suffix at all (NVDA, BRK.B, BRK-B are ok). Reject
+        // .DE, .AS, .HM (European exchanges) explicitly — those routinely
+        // 502 from Vercel functions and the user wants US data.
+        if (!/\.(DE|AS|HM|F|MU|MI|PA|L|TO|MX|SA|BR|HE|ST|CO|VI|IR|BD|SW|VX|TA|JO|WA|PR|BO|NS|KS|KQ|TW|TWO|SI|BK|JK|SI|AX|NZ|MX|MC|LS|AT|BE|CN|LN|NEO)$/.test(q.symbol)) {
+          out.add(q.symbol);
+        }
+      } else if (q.symbol.endsWith(wantSuffix)) {
         out.add(q.symbol);
       }
     }
-    // Then add any equity hits as fallback regardless of market.
-    for (const q of equities) out.add(q.symbol);
   }
 
-  // Last-resort: try whatever the user typed verbatim.
   if (!out.size) out.add(yahooSymbol(upper, market));
-  return Array.from(out);
+  // Keep top 4 — enough to retry across hosts/typos, not so many we waste time
+  return Array.from(out).slice(0, 4);
 }
 
+/* ────────────────────────────────────────────────────────────────────────
+   Yahoo data fetchers (crumb-authenticated)
+   ──────────────────────────────────────────────────────────────────────── */
 async function fetchQuoteSummary(sym: string): Promise<Record<string, any> | null> {
   const modules = [
     "assetProfile", "summaryDetail", "defaultKeyStatistics",
     "financialData", "incomeStatementHistory", "earningsHistory", "price",
   ].join(",");
-  const urls = YAHOO_HOSTS.map(
-    (h) => `https://${h}/v10/finance/quoteSummary/${encodeURIComponent(sym)}?modules=${modules}`
-  );
-  const j = await tryFetch<YahooModuleResp>(urls);
+  const j = await yahooAuthedGet<YahooModuleResp>(`/v10/finance/quoteSummary/${encodeURIComponent(sym)}`, { modules });
   return j?.quoteSummary?.result?.[0] ?? null;
 }
 
 async function fetchQuoteV7(sym: string): Promise<Record<string, any> | null> {
-  // Lightweight fallback: gives price, marketCap, 52w highs, dividend yield,
-  // exchange name etc. Works even when quoteSummary returns nothing.
-  const urls = YAHOO_HOSTS.map(
-    (h) => `https://${h}/v7/finance/quote?symbols=${encodeURIComponent(sym)}`
-  );
-  const j = await tryFetch<YahooQuoteV7Resp>(urls);
+  const j = await yahooAuthedGet<YahooQuoteV7Resp>("/v7/finance/quote", { symbols: sym });
   return j?.quoteResponse?.result?.[0] ?? null;
 }
 
 async function fetch30dPerf(sym: string): Promise<number | null> {
-  const urls = YAHOO_HOSTS.map(
-    (h) => `https://${h}/v8/finance/chart/${encodeURIComponent(sym)}?range=2mo&interval=1d`
-  );
-  const j = await tryFetch<YahooChartResp>(urls);
+  const j = await yahooOpenGet<YahooChartResp>(`/v8/finance/chart/${encodeURIComponent(sym)}`, {
+    range: "2mo", interval: "1d",
+  });
   const closes = j?.chart?.result?.[0]?.indicators?.quote?.[0]?.close ?? [];
   const cleaned = closes.filter((x): x is number => typeof x === "number" && isFinite(x));
   if (cleaned.length < 2) return null;
@@ -154,10 +204,9 @@ async function fetch30dPerf(sym: string): Promise<number | null> {
 }
 
 async function fetchPriceHistory(sym: string): Promise<{ t: number; c: number }[]> {
-  const urls = YAHOO_HOSTS.map(
-    (h) => `https://${h}/v8/finance/chart/${encodeURIComponent(sym)}?range=5y&interval=1wk`
-  );
-  const j = await tryFetch<YahooChartResp>(urls);
+  const j = await yahooOpenGet<YahooChartResp>(`/v8/finance/chart/${encodeURIComponent(sym)}`, {
+    range: "5y", interval: "1wk",
+  });
   const result = j?.chart?.result?.[0];
   if (!result) return [];
   const ts = result.timestamp ?? [];
@@ -165,21 +214,78 @@ async function fetchPriceHistory(sym: string): Promise<{ t: number; c: number }[
   const out: { t: number; c: number }[] = [];
   for (let i = 0; i < ts.length; i++) {
     const c = closes[i];
-    if (typeof c === "number" && isFinite(c)) {
-      out.push({ t: ts[i] * 1000, c: Math.round(c * 100) / 100 });
-    }
+    if (typeof c === "number" && isFinite(c)) out.push({ t: ts[i] * 1000, c: Math.round(c * 100) / 100 });
   }
   return out;
 }
 
-/**
- * Stooq fallback for price history. Provides weekly closes for US/HK/JP/AU/SG/MY.
- * Used when Yahoo's chart endpoint returns nothing.
- */
+/* ────────────────────────────────────────────────────────────────────────
+   Finnhub fallback for fundamentals (US-focused)
+   Free-tier endpoints (no payment required for our usage):
+     /stock/profile2  — name, country, ipo, marketCap, weburl, finnhubIndustry
+     /stock/metric    — P/E, margins, growth, etc. (`metric=all`)
+     /stock/earnings  — quarterly EPS estimate vs actual (beat/miss)
+   Activated when env FINNHUB_API_KEY is set.
+   ──────────────────────────────────────────────────────────────────────── */
+const FINNHUB_KEY = () => process.env.FINNHUB_API_KEY;
+
+async function finnhubGet<T>(path: string, params: Record<string, string>): Promise<T | null> {
+  const key = FINNHUB_KEY();
+  if (!key) return null;
+  const search = new URLSearchParams({ ...params, token: key });
+  try {
+    const r = await fetch(`https://finnhub.io/api/v1${path}?${search.toString()}`, {
+      headers: { Accept: "application/json" },
+      next: { revalidate: 0 },
+    });
+    if (!r.ok) return null;
+    return (await r.json()) as T;
+  } catch { return null; }
+}
+
+interface FinnhubProfile {
+  country?: string; currency?: string; exchange?: string; finnhubIndustry?: string;
+  ipo?: string; logo?: string; marketCapitalization?: number; name?: string;
+  shareOutstanding?: number; ticker?: string; weburl?: string;
+}
+interface FinnhubMetric {
+  metric?: {
+    "10DayAverageTradingVolume"?: number;
+    "52WeekHigh"?: number; "52WeekLow"?: number;
+    "peNormalizedAnnual"?: number; "peTTM"?: number; "peExclExtraTTM"?: number;
+    "forwardPE"?: number; "psTTM"?: number; "pbAnnual"?: number;
+    "epsTTM"?: number; "epsAnnual"?: number;
+    "epsGrowthQuarterlyYoy"?: number; "revenueGrowthQuarterlyYoy"?: number;
+    "netProfitMarginAnnual"?: number; "operatingMarginAnnual"?: number;
+    "currentRatioAnnual"?: number; "totalDebt/totalEquityAnnual"?: number;
+    "dividendYieldIndicatedAnnual"?: number; "beta"?: number;
+    "marketCapitalization"?: number;
+    [k: string]: number | undefined;
+  };
+}
+interface FinnhubEarnings { period: string; symbol?: string; estimate: number; actual: number; surprise: number; surprisePercent: number; }
+
+async function fetchFinnhubBundle(sym: string): Promise<{
+  profile: FinnhubProfile | null;
+  metric: FinnhubMetric | null;
+  earnings: FinnhubEarnings[] | null;
+}> {
+  // Strip Yahoo suffix — Finnhub uses bare ticker for US.
+  const bare = sym.replace(/\.[A-Z]+$/, "");
+  const [profile, metric, earnings] = await Promise.all([
+    finnhubGet<FinnhubProfile>("/stock/profile2", { symbol: bare }),
+    finnhubGet<FinnhubMetric>("/stock/metric", { symbol: bare, metric: "all" }),
+    finnhubGet<FinnhubEarnings[]>("/stock/earnings", { symbol: bare }),
+  ]);
+  return { profile, metric, earnings };
+}
+
+/* ────────────────────────────────────────────────────────────────────────
+   Stooq fallback for price history
+   ──────────────────────────────────────────────────────────────────────── */
 async function fetchStooqHistory(symbol: string, market: MarketCode): Promise<{ t: number; c: number }[]> {
   const suf: Record<MarketCode, string> = { US: ".us", HK: ".hk", JP: ".jp", AU: ".au", SG: ".sg", MY: ".kl" };
-  const sym = symbol.toLowerCase() + suf[market];
-  // 5 years weekly: i=w
+  const sym = symbol.toLowerCase().replace(/\.[a-z]+$/i, "") + suf[market];
   const url = `https://stooq.com/q/d/l/?s=${encodeURIComponent(sym)}&i=w`;
   try {
     const r = await fetch(url, { headers: { "User-Agent": UA }, next: { revalidate: 0 } });
@@ -188,7 +294,6 @@ async function fetchStooqHistory(symbol: string, market: MarketCode): Promise<{ 
     const lines = text.trim().split(/\r?\n/);
     if (lines.length < 3) return [];
     const out: { t: number; c: number }[] = [];
-    // Header: Date,Open,High,Low,Close,Volume
     for (let i = 1; i < lines.length; i++) {
       const cols = lines[i].split(",");
       if (cols.length < 5) continue;
@@ -196,12 +301,14 @@ async function fetchStooqHistory(symbol: string, market: MarketCode): Promise<{ 
       const c = parseFloat(cols[4]);
       if (isFinite(t) && isFinite(c)) out.push({ t, c });
     }
-    // Limit to last 5 years' worth
     const cutoff = Date.now() - 5 * 365 * 86_400_000;
     return out.filter((p) => p.t >= cutoff);
   } catch { return []; }
 }
 
+/* ────────────────────────────────────────────────────────────────────────
+   Utility
+   ──────────────────────────────────────────────────────────────────────── */
 function pickNum(o: any, ...keys: string[]): number | null {
   for (const k of keys) {
     const v = o?.[k];
@@ -211,106 +318,124 @@ function pickNum(o: any, ...keys: string[]): number | null {
   return null;
 }
 
+/* ────────────────────────────────────────────────────────────────────────
+   Main handler
+   ──────────────────────────────────────────────────────────────────────── */
 export async function GET(req: NextRequest) {
   const symbolInput = (req.nextUrl.searchParams.get("symbol") || "").trim();
   const market = (req.nextUrl.searchParams.get("market") || "US").toUpperCase() as MarketCode;
   if (!symbolInput) return NextResponse.json({ error: "symbol required" }, { status: 400 });
 
-  // Step 1 — resolve free-form input into a list of candidate Yahoo symbols.
+  // Step 1: resolve candidates
   const candidates = await resolveCandidates(symbolInput, market);
-  if (!candidates.length) {
-    return NextResponse.json({ error: `Could not find any matching ticker for "${symbolInput}". Try the exact ticker (e.g. NVDA, AAPL, 9988).` }, { status: 404 });
-  }
-
-  // Step 2 — try each candidate until quoteSummary OR quote v7 returns data.
   const warnings: string[] = [];
+
+  // Step 2: try each candidate against Yahoo quoteSummary (crumbed)
   let qs: Record<string, any> | null = null;
   let qv7: Record<string, any> | null = null;
   let resolvedSym = "";
   let resolvedSymbol = symbolInput.toUpperCase();
   for (const sym of candidates) {
-    qs = await fetchQuoteSummary(sym);
-    qv7 = await fetchQuoteV7(sym);
+    [qs, qv7] = await Promise.all([fetchQuoteSummary(sym), fetchQuoteV7(sym)]);
     if (qs || qv7) {
       resolvedSym = sym;
-      // Strip suffix for the "bare" ticker we show in the UI.
       resolvedSymbol = sym.replace(/\.(HK|T|AX|SI|KL)$/i, "");
       break;
     }
   }
+
+  // Step 3: if Yahoo authed endpoints failed entirely, try Finnhub for US tickers
+  let fhProfile: FinnhubProfile | null = null;
+  let fhMetric: FinnhubMetric | null = null;
+  let fhEarnings: FinnhubEarnings[] | null = null;
   if (!qs && !qv7) {
+    const usCand = candidates.find((c) => !c.includes(".")) || candidates[0];
+    if (usCand) {
+      const bundle = await fetchFinnhubBundle(usCand);
+      fhProfile = bundle.profile; fhMetric = bundle.metric; fhEarnings = bundle.earnings;
+      if (fhProfile?.name) {
+        resolvedSym = usCand;
+        resolvedSymbol = usCand;
+        warnings.push("Yahoo blocked — fundamentals from Finnhub.");
+      }
+    }
+  } else if (!qs) {
+    warnings.push("quoteSummary unavailable — using quote-only data; some financials/earnings empty.");
+  }
+
+  if (!qs && !qv7 && !fhProfile) {
     return NextResponse.json({
-      error: `Yahoo returned no data for any of: ${candidates.join(", ")}. Try the exact ticker (e.g. SNDK for SanDisk).`,
+      error: `No data found for "${symbolInput}". Tried: ${candidates.join(", ")}. ${FINNHUB_KEY() ? "" : "(Set FINNHUB_API_KEY env for richer fallback.)"}`,
+      candidatesTried: candidates,
     }, { status: 502 });
   }
-  if (!qs) warnings.push("quoteSummary unavailable — using quote-only data; financials and earnings history will be empty.");
 
-  // Step 3 — price history. Yahoo first, Stooq fallback.
+  // Step 4: price history
   let priceHistory: { t: number; c: number }[] = [];
   let perf30d: number | null = null;
-  if (resolvedSym) {
+  const symForChart = resolvedSym || candidates[0];
+  if (symForChart) {
     [priceHistory, perf30d] = await Promise.all([
-      fetchPriceHistory(resolvedSym),
-      fetch30dPerf(resolvedSym),
+      fetchPriceHistory(symForChart),
+      fetch30dPerf(symForChart),
     ]);
   }
   if (priceHistory.length === 0) {
-    // Stooq uses bare ticker + market suffix
     priceHistory = await fetchStooqHistory(resolvedSymbol, market);
     if (priceHistory.length > 0) warnings.push("Yahoo chart unavailable — price history from Stooq.");
   }
 
-  // ─── Asset profile (prefer quoteSummary, fallback to quote v7) ───
   const ap = qs?.assetProfile ?? {};
   const profile = {
     sector: ap.sector ?? qv7?.sector ?? null,
-    industry: ap.industry ?? qv7?.industry ?? null,
-    country: ap.country ?? null,
+    industry: ap.industry ?? qv7?.industry ?? fhProfile?.finnhubIndustry ?? null,
+    country: ap.country ?? fhProfile?.country ?? null,
     city: ap.city ?? null,
     state: ap.state ?? null,
-    website: ap.website ?? null,
+    website: ap.website ?? fhProfile?.weburl ?? null,
     fullTimeEmployees: ap.fullTimeEmployees ?? null,
     summary: ap.longBusinessSummary ?? null,
   };
 
-  // ─── Price snapshot ───
   const sd = qs?.summaryDetail ?? {};
   const pr = qs?.price ?? {};
   const ks = qs?.defaultKeyStatistics ?? {};
   const fd = qs?.financialData ?? {};
+  const fm = fhMetric?.metric ?? {};
+
   const snapshot = {
-    longName: pr.longName ?? pr.shortName ?? qv7?.longName ?? qv7?.shortName ?? resolvedSymbol,
-    exchange: pr.exchangeName ?? pr.exchange ?? qv7?.fullExchangeName ?? qv7?.exchange ?? null,
-    currency: pr.currency ?? sd.currency ?? qv7?.currency ?? null,
+    longName: pr.longName ?? pr.shortName ?? qv7?.longName ?? qv7?.shortName ?? fhProfile?.name ?? resolvedSymbol,
+    exchange: pr.exchangeName ?? pr.exchange ?? qv7?.fullExchangeName ?? qv7?.exchange ?? fhProfile?.exchange ?? null,
+    currency: pr.currency ?? sd.currency ?? qv7?.currency ?? fhProfile?.currency ?? null,
     price: pickNum(pr, "regularMarketPrice") ?? pickNum(fd, "currentPrice") ?? pickNum(qv7 ?? {}, "regularMarketPrice"),
-    marketCap: pickNum(pr, "marketCap") ?? pickNum(sd, "marketCap") ?? pickNum(qv7 ?? {}, "marketCap"),
-    high52: pickNum(sd, "fiftyTwoWeekHigh") ?? pickNum(qv7 ?? {}, "fiftyTwoWeekHigh"),
-    low52: pickNum(sd, "fiftyTwoWeekLow") ?? pickNum(qv7 ?? {}, "fiftyTwoWeekLow"),
-    dividendYield: pickNum(sd, "dividendYield") ?? pickNum(qv7 ?? {}, "dividendYield"),
-    beta: pickNum(ks, "beta"),
+    marketCap: pickNum(pr, "marketCap") ?? pickNum(sd, "marketCap") ?? pickNum(qv7 ?? {}, "marketCap")
+      ?? (fhProfile?.marketCapitalization ? fhProfile.marketCapitalization * 1_000_000 : null),
+    high52: pickNum(sd, "fiftyTwoWeekHigh") ?? pickNum(qv7 ?? {}, "fiftyTwoWeekHigh") ?? fm["52WeekHigh"] ?? null,
+    low52: pickNum(sd, "fiftyTwoWeekLow") ?? pickNum(qv7 ?? {}, "fiftyTwoWeekLow") ?? fm["52WeekLow"] ?? null,
+    dividendYield: pickNum(sd, "dividendYield") ?? pickNum(qv7 ?? {}, "dividendYield") ?? fm["dividendYieldIndicatedAnnual"] ?? null,
+    beta: pickNum(ks, "beta") ?? fm["beta"] ?? null,
     perf30d,
   };
 
-  // ─── Fundamentals ───
   const fundamentals = {
-    forwardPE: pickNum(ks, "forwardPE") ?? pickNum(sd, "forwardPE") ?? pickNum(qv7 ?? {}, "forwardPE"),
-    trailingPE: pickNum(sd, "trailingPE") ?? pickNum(qv7 ?? {}, "trailingPE"),
+    forwardPE: pickNum(ks, "forwardPE") ?? pickNum(sd, "forwardPE") ?? pickNum(qv7 ?? {}, "forwardPE") ?? fm["forwardPE"] ?? null,
+    trailingPE: pickNum(sd, "trailingPE") ?? pickNum(qv7 ?? {}, "trailingPE") ?? fm["peTTM"] ?? null,
     pegRatio: pickNum(ks, "pegRatio"),
     enterpriseValue: pickNum(ks, "enterpriseValue"),
-    evRevenue: pickNum(ks, "enterpriseToRevenue"),
+    evRevenue: pickNum(ks, "enterpriseToRevenue") ?? fm["psTTM"] ?? null,
     evEbitda: pickNum(ks, "enterpriseToEbitda"),
-    profitMargin: pickNum(fd, "profitMargins"),
-    operatingMargin: pickNum(fd, "operatingMargins"),
-    revenueGrowth: pickNum(fd, "revenueGrowth"),
-    earningsGrowth: pickNum(fd, "earningsGrowth"),
+    profitMargin: pickNum(fd, "profitMargins") ?? (fm["netProfitMarginAnnual"] != null ? fm["netProfitMarginAnnual"]! / 100 : null),
+    operatingMargin: pickNum(fd, "operatingMargins") ?? (fm["operatingMarginAnnual"] != null ? fm["operatingMarginAnnual"]! / 100 : null),
+    revenueGrowth: pickNum(fd, "revenueGrowth") ?? (fm["revenueGrowthQuarterlyYoy"] != null ? fm["revenueGrowthQuarterlyYoy"]! / 100 : null),
+    earningsGrowth: pickNum(fd, "earningsGrowth") ?? (fm["epsGrowthQuarterlyYoy"] != null ? fm["epsGrowthQuarterlyYoy"]! / 100 : null),
     totalCash: pickNum(fd, "totalCash"),
     totalDebt: pickNum(fd, "totalDebt"),
-    sharesOutstanding: pickNum(ks, "sharesOutstanding") ?? pickNum(qv7 ?? {}, "sharesOutstanding"),
-    epsTrailing: pickNum(ks, "trailingEps") ?? pickNum(qv7 ?? {}, "epsTrailingTwelveMonths"),
-    epsForward: pickNum(ks, "forwardEps") ?? pickNum(qv7 ?? {}, "epsForward"),
+    sharesOutstanding: pickNum(ks, "sharesOutstanding") ?? pickNum(qv7 ?? {}, "sharesOutstanding")
+      ?? (fhProfile?.shareOutstanding ? fhProfile.shareOutstanding * 1_000_000 : null),
+    epsTrailing: pickNum(ks, "trailingEps") ?? pickNum(qv7 ?? {}, "epsTrailingTwelveMonths") ?? fm["epsTTM"] ?? null,
+    epsForward: pickNum(ks, "forwardEps") ?? pickNum(qv7 ?? {}, "epsForward") ?? null,
   };
 
-  // ─── Income statement (last 4 years) ───
   const incomeRows: Array<{ year: number; revenue: number; netIncome: number | null }> = [];
   const ish = qs?.incomeStatementHistory?.incomeStatementHistory ?? [];
   for (const row of ish) {
@@ -322,7 +447,6 @@ export async function GET(req: NextRequest) {
   }
   incomeRows.sort((a, b) => a.year - b.year);
 
-  // ─── Earnings history (last 4 quarters) ───
   const earningsRows: Array<{
     quarter: string; estimate: number | null; actual: number | null;
     surprisePct: number | null; verdict: "beat" | "miss" | "inline" | null;
@@ -342,6 +466,18 @@ export async function GET(req: NextRequest) {
     earningsRows.push({ quarter: q, estimate: est, actual: act, surprisePct: sp != null ? sp * 100 : null, verdict });
   }
   earningsRows.reverse();
+  if (earningsRows.length === 0 && fhEarnings && fhEarnings.length > 0) {
+    for (const r of fhEarnings.slice(0, 4)) {
+      const sp = r.surprisePercent;
+      const verdict: "beat" | "miss" | "inline" = sp > 2 ? "beat" : sp < -2 ? "miss" : "inline";
+      earningsRows.push({
+        quarter: r.period,
+        estimate: r.estimate, actual: r.actual,
+        surprisePct: sp, verdict,
+      });
+    }
+    earningsRows.reverse();
+  }
 
   return new NextResponse(
     JSON.stringify({
