@@ -29,6 +29,9 @@ const MARKETS: { code: MarketCode; label: string }[] = [
 
 interface Profile {
   symbol: string; market: MarketCode; sym: string;
+  inputSymbol?: string;
+  candidatesTried?: string[];
+  warnings?: string[];
   profile: { sector: string | null; industry: string | null; country: string | null; city: string | null; state: string | null; website: string | null; fullTimeEmployees: number | null; summary: string | null; };
   snapshot: { longName: string; exchange: string | null; currency: string | null; price: number | null; marketCap: number | null; high52: number | null; low52: number | null; dividendYield: number | null; beta: number | null; perf30d: number | null; };
   fundamentals: { forwardPE: number | null; trailingPE: number | null; pegRatio: number | null; enterpriseValue: number | null; evRevenue: number | null; evEbitda: number | null; profitMargin: number | null; operatingMargin: number | null; revenueGrowth: number | null; earningsGrowth: number | null; totalCash: number | null; totalDebt: number | null; sharesOutstanding: number | null; epsTrailing: number | null; epsForward: number | null; };
@@ -65,8 +68,11 @@ export default function AnalyzePage() {
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const s = input.trim().toUpperCase();
+    const s = input.trim();
     if (!s) return;
+    // Don't force uppercase here — the server's resolver handles names like
+    // "Sandisk" or "western digital" via Yahoo's search endpoint, which is
+    // case-insensitive but happier with the casing the user actually typed.
     load(s, market);
   }
 
@@ -89,9 +95,10 @@ export default function AnalyzePage() {
           <span className="text-[11px] uppercase tracking-wider text-[var(--text-muted)]">Ticker</span>
           <input
             value={input}
-            onChange={(e) => setInput(e.target.value.toUpperCase())}
-            placeholder="e.g. NVDA, AAPL, 9988"
-            className="input mt-1 font-mono"
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="NVDA · Sandisk · 9988 · Western Digital"
+            className="input mt-1"
+            autoCapitalize="characters"
           />
         </label>
         <label className="block">
@@ -111,13 +118,26 @@ export default function AnalyzePage() {
             <AlertTriangle size={14} /> {error}
           </div>
           <p className="text-[var(--text-muted)]">
-            Try a different ticker or market. For HK use the 4-digit code (e.g. 9988 with HK market).
+            Try a company name (e.g. <code>NVIDIA</code>, <code>Sandisk</code>) — the lookup will find the ticker
+            for you. Or use the exact ticker symbol: NVDA, AAPL, MU, 9988 (with HK market).
           </p>
         </div>
       )}
 
       {data && !loading && (
         <>
+          {data.inputSymbol && data.inputSymbol.toUpperCase() !== data.symbol && (
+            <div className="card mb-3 border-l-4 border-l-accent p-3 text-[12.5px]">
+              <span className="text-[var(--text-muted)]">Resolved &ldquo;{data.inputSymbol}&rdquo; → </span>
+              <strong className="font-mono">{data.symbol}</strong>
+              {data.sym !== data.symbol && <span className="text-[var(--text-muted)]"> ({data.sym})</span>}
+            </div>
+          )}
+          {data.warnings && data.warnings.length > 0 && (
+            <div className="card mb-3 border-l-4 border-l-warning p-3 text-[12px] text-[var(--text-muted)]">
+              {data.warnings.map((w, i) => <div key={i}>⚠ {w}</div>)}
+            </div>
+          )}
           <BackgroundCard data={data} />
           <FundamentalsCard data={data} />
           <EarningsCard data={data} />
