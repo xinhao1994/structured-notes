@@ -5,6 +5,7 @@ import clsx from "clsx";
 import type { PriceQuote, Tranche } from "@/lib/types";
 import { koSchedule, formatPx } from "@/lib/calc";
 import { setKnockedOutByTranche } from "@/lib/storage";
+import { useObservationCloses } from "@/lib/hooks/useObservationCloses";
 
 interface Props {
   tranche: Tranche;
@@ -17,35 +18,48 @@ export function KOSchedule({ tranche, quotes }: Props) {
   const showInitialFx = !!tranche.initialFixing;
   const nextN = sched.find((x) => x.date >= today)?.n;
 
-  // Detect the most recent PAST observation where the worst-of underlying was
-  // at or above the KO trigger — i.e. the tranche knocked out at obs #N. We
-  // persist N keyed by tranche code so the Calculator page defaults the
-  // "Knocked out at obs #" dropdown to it. User can still override.
-  // Saves null when no past observation crossed the trigger, so the dropdown
-  // stays on "— not yet —".
+  // Fetch the OFFICIAL CLOSE on every past observation date — per market
+  // session (US session for US stocks, HK for HK, etc.). Intraday wicks
+  // don't trigger KO; only the local-market close on the obs date matters.
+  const { closes: obsCloses, pending: closesPending, missing: closesMissing } =
+    useObservationCloses(tranche);
+
+  // Detect the most recent PAST observation where the worst-of underlying's
+  // HISTORICAL CLOSE was at or above the KO trigger — that's the obs at
+  // which the tranche knocked out. We persist the obs # keyed by tranche
+  // code so the Calculator page can default the "Knocked out at obs #"
+  // dropdown. User can still override. Saves null when no past obs
+  // crossed the trigger.
+  //
+  // We deliberately use historical closes (not live spot) — a stock that
+  // dipped below KO on obs date but recovered later is NOT considered
+  // knocked out. The autocall is observed on the close of the obs date.
   useEffect(() => {
+    // Don't detect until we have data — otherwise we'd write "no KO" while
+    // historical closes are still loading, and a real KO would be cleared.
+    if (closesPending) return;
     let detected: number | null = null;
     for (const o of sched) {
       if (o.date >= today) break;
-      // Recompute worst-of for this past observation using current quotes.
-      // For a true post-mortem we'd use historical closes, but live spot is
-      // a usable proxy for "did this trigger" given the tranche is still being
-      // tracked — most KOs are unambiguous (worst-of well above trigger).
+      const obsData = obsCloses[o.n];
+      if (!obsData) continue;
+      // Compute worst-of cushion using the close on this exact obs date.
       let worstDelta: number | null = null;
+      let allResolved = true;
       for (const u of tranche.underlyings) {
         const koPx = o.koPriceBySymbol[u.symbol];
-        const live = quotes[u.symbol]?.price;
-        if (koPx == null || live == null) continue;
-        const d = ((live - koPx) / koPx) * 100;
+        const hist = obsData[u.symbol]?.close;
+        if (koPx == null || hist == null) { allResolved = false; continue; }
+        const d = ((hist - koPx) / koPx) * 100;
         if (worstDelta == null || d < worstDelta) worstDelta = d;
       }
-      if (worstDelta != null && worstDelta >= 0) detected = o.n;
+      // Only consider a KO confirmed when we have closes for ALL underlyings
+      // on that obs date — otherwise the worst-of is incomplete.
+      if (allResolved && worstDelta != null && worstDelta >= 0) detected = o.n;
     }
     setKnockedOutByTranche(tranche.trancheCode, detected);
-    // Re-run when quotes/tranche change. Trancheode keys the storage so
-    // switching tranches doesn't bleed values between them.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tranche.trancheCode, JSON.stringify(quotes)]);
+  }, [tranche.trancheCode, closesPending, JSON.stringify(obsCloses)]);
 
   return (
     <section className="card mt-4 p-4">
@@ -61,6 +75,17 @@ export function KOSchedule({ tranche, quotes }: Props) {
         </div>
       </header>
 
+      {closesPending && (
+        <div className="mb-2 rounded-lg border border-accent/30 bg-accent-50 px-2 py-1 text-[11px] text-[var(--text-muted)] dark:bg-accent-900/20">
+          Fetching official closes on past observation dates...
+        </div>
+      )}
+      {closesMissing.length > 0 && !closesPending && (
+        <div className="mb-2 rounded-lg border border-warning/30 bg-[var(--surface-2)] px-2 py-1 text-[11px] text-[var(--text-muted)]">
+          Could not fetch close for {closesMissing.length} (obs/symbol) pair{closesMissing.length > 1 ? "s" : ""}. Status for those observations falls back to live spot — verify manually.
+        </div>
+      )}
+
       <div className="scroll-x">
         <table className="bank-table">
           <thead>
@@ -73,7 +98,7 @@ export function KOSchedule({ tranche, quotes }: Props) {
                   <th key={u.symbol} className="!text-right">
                     {u.symbol}
                     <div className="text-[9px] font-normal normal-case tracking-normal text-[var(--text-muted)]">
-                      KO px - live delta
+                      KO px · close-vs-trigger
                     </div>
                   </th>
                 ))}
@@ -84,19 +109,30 @@ export function KOSchedule({ tranche, quotes }: Props) {
             {sched.map((o) => {
               const past = o.date < today;
               const isNext = o.n === nextN;
+              const obsData = obsCloses[o.n];
 
+              // Per-underlying delta. For PAST observations, prefer the
+              // historical close on the obs date — the official trigger
+              // input. For FUTURE observations there's no close yet, so
+              // we show the live spot as a "would-KO" indicator.
               const perSym = tranche.underlyings.map((u) => {
                 const koPx = o.koPriceBySymbol[u.symbol];
+                const histClose = past ? obsData?.[u.symbol]?.close : undefined;
                 const live = quotes[u.symbol]?.price;
+                const pxForCompare = past ? histClose : live;
                 const delta =
-                  koPx != null && live != null
-                    ? ((live - koPx) / koPx) * 100
+                  koPx != null && pxForCompare != null
+                    ? ((pxForCompare - koPx) / koPx) * 100
                     : undefined;
-                return { u, koPx, live, delta };
+                return { u, koPx, pxForCompare, histClose, live, delta };
               });
 
               const valid = perSym.filter((p) => p.delta != null) as Array<typeof perSym[number] & { delta: number }>;
               const worst = valid.length ? valid.reduce((a, b) => (a.delta < b.delta ? a : b)) : null;
+              // For past obs, "Knocked out" only confirms when we have closes
+              // for ALL underlyings — partial data means we can't be sure
+              // the worst-of triggered.
+              const allResolvedPast = past && perSym.every((p) => p.histClose != null);
 
               return (
                 <tr key={o.n} className={clsx(isNext && "bg-accent-50 dark:bg-accent-900/30")}>
@@ -104,9 +140,14 @@ export function KOSchedule({ tranche, quotes }: Props) {
                   <td className="tabular">{o.date}</td>
                   <td className="tabular font-medium">{(o.koPct * 100).toFixed(0)}%</td>
                   {showInitialFx &&
-                    perSym.map(({ u, koPx, delta }) => (
+                    perSym.map(({ u, koPx, delta, histClose }) => (
                       <td key={u.symbol} className="tabular">
                         <div>{formatPx(koPx)}</div>
+                        {past && histClose != null && (
+                          <div className="text-[10px] text-[var(--text-muted)]">
+                            close {formatPx(histClose)}
+                          </div>
+                        )}
                         {delta != null && (
                           <div
                             className={clsx(
@@ -114,9 +155,13 @@ export function KOSchedule({ tranche, quotes }: Props) {
                               delta >= 0 ? "text-success" : "text-danger"
                             )}
                             title={
-                              delta >= 0
-                                ? `Spot is ${delta.toFixed(2)}% above this KO trigger - would knock out at this observation.`
-                                : `Spot is ${Math.abs(delta).toFixed(2)}% below this KO trigger - would NOT knock out at this observation.`
+                              past
+                                ? delta >= 0
+                                  ? `Close on ${o.date} was ${delta.toFixed(2)}% above this KO trigger — knocked out at this obs.`
+                                  : `Close on ${o.date} was ${Math.abs(delta).toFixed(2)}% below this KO trigger — did NOT knock out at this obs.`
+                                : delta >= 0
+                                  ? `Spot is ${delta.toFixed(2)}% above this KO trigger — would knock out if observation were today.`
+                                  : `Spot is ${Math.abs(delta).toFixed(2)}% below this KO trigger — would NOT knock out today.`
                             }
                           >
                             {delta >= 0 ? "▲ +" : "▼ "}{delta.toFixed(2)}%
@@ -126,13 +171,21 @@ export function KOSchedule({ tranche, quotes }: Props) {
                     ))}
                   <td>
                     {past ? (
-                      worst && worst.delta >= 0 ? (
-                        <span className="badge safe" title={`Worst-of (${worst.u.symbol}) is currently above this KO trigger.`}>
+                      allResolvedPast && worst && worst.delta >= 0 ? (
+                        <span className="badge safe" title={`Worst-of (${worst.u.symbol}) closed at/above the KO trigger on ${o.date}.`}>
                           Knocked out
                         </span>
-                      ) : worst ? (
-                        <span className="badge moderate" title={`Worst-of (${worst.u.symbol}) is ${Math.abs(worst.delta).toFixed(2)}% below this KO trigger — no autocall at this obs.`}>
+                      ) : allResolvedPast && worst ? (
+                        <span className="badge moderate" title={`Worst-of (${worst.u.symbol}) closed ${Math.abs(worst.delta).toFixed(2)}% below the KO trigger on ${o.date} — no autocall.`}>
                           Survived
+                        </span>
+                      ) : worst ? (
+                        // Partial historical data — fall back to live-spot estimate but label it.
+                        <span
+                          className="badge moderate"
+                          title={`Historical close incomplete for this obs. Live-spot worst-of (${worst.u.symbol}) is ${worst.delta >= 0 ? "above" : Math.abs(worst.delta).toFixed(2) + "% below"} the KO trigger.`}
+                        >
+                          {worst.delta >= 0 ? "Likely KO" : "Likely survived"}
                         </span>
                       ) : (
                         <span className="badge moderate">Passed</span>
@@ -166,9 +219,10 @@ export function KOSchedule({ tranche, quotes }: Props) {
       </div>
 
       <p className="mt-2 text-[10.5px] text-[var(--text-muted)]">
-        For each observation, the per-underlying column shows the KO price plus the current spot's distance from it
-        (▲ = above KO, ▼ = below KO). The Worst-of badge is driven by the underlying with the smallest cushion -
-        autocall only triggers when all underlyings are at or above their KO levels on the observation date.
+        Past observations use the OFFICIAL close on the obs date in each underlying&apos;s home session
+        (US session for US stocks, HK session for HK stocks, etc.) — intraday dips don&apos;t trigger KO. Future
+        observations show live spot as a &quot;would-KO&quot; indicator. Autocall fires only when ALL
+        underlyings closed at or above their KO levels on the obs date.
       </p>
     </section>
   );
