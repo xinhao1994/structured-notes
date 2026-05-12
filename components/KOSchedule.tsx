@@ -1,11 +1,10 @@
 "use client";
 
-import { useEffect } from "react";
 import clsx from "clsx";
 import type { PriceQuote, Tranche } from "@/lib/types";
 import { koSchedule, formatPx } from "@/lib/calc";
-import { setKnockedOutByTranche } from "@/lib/storage";
 import { useObservationCloses } from "@/lib/hooks/useObservationCloses";
+import { useDetectedKO } from "@/lib/hooks/useDetectedKO";
 
 interface Props {
   tranche: Tranche;
@@ -24,42 +23,11 @@ export function KOSchedule({ tranche, quotes }: Props) {
   const { closes: obsCloses, pending: closesPending, missing: closesMissing } =
     useObservationCloses(tranche);
 
-  // Detect the most recent PAST observation where the worst-of underlying's
-  // HISTORICAL CLOSE was at or above the KO trigger — that's the obs at
-  // which the tranche knocked out. We persist the obs # keyed by tranche
-  // code so the Calculator page can default the "Knocked out at obs #"
-  // dropdown. User can still override. Saves null when no past obs
-  // crossed the trigger.
-  //
-  // We deliberately use historical closes (not live spot) — a stock that
-  // dipped below KO on obs date but recovered later is NOT considered
-  // knocked out. The autocall is observed on the close of the obs date.
-  useEffect(() => {
-    // Don't detect until we have data — otherwise we'd write "no KO" while
-    // historical closes are still loading, and a real KO would be cleared.
-    if (closesPending) return;
-    let detected: number | null = null;
-    for (const o of sched) {
-      if (o.date >= today) break;
-      const obsData = obsCloses[o.n];
-      if (!obsData) continue;
-      // Compute worst-of cushion using the close on this exact obs date.
-      let worstDelta: number | null = null;
-      let allResolved = true;
-      for (const u of tranche.underlyings) {
-        const koPx = o.koPriceBySymbol[u.symbol];
-        const hist = obsData[u.symbol]?.close;
-        if (koPx == null || hist == null) { allResolved = false; continue; }
-        const d = ((hist - koPx) / koPx) * 100;
-        if (worstDelta == null || d < worstDelta) worstDelta = d;
-      }
-      // Only consider a KO confirmed when we have closes for ALL underlyings
-      // on that obs date — otherwise the worst-of is incomplete.
-      if (allResolved && worstDelta != null && worstDelta >= 0) detected = o.n;
-    }
-    setKnockedOutByTranche(tranche.trancheCode, detected);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tranche.trancheCode, closesPending, JSON.stringify(obsCloses)]);
+  // Run KO detection. The hook persists the detected obs # to storage so
+  // the Calculator can read it. We don't need to use its return value
+  // here — the per-row badges below recompute from `obsCloses` directly.
+  // Mounting this hook is what triggers the side-effect write.
+  useDetectedKO(tranche);
 
   return (
     <section className="card mt-4 p-4">

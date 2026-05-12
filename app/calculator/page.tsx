@@ -9,6 +9,7 @@ import { clientCalc, formatCcy, MIN_LOT, validateLot } from "@/lib/calc";
 import type { Currency, Tranche } from "@/lib/types";
 import { parseTrancheText } from "@/lib/parser";
 import { SAMPLE_TRANCHE_TEXT } from "@/lib/sample";
+import { useDetectedKO } from "@/lib/hooks/useDetectedKO";
 import {
   Calculator, AlertTriangle, CheckCircle2, MessageSquare, RefreshCw, Copy, Check, Trophy,
 } from "lucide-react";
@@ -58,6 +59,13 @@ export default function CalculatorPage() {
   const [clientName, setClientName] = useState<string>("");
   const [copied, setCopied] = useState(false);
 
+  // Compute the KO observation # the tranche actually knocked out at, using
+  // the OFFICIAL CLOSE on each past obs date. Runs independently of Desk —
+  // so the user can parse a tranche and go straight to Calculator without
+  // first viewing the Desk's KO schedule, and the dropdown still auto-fills
+  // once the historical closes finish loading.
+  const { detected: detectedKO, pending: detectionPending } = useDetectedKO(tranche ?? null);
+
   // Sync the calculator to whatever tranche is currently selected. The rule:
   //   - If this is the same tranche the user last interacted with (same
   //     trancheCode persisted in calcSettings.forTrancheCode), KEEP their
@@ -68,9 +76,12 @@ export default function CalculatorPage() {
   //     Desk, or picked a different one from the dropdown), force-reset:
   //         currency  → tranche.currency
   //         principal → MIN_LOT[tranche.currency]
-  //         knockedOutAt → Desk-detected KO observation (or null)
   //     and record the new trancheCode so the next remount knows it was
   //     handled.
+  // knockedOutAt is handled by a SEPARATE effect below — it auto-fills from
+  // detectedKO whenever detection becomes available, not just on tranche
+  // change, so the answer arrives even if the user opened Calculator before
+  // historical closes had loaded.
   useEffect(() => {
     if (!tranche) return;
     const cur = getCalcSettings();
@@ -78,11 +89,28 @@ export default function CalculatorPage() {
     if (isNewTranche) {
       setCurrency(tranche.currency);
       setPrincipal(MIN_LOT[tranche.currency]);
+      // Reset KO to whatever's currently in storage so we don't carry over
+      // the previous tranche's value. The detection effect below will refine
+      // this once historical closes load (or instantly if already cached).
       setKnockedOutAt(getKnockedOutByTranche(tranche.trancheCode));
       setCalcSettings({ forTrancheCode: tranche.trancheCode });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tranche?.trancheCode]);
+
+  // Auto-fill KO observation from detection. Runs whenever detection updates
+  // — so if the user opens Calculator before historical closes have loaded,
+  // the dropdown will populate as soon as the fetch completes. Once a value
+  // is detected for the current tranche, we trust it as the default; the
+  // user can still pick a different obs # manually from the dropdown.
+  useEffect(() => {
+    if (!tranche) return;
+    if (detectionPending) return;
+    if (detectedKO != null && knockedOutAt !== detectedKO) {
+      setKnockedOutAt(detectedKO);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tranche?.trancheCode, detectedKO, detectionPending]);
 
   // Persist on every change.
   useEffect(() => { setCalcSettings({ trancheId }); }, [trancheId]);
@@ -228,9 +256,14 @@ export default function CalculatorPage() {
           <label className="block">
             <span className="text-[11px] uppercase tracking-wider text-[var(--text-muted)]">
               Knocked out at obs #
-              {knockedOutAt != null && getKnockedOutByTranche(tranche.trancheCode) === knockedOutAt && (
+              {detectionPending && (
+                <span className="ml-2 rounded-full bg-accent-500/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-accent">
+                  detecting...
+                </span>
+              )}
+              {!detectionPending && knockedOutAt != null && detectedKO === knockedOutAt && (
                 <span className="ml-2 rounded-full bg-success/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-success">
-                  auto · from Desk
+                  auto · obs #{detectedKO}
                 </span>
               )}
             </span>
