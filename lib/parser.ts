@@ -295,17 +295,36 @@ function pct(s: string | undefined): number | undefined {
 }
 
 function parseDate(s: string): string | undefined {
-  // Accept ordinal suffixes: "1st", "2nd", "3rd", "4th"-"31st" May 2026.
-  const m = s.match(/(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]{3,9})\s+(\d{2,4})/i);
-  if (!m) return undefined;
-  const day = parseInt(m[1], 10);
-  const monthName = m[2].toLowerCase();
-  let year = parseInt(m[3], 10);
-  if (year < 100) year += 2000;
-  const months = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"];
-  const idx = months.findIndex((mn) => monthName.startsWith(mn));
-  if (idx < 0) return undefined;
-  return new Date(Date.UTC(year, idx, day)).toISOString().slice(0, 10);
+  // Format A: "8th May 2026", "8 May 26", "8 May 2026" — word-month style
+  // with optional ordinal suffix.
+  const m1 = s.match(/(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]{3,9})\s+(\d{2,4})/i);
+  if (m1) {
+    const day = parseInt(m1[1], 10);
+    const monthName = m1[2].toLowerCase();
+    let year = parseInt(m1[3], 10);
+    if (year < 100) year += 2000;
+    const months = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"];
+    const idx = months.findIndex((mn) => monthName.startsWith(mn));
+    if (idx >= 0) return new Date(Date.UTC(year, idx, day)).toISOString().slice(0, 10);
+  }
+
+  // Format B: "9/9/2025", "9-9-2025", "9.9.2025", "9/9/25" — numeric
+  // D/M/Y ordering (Malaysian / Asian banking convention). For ambiguous
+  // dates like "5/12/2025" we treat as 5 December, not May 12.
+  // Bounded so it doesn't accidentally swallow "8.5% pa" (one separator)
+  // or "T+7" (no slashes).
+  const m2 = s.match(/(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})/);
+  if (m2) {
+    const day = parseInt(m2[1], 10);
+    const month = parseInt(m2[2], 10);
+    let year = parseInt(m2[3], 10);
+    if (year < 100) year += 2000;
+    if (day >= 1 && day <= 31 && month >= 1 && month <= 12 && year >= 2000 && year <= 2100) {
+      return new Date(Date.UTC(year, month - 1, day)).toISOString().slice(0, 10);
+    }
+  }
+
+  return undefined;
 }
 
 function parseOffering(line: string): { start?: string; end?: string } {
@@ -340,14 +359,20 @@ function detectCurrency(text: string): Currency | undefined {
 
 /** Strip emojis and other decorative symbols from a line. */
 function stripDecor(s: string): string {
-  // Strip emoji pictographs, skin-tone modifiers, regional-indicator flags,
-  // and the FE0F variation selector. CRITICAL: do NOT strip \p{Emoji_Component}
-  // because that Unicode class includes plain digits 0-9 (they\'re part of
-  // keycap emojis like 1\u{FE0F}\u{20E3}), which would mangle tranche codes
-  // like "MSIT260582" into "MSIT".
-  return s.replace(/[\p{Extended_Pictographic}\p{Emoji_Modifier}\u{FE0F}\u{200D}\u{20E3}]+/gu, "")
-          .replace(/[\u{1F1E6}-\u{1F1FF}]+/gu, "")
-          .replace(/\s+/g, " ");
+  // FIRST PASS: strip keycap emoji sequences as a UNIT. A keycap is
+  //   <digit 0-9 | # | *> + (optional U+FE0F) + U+20E3 (combining enclosing keycap)
+  // So "1⃣MSI" becomes "MSI". We do this before the general digit-preserving
+  // pass below because otherwise the leading digit would be left behind
+  // (we deliberately don't strip lone digits — they appear in tranche codes
+  // like "MSIT260582").
+  return s
+    .replace(/[0-9#*][\u{FE0F}]?\u{20E3}/gu, "")
+    // SECOND PASS: strip emoji pictographs, skin-tone modifiers, the FE0F
+    // variation selector, and ZWJ. CRITICAL: still do NOT strip \p{Emoji_Component}
+    // because that Unicode class includes plain digits 0-9.
+    .replace(/[\p{Extended_Pictographic}\p{Emoji_Modifier}\u{FE0F}\u{200D}\u{20E3}]+/gu, "")
+    .replace(/[\u{1F1E6}-\u{1F1FF}]+/gu, "")
+    .replace(/\s+/g, " ");
 }
 
 /**
@@ -556,9 +581,11 @@ export function parseTrancheText(input: string): ParseResult {
     parseField(text, /\b(MSIT\d+|[A-Z]{2,4}\d{6,})\b/) ||
     `T${Date.now().toString().slice(-7)}`;
 
+  // Accept "Offering", "Offer", "OFFER" — abbreviations are common in
+  // distributor chat messages.
   const offeringLine =
-    parseField(text, /Offering[:\s]+([^\n]+?)(?=\s+Trade[:\s]|\n|$)/i) ||
-    parseField(text, /Offering[:\s]+([^\n]+)/i) ||
+    parseField(text, /Offer(?:ing)?[:\s]+([^\n]+?)(?=\s+Trade[:\s]|\n|$)/i) ||
+    parseField(text, /Offer(?:ing)?[:\s]+([^\n]+)/i) ||
     "";
   let { start: offeringStart, end: offeringEnd } = parseOffering(offeringLine);
 

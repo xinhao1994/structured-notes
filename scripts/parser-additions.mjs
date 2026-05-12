@@ -75,6 +75,43 @@ EKI 60%`;
   const { tranche } = parseTrancheText(txt);
   eq(tranche.tradeDate, "2026-05-12", "explicit Trade overrides offering-end fallback");
 }
+// 10. User-reported input: slash dates + OFFER abbreviation
+{
+  const txt = `1️⃣MSI
+OFFER: 9/9/2025
+trade date: 9/9/2025
+Settlement: T+7
+Currency: SGD 🇸🇬
+MICRON US
+BROADCOM US
+META US
+Strike: 80%
+KO: 106% stepdown 3%
+EKI: 69%
+Coupon: 8%p.a.
+Tenor: 9 months`;
+  const { tranche } = parseTrancheText(txt);
+  eq(tranche.tradeDate, "2025-09-09", "user case: trade date 9/9/2025");
+  eq(tranche.offeringEnd, "2025-09-09", "user case: OFFER abbreviation matched");
+  eq(tranche.currency, "SGD", "user case: SGD currency");
+  near(tranche.couponPa, 0.08, 1e-9, "user case: coupon 8%");
+  eq(tranche.tenorMonths, 9, "user case: tenor 9M");
+  near(tranche.strikePct, 0.80, 1e-9, "user case: strike 80%");
+  near(tranche.koStartPct, 1.06, 1e-9, "user case: KO 106%");
+  near(tranche.koStepdownPct, 0.03, 1e-9, "user case: stepdown 3%");
+  near(tranche.ekiPct, 0.69, 1e-9, "user case: EKI 69%");
+  ok(tranche.underlyings.length === 3, "user case: 3 underlyings");
+  ok(tranche.underlyings.some(u => u.symbol === "MU"), "user case: MICRON -> MU");
+  ok(tranche.underlyings.some(u => u.symbol === "AVGO"), "user case: BROADCOM -> AVGO");
+  ok(tranche.underlyings.some(u => u.symbol === "META"), "user case: META -> META");
+}
+// 11. Other slash-date variants
+{
+  const make = (d) => `MSI\nUSD\nTranche code: TEST_X\nNVDA\nTrade: ${d}\nCoupon 8% pa\nTenor 12M\nStrike 100%\nKO 100% stepdown 4%\nEKI 60%`;
+  eq(parseTrancheText(make("1/3/2026")).tranche.tradeDate, "2026-03-01", "D/M/Y: 1/3/2026 -> 2026-03-01");
+  eq(parseTrancheText(make("15-12-2025")).tranche.tradeDate, "2025-12-15", "D-M-Y: 15-12-2025 -> 2025-12-15");
+  eq(parseTrancheText(make("7.6.26")).tranche.tradeDate, "2026-06-07", "D.M.YY: 7.6.26 -> 2026-06-07");
+}
 
 console.log(`\n${pass} passed · ${fail} failed`);
 process.exit(fail ? 1 : 0);
