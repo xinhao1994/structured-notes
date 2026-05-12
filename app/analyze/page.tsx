@@ -200,6 +200,11 @@ function BackgroundCard({ data }: { data: Profile }) {
   const hook = STOCK_HOOKS[data.symbol];
   const intro = hook?.hook ?? genericHook(data.snapshot.longName, data.profile.summary);
   const hq = [data.profile.city, data.profile.state, data.profile.country].filter(Boolean).join(", ");
+  // What-they-do — prefer curated, otherwise show a longer excerpt of
+  // Yahoo's summary (up to ~500 chars so a newbie can actually learn).
+  const whatTheyDo = hook?.whatTheyDo ?? data.profile.summary?.slice(0, 500) ?? "—";
+  const howTheyMakeMoney = hook?.howTheyMakeMoney ?? null;
+
   const wa = useMemo(() => {
     const lines: string[] = [];
     lines.push(`📊 *${data.snapshot.longName}* (${data.symbol})`);
@@ -207,20 +212,34 @@ function BackgroundCard({ data }: { data: Profile }) {
     lines.push(intro);
     lines.push("");
     lines.push("*What they do:*");
-    lines.push(hook?.whatTheyDo ?? (data.profile.summary?.slice(0, 280) ?? "—"));
+    lines.push(whatTheyDo);
+    if (howTheyMakeMoney) {
+      lines.push("");
+      lines.push("*How they make money:* " + howTheyMakeMoney);
+    }
     if (hook?.familiarProducts?.length) {
       lines.push("");
       lines.push("*Familiar products:* " + hook.familiarProducts.join(" · "));
     }
+    if (hook?.whyItMoves?.length) {
+      lines.push("");
+      lines.push("*What moves the share price:*");
+      hook.whyItMoves.forEach((w) => lines.push("• " + w));
+    }
     if (hook?.malaysiaTie) {
       lines.push("");
       lines.push("🇲🇾 *Malaysia connection:* " + hook.malaysiaTie);
+    } else if (hook?.noMalaysiaTie) {
+      lines.push("");
+      lines.push("🇲🇾 *Malaysia connection:* No direct Malaysian operations or partnership.");
     }
-    if (hq) lines.push("\n*Headquarters:* " + hq);
+    if (hook?.founded) lines.push("\n*Founded:* " + hook.founded);
+    if (hook?.listedSince) lines.push("*Listed:* " + hook.listedSince);
+    if (hq) lines.push("*Headquarters:* " + hq);
     if (data.profile.sector) lines.push(`*Sector:* ${data.profile.sector}${data.profile.industry ? ` · ${data.profile.industry}` : ""}`);
     if (data.profile.fullTimeEmployees) lines.push(`*Employees:* ${data.profile.fullTimeEmployees.toLocaleString()}`);
     return lines.join("\n");
-  }, [data, hook, intro, hq]);
+  }, [data, hook, intro, whatTheyDo, howTheyMakeMoney, hq]);
 
   return (
     <section className="card mb-3 p-4">
@@ -234,20 +253,69 @@ function BackgroundCard({ data }: { data: Profile }) {
         </div>
         <CopyButton text={wa} label="Copy to client" />
       </header>
+
+      {/* HOOK — relatable opener, even for stocks not in our curated list */}
       <div className="rounded-xl border border-l-4 border-l-accent border-[var(--line)] bg-[var(--surface-2)] p-3 text-[13.5px] leading-relaxed">
         <Sparkles size={13} className="float-left mr-1.5 mt-0.5 text-accent" />
         {intro}
       </div>
-      <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-        <Pill label="What they do" body={hook?.whatTheyDo ?? data.profile.summary?.slice(0, 260) ?? "—"} />
-        {hook?.familiarProducts?.length ? (
-          <Pill label="Products you might know" body={
-            <ul className="list-disc pl-4 marker:text-accent">
-              {hook.familiarProducts.map((p, i) => <li key={i}>{p}</li>)}
-            </ul>
-          } />
-        ) : null}
-        {hook?.malaysiaTie && <Pill label="🇲🇾 Malaysia connection" body={hook.malaysiaTie} highlight />}
+
+      {/* WHAT THEY DO — always full-width so newbie gets the proper paragraph */}
+      <div className="mt-3 rounded-xl border border-[var(--line)] bg-[var(--surface-2)] p-3">
+        <div className="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">What they do</div>
+        <p className="mt-1 text-[12.5px] leading-relaxed">{whatTheyDo}</p>
+      </div>
+
+      {/* HOW THEY MAKE MONEY — only for curated stocks (high-value info) */}
+      {howTheyMakeMoney && (
+        <div className="mt-2 rounded-xl border border-l-4 border-l-success border-[var(--line)] bg-[var(--surface-2)] p-3">
+          <div className="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">💰 How they make money</div>
+          <p className="mt-1 text-[12.5px] leading-relaxed">{howTheyMakeMoney}</p>
+        </div>
+      )}
+
+      {/* WHY IT MOVES — share-price drivers */}
+      {hook?.whyItMoves?.length && (
+        <div className="mt-2 rounded-xl border border-l-4 border-l-warning border-[var(--line)] bg-[var(--surface-2)] p-3">
+          <div className="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">📈 What moves the share price</div>
+          <ul className="mt-1 space-y-1 text-[12.5px] leading-relaxed">
+            {hook.whyItMoves.map((w, i) => (
+              <li key={i} className="flex gap-2">
+                <span className="text-warning">•</span><span>{w}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* FAMILIAR PRODUCTS */}
+      {hook?.familiarProducts?.length ? (
+        <div className="mt-2 rounded-xl border border-[var(--line)] bg-[var(--surface-2)] p-3">
+          <div className="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Products you might know</div>
+          <ul className="mt-1 list-disc pl-5 text-[12.5px] leading-relaxed marker:text-accent">
+            {hook.familiarProducts.map((p, i) => <li key={i}>{p}</li>)}
+          </ul>
+        </div>
+      ) : null}
+
+      {/* MALAYSIA CONNECTION — explicit yes/no */}
+      {(hook?.malaysiaTie || hook?.noMalaysiaTie) && (
+        <div className={`mt-2 rounded-xl border border-l-4 p-3 ${hook?.malaysiaTie ? "border-l-warning border-[var(--line)] bg-[var(--surface-2)]" : "border-l-[var(--text-muted)] border-[var(--line)] bg-[var(--surface-2)]"}`}>
+          <div className="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">🇲🇾 Malaysia connection</div>
+          <p className="mt-1 text-[12.5px] leading-relaxed">
+            {hook?.malaysiaTie ?? "No direct Malaysian operations or business partnership that we've documented for this company."}
+          </p>
+        </div>
+      )}
+
+      {/* COMPANY FACTS — compact grid */}
+      <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+        {hook?.founded && (
+          <Pill label="Founded" body={<div className="flex items-center gap-1.5"><Calendar size={12} className="text-[var(--text-muted)]" />{hook.founded}</div>} />
+        )}
+        {hook?.listedSince && (
+          <Pill label="Listed since" body={<div className="flex items-center gap-1.5"><TrendingUp size={12} className="text-[var(--text-muted)]" />{hook.listedSince}</div>} />
+        )}
         <Pill label="Headquarters" body={
           <div className="flex items-center gap-1.5"><MapPin size={12} className="text-[var(--text-muted)]" /><span>{hq || "—"}</span></div>
         } />
@@ -263,6 +331,14 @@ function BackgroundCard({ data }: { data: Profile }) {
           } />
         )}
       </div>
+
+      {/* Friendly nudge for stocks without curated content so we can prioritise expansion */}
+      {!hook && (
+        <p className="mt-3 text-[10.5px] text-[var(--text-muted)]">
+          ℹ️ Detailed hook + Malaysia tie for this ticker not yet curated. The summary above comes from Yahoo Finance.
+          For deeper coverage on this name, request an addition to the stock-hook library.
+        </p>
+      )}
     </section>
   );
 }
