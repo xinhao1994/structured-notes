@@ -180,6 +180,9 @@ async function fetchQuoteSummary(sym: string): Promise<Record<string, any> | nul
   const modules = [
     "assetProfile", "summaryDetail", "defaultKeyStatistics",
     "financialData", "incomeStatementHistory", "earningsHistory", "price",
+    "recommendationTrend",   // analyst Buy / Hold / Sell distribution
+    "calendarEvents",         // next earnings date + estimates
+    "upgradeDowngradeHistory",// recent upgrades / downgrades
   ].join(",");
   const j = await yahooAuthedGet<YahooModuleResp>(`/v10/finance/quoteSummary/${encodeURIComponent(sym)}`, { modules });
   return j?.quoteSummary?.result?.[0] ?? null;
@@ -479,6 +482,43 @@ export async function GET(req: NextRequest) {
     earningsRows.reverse();
   }
 
+  // ─── Analyst recommendation distribution (last available trend snapshot) ───
+  const recTrend = qs?.recommendationTrend?.trend ?? [];
+  const latestRec = recTrend[0] ?? null;
+  const analystRec = latestRec ? {
+    period: latestRec.period ?? null,
+    strongBuy: latestRec.strongBuy ?? 0,
+    buy: latestRec.buy ?? 0,
+    hold: latestRec.hold ?? 0,
+    sell: latestRec.sell ?? 0,
+    strongSell: latestRec.strongSell ?? 0,
+  } : null;
+
+  // ─── Next earnings date + analyst revenue / EPS estimate range ───
+  const ce = qs?.calendarEvents ?? {};
+  const earningsDateRaw = ce.earnings?.earningsDate?.[0];
+  const nextEarnings = earningsDateRaw ? {
+    date: typeof earningsDateRaw === "number"
+      ? new Date(earningsDateRaw * 1000).toISOString().slice(0, 10)
+      : earningsDateRaw.fmt ?? null,
+    epsEstimate: pickNum(ce.earnings ?? {}, "earningsAverage"),
+    epsLow: pickNum(ce.earnings ?? {}, "earningsLow"),
+    epsHigh: pickNum(ce.earnings ?? {}, "earningsHigh"),
+    revenueEstimate: pickNum(ce.earnings ?? {}, "revenueAverage"),
+    revenueLow: pickNum(ce.earnings ?? {}, "revenueLow"),
+    revenueHigh: pickNum(ce.earnings ?? {}, "revenueHigh"),
+  } : null;
+
+  // ─── Recent upgrade/downgrade history (last 6) ───
+  const udh = qs?.upgradeDowngradeHistory?.history ?? [];
+  const upgrades = udh.slice(0, 6).map((u: any) => ({
+    firm: u.firm ?? null,
+    toGrade: u.toGrade ?? null,
+    fromGrade: u.fromGrade ?? null,
+    action: u.action ?? null,
+    date: typeof u.epochGradeDate === "number" ? new Date(u.epochGradeDate * 1000).toISOString().slice(0, 10) : null,
+  }));
+
   return new NextResponse(
     JSON.stringify({
       symbol: resolvedSymbol, market, sym: resolvedSym,
@@ -489,6 +529,9 @@ export async function GET(req: NextRequest) {
       income: incomeRows,
       earnings: earningsRows,
       priceHistory,
+      analystRec,
+      nextEarnings,
+      upgrades,
     }),
     {
       status: 200,
