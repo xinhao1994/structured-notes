@@ -113,5 +113,29 @@ Tenor: 9 months`;
   eq(parseTrancheText(make("7.6.26")).tranche.tradeDate, "2026-06-07", "D.M.YY: 7.6.26 -> 2026-06-07");
 }
 
+// 12. "Currency SGD" (no colon) should NOT be detected as ticker CURRENCY
+{
+  const txt = `MSI\nTranche code: TESTC1\nCurrency SGD\nMICRON US\nBROADCOM US\nTrade: 12 May 2026\nCoupon 8% pa\nTenor 12M\nStrike 100%\nKO 100% stepdown 4%\nEKI 60%`;
+  const { tranche } = parseTrancheText(txt);
+  ok(!tranche.underlyings.some(u => u.symbol === "CURRENCY"), "Currency SGD not parsed as ticker");
+  ok(tranche.underlyings.length === 2, "Currency SGD excluded — 2 real underlyings");
+}
+// 13. Max-3 underlyings cap with warning
+{
+  const txt = `MSI\nUSD\nTranche code: TESTC2\nNVDA\nAMZN\nMETA\nMRVL\nTrade: 12 May 2026\nCoupon 8% pa\nTenor 12M\nStrike 100%\nKO 100% stepdown 4%\nEKI 60%`;
+  const { tranche, warnings } = parseTrancheText(txt);
+  eq(tranche.underlyings.length, 3, "max-3 cap enforced");
+  ok(warnings.some(w => w.field === "underlyings" && /caps at 3/.test(w.message)), "warning emitted for >3 underlyings");
+  ok(!tranche.underlyings.some(u => u.symbol === "MRVL"), "4th underlying (MRVL) dropped");
+}
+// 14. Keycap-prefixed issuer: "1️⃣MSI" → issuer MSI, no phantom 1MSI ticker
+{
+  const txt = `1️⃣MSI\nUSD\nTranche code: TESTC3\nNVDA\nTrade: 12 May 2026\nCoupon 8% pa\nTenor 12M\nStrike 100%\nKO 100% stepdown 4%\nEKI 60%`;
+  const { tranche } = parseTrancheText(txt);
+  eq(tranche.issuer, "MSI", "keycap-prefixed MSI -> issuer MSI");
+  ok(!tranche.underlyings.some(u => u.symbol === "1MSI" || u.symbol === "MSI"), "no phantom 1MSI / MSI in underlyings");
+  eq(tranche.underlyings.length, 1, "single underlying (NVDA only)");
+}
+
 console.log(`\n${pass} passed · ${fail} failed`);
 process.exit(fail ? 1 : 0);

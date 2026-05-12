@@ -502,7 +502,17 @@ function extractTickers(text: string, exclude: Set<string>): Underlying[] {
 
   const out: Underlying[] = [];
   for (const raw of lines) {
-    if (/^(Strike|KO|Coupon|Tenor|EKI|Offering|Trade|Settlement|Tranche|MYR|USD|HKD|SGD|JPY|AUD)\b/i.test(raw)) continue;
+    // Field labels — never underlyings. Includes coupon/tenor synonyms
+    // (yield/interest/tenure), currency/code labels, and common header
+    // words that distributors put in product blurbs. This is the primary
+    // defence against parsing things like "Currency SGD" (no colon)
+    // as ticker CURRENCY listed on the SG market.
+    if (/^(Strike|KO|Coupon|Yield|Interest|Tenor|Tenure|EKI|Offering|Offer|Trade|Settlement|Tranche|Currency|Notional|Maturity|Underlyings?|Issuer|Bank|Type|Note|Notes|Reference|Ref|Product|MYR|USD|HKD|SGD|JPY|AUD)\b/i.test(raw)) continue;
+    // Multi-word "Label: value" lines (e.g. "Trade date:", "Initial
+    // fixing:", "Settlement details:"). Requires AT LEAST two
+    // whitespace-separated words before the colon, so plain ticker
+    // forms like "AAPL:" wouldn't accidentally match.
+    if (/^[A-Za-z]+\s+[A-Za-z]+\s*:/.test(raw)) continue;
 
     // Format A: "TICKER MARKET" or "TICKER MARKET (Company Name)"
     //   e.g. "TSM US", "0700 HK", "ASML US (ASML Holdings)"
@@ -653,12 +663,24 @@ export function parseTrancheText(input: string): ParseResult {
     warnings.push({ field: "currency", message: "Currency not found — defaulted to USD." });
   }
 
-  const underlyings = extractTickers(text, new Set([
+  let underlyings = extractTickers(text, new Set([
     issuer ?? "",
     trancheCode,
   ].filter(Boolean) as string[]));
   if (!underlyings.length) {
     warnings.push({ field: "underlyings", message: "No underlyings detected — please verify." });
+  }
+  // Bank's autocallable product offers 1–3 underlyings. If the parser
+  // surfaced more than 3, almost certainly one is a label/header that
+  // slipped through. Keep the first 3 and warn so the user can spot it.
+  const MAX_UNDERLYINGS = 3;
+  if (underlyings.length > MAX_UNDERLYINGS) {
+    const dropped = underlyings.slice(MAX_UNDERLYINGS).map((u) => u.rawName || u.symbol).join(", ");
+    warnings.push({
+      field: "underlyings",
+      message: `Detected ${underlyings.length} underlyings; product caps at ${MAX_UNDERLYINGS}. Kept the first ${MAX_UNDERLYINGS}, dropped: ${dropped}.`,
+    });
+    underlyings = underlyings.slice(0, MAX_UNDERLYINGS);
   }
 
   if (!tradeDate) {
