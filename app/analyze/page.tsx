@@ -18,7 +18,7 @@
 //
 // Every section has a Copy button (WhatsApp-ready), charts have PNG export.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   LineChart, Search, AlertTriangle, Copy, Check, Download,
@@ -83,7 +83,18 @@ interface Profile {
   upgrades: Array<{ firm: string | null; toGrade: string | null; fromGrade: string | null; action: string | null; date: string | null }>;
 }
 
+// Next 14 requires useSearchParams() to be inside a Suspense boundary at
+// build time — otherwise prerendering /analyze fails. Wrap the inner page
+// (which actually consumes the param) in <Suspense>.
 export default function AnalyzePage() {
+  return (
+    <Suspense fallback={<div className="card p-6 text-center text-[13px] text-[var(--text-muted)]">Loading analyze page...</div>}>
+      <AnalyzePageContent />
+    </Suspense>
+  );
+}
+
+function AnalyzePageContent() {
   // Read ?symbol=NVDA&market=US so deep links from Desk / Pocket land directly
   // on the right stock instead of always defaulting to NVDA.
   const searchParams = useSearchParams();
@@ -709,7 +720,6 @@ function PriceChartCard({ data }: { data: Profile }) {
   const first = series[0].c, last = series[series.length - 1].c;
   const totalReturn = ((last - first) / first) * 100;
   const wa = `📈 *${data.symbol} — 5-year price story*\n\nFrom ${data.snapshot.currency || ""} ${first.toFixed(2)} (${series[0].d}) → ${data.snapshot.currency || ""} ${last.toFixed(2)} (today). Total return: ${totalReturn >= 0 ? "+" : ""}${totalReturn.toFixed(0)}% over 5 years.`;
-
   return (
     <section className="card mb-3 p-4">
       <header className="mb-2 flex items-center justify-between">
@@ -757,10 +767,10 @@ function AnalystRecCard({ data }: { data: Profile }) {
   const total = r.strongBuy + r.buy + r.hold + r.sell + r.strongSell;
   if (total === 0) return null;
   const segments = [
-    { name: "Strong Buy", n: r.strongBuy, color: "#5FA77E" },     // deeper green
+    { name: "Strong Buy", n: r.strongBuy, color: "#5FA77E" },
     { name: "Buy", n: r.buy, color: PALETTE.pos },
     { name: "Hold", n: r.hold, color: PALETTE.warn },
-    { name: "Sell", n: r.sell, color: "#D88A82" },                // softer red
+    { name: "Sell", n: r.sell, color: "#D88A82" },
     { name: "Strong Sell", n: r.strongSell, color: PALETTE.neg },
   ];
   const bullish = r.strongBuy + r.buy;
@@ -768,10 +778,8 @@ function AnalystRecCard({ data }: { data: Profile }) {
   const verdict = bullish > bearish + r.hold ? "Strongly bullish" :
                   bullish > bearish ? "Mostly bullish" :
                   bearish > bullish ? "Cautious / bearish" : "Mixed views";
-
   const wa = `🎯 *${data.symbol} — Analyst sentiment* (${total} analysts)\n` +
     `Strong Buy: ${r.strongBuy} · Buy: ${r.buy} · Hold: ${r.hold} · Sell: ${r.sell} · Strong Sell: ${r.strongSell}\n\n*${verdict}* — ${bullish} bulls, ${bearish} bears.`;
-
   return (
     <section className="card mb-3 p-4">
       <header className="mb-2 flex items-center justify-between">
@@ -820,7 +828,6 @@ function NextEarningsCard({ data }: { data: Profile }) {
   const ccy = data.snapshot.currency || "";
   const daysAway = Math.round((new Date(e.date).getTime() - Date.now()) / 86400000);
   const wa = `📅 *${data.symbol} — Next catalyst*\nNext earnings: *${e.date}* (${daysAway >= 0 ? `in ${daysAway} days` : `${-daysAway} days ago`}).\nEPS estimate: ${e.epsEstimate?.toFixed(2) ?? "—"} (range ${e.epsLow?.toFixed(2) ?? "—"} to ${e.epsHigh?.toFixed(2) ?? "—"}).${e.revenueEstimate != null ? `\nRevenue estimate: ${ccy} ${fmtBigNum(e.revenueEstimate)}` : ""}\n\nA beat could push price up, a miss could trigger selloff. Watch this date.`;
-
   return (
     <section className="card mb-3 p-4">
       <header className="mb-2 flex items-center justify-between">
@@ -851,7 +858,6 @@ function UpgradesCard({ data }: { data: Profile }) {
   if (!data.upgrades || data.upgrades.length === 0) return null;
   const wa = `📰 *${data.symbol} — Recent analyst rating changes*\n` +
     data.upgrades.slice(0, 5).map(u => `${u.date}: ${u.firm} — ${u.action ?? "?"} from "${u.fromGrade ?? "—"}" to "${u.toGrade ?? "—"}"`).join("\n");
-
   return (
     <section className="card mb-3 p-4">
       <header className="mb-2 flex items-center justify-between">
@@ -1063,7 +1069,7 @@ function DownloadButton({ targetRef, filename }: { targetRef: React.RefObject<HT
         setBusy(true);
         try {
           const dataUrl = await htmlToImage.toPng(targetRef.current, {
-            backgroundColor: "#141824", // matches our soft tooltip background
+            backgroundColor: "#141824",
             pixelRatio: 2,
           });
           const a = document.createElement("a");
