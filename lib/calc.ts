@@ -218,6 +218,57 @@ export function clientCalc(t: Tranche, currency: Currency, principal: number): C
   };
 }
 
+// ─── Memorised (cumulative) knock-out ───────────────────────────────────────
+//
+// Many autocallable note variants offer a "memory" or "cumulative" KO feature:
+// each underlying's KO-barrier touches are remembered independently. Once a
+// stock closes at or above its KO price on any observation, it stays
+// "memorised" as touched for the rest of the schedule. The whole tranche
+// knocks out at observation N when EVERY underlying has been touched at
+// least once by N (not all on the same observation).
+//
+// Example with 3 underlyings A, B, C:
+//   Obs 1: A and B close ≥ KO, C closes below. → A & B memorised.
+//   Obs 5: A and B close BELOW KO again (doesn't matter — already memorised).
+//          C finally closes ≥ KO. → C memorised → all three touched →
+//          tranche knocks out at obs 5.
+export interface MemorisedKOResult {
+  /** For each underlying symbol, the obs # where it first touched (close ≥ KO),
+   *  or null if it has never touched any past observation. */
+  firstTouchedAt: Record<string, number | null>;
+  /** True when every underlying has been touched at least once. */
+  fullyMemorised: boolean;
+  /** Obs # at which the tranche is considered knocked out under memory rule —
+   *  the max of firstTouchedAt (i.e. when the LAST underlying first touched).
+   *  Null when not yet fully memorised. */
+  memorisedKOAtObs: number | null;
+}
+
+export function memorisedKOCheck(
+  t: Tranche,
+  closesByObs: Record<number, Record<string, { close: number }>>
+): MemorisedKOResult {
+  const sched = koSchedule(t);
+  const firstTouchedAt: Record<string, number | null> = {};
+  for (const u of t.underlyings) {
+    let firstObs: number | null = null;
+    for (const o of sched) {
+      const obsData = closesByObs[o.n];
+      const closePx = obsData?.[u.symbol]?.close;
+      const koPx = o.koPriceBySymbol[u.symbol];
+      if (closePx == null || koPx == null) continue;
+      if (closePx >= koPx) { firstObs = o.n; break; }
+    }
+    firstTouchedAt[u.symbol] = firstObs;
+  }
+  const touchedValues = Object.values(firstTouchedAt);
+  const fullyMemorised = touchedValues.length > 0 && touchedValues.every((v) => v != null);
+  const memorisedKOAtObs = fullyMemorised
+    ? Math.max(...(touchedValues as number[]))
+    : null;
+  return { firstTouchedAt, fullyMemorised, memorisedKOAtObs };
+}
+
 // ─── KO probability heuristic ────────────────────────────────────────────────
 /**
  * Lightweight KO-probability gauge for the dashboard. Not a Monte-Carlo —

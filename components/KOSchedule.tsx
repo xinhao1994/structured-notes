@@ -2,7 +2,7 @@
 
 import clsx from "clsx";
 import type { PriceQuote, Tranche } from "@/lib/types";
-import { koSchedule, formatPx } from "@/lib/calc";
+import { koSchedule, formatPx, memorisedKOCheck } from "@/lib/calc";
 import { useObservationCloses } from "@/lib/hooks/useObservationCloses";
 import { useDetectedKO } from "@/lib/hooks/useDetectedKO";
 
@@ -28,6 +28,19 @@ export function KOSchedule({ tranche, quotes }: Props) {
   // here — the per-row badges below recompute from `obsCloses` directly.
   // Mounting this hook is what triggers the side-effect write.
   useDetectedKO(tranche);
+
+  // Compute the memorised-KO state for past observations only.
+  // We use this to render per-underlying "memorised" markers + a "Memorised
+  // KO" badge on the observation where the last underlying finally touched.
+  const pastClosesOnly = (() => {
+    const out: Record<number, Record<string, { close: number }>> = {};
+    for (const o of sched) {
+      if (o.date >= today) continue;
+      if (obsCloses[o.n]) out[o.n] = obsCloses[o.n];
+    }
+    return out;
+  })();
+  const memo = memorisedKOCheck(tranche, pastClosesOnly);
 
   return (
     <section className="card mt-4 p-4">
@@ -108,12 +121,29 @@ export function KOSchedule({ tranche, quotes }: Props) {
                   <td className="tabular">{o.date}</td>
                   <td className="tabular font-medium">{(o.koPct * 100).toFixed(0)}%</td>
                   {showInitialFx &&
-                    perSym.map(({ u, koPx, delta, histClose }) => (
+                    perSym.map(({ u, koPx, delta, histClose }) => {
+                      // First-touched obs for this underlying — if it equals
+                      // the current row's obs number, this row is where the
+                      // memory was set. Show a "memorised" tag.
+                      const firstTouched = memo.firstTouchedAt[u.symbol];
+                      const memorisedAtThisRow = past && firstTouched === o.n;
+                      const memorisedEarlier = past && firstTouched != null && firstTouched < o.n;
+                      return (
                       <td key={u.symbol} className="tabular">
                         <div>{formatPx(koPx)}</div>
                         {past && histClose != null && (
                           <div className="text-[10px] text-[var(--text-muted)]">
                             close {formatPx(histClose)}
+                          </div>
+                        )}
+                        {memorisedAtThisRow && (
+                          <div className="mt-0.5 inline-block rounded-full bg-warning/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-warning">
+                            🔒 Touched & memorised
+                          </div>
+                        )}
+                        {memorisedEarlier && (
+                          <div className="mt-0.5 inline-block rounded-full bg-[var(--surface)] px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-[var(--text-muted)]" title={`Already memorised from obs #${firstTouched}`}>
+                            ✓ Memorised (obs #{firstTouched})
                           </div>
                         )}
                         {delta != null && (
@@ -136,9 +166,14 @@ export function KOSchedule({ tranche, quotes }: Props) {
                           </div>
                         )}
                       </td>
-                    ))}
+                      );
+                    })}
                   <td>
-                    {past ? (
+                    {past && memo.memorisedKOAtObs === o.n ? (
+                      <span className="badge safe" title="All underlyings have now been memorised as touched — tranche knocked out under the memory rule.">
+                        🔒 Memorised KO
+                      </span>
+                    ) : past ? (
                       allResolvedPast && worst && worst.delta >= 0 ? (
                         <span className="badge safe" title={`Worst-of (${worst.u.symbol}) closed at/above the KO trigger on ${o.date}.`}>
                           Knocked out
@@ -186,11 +221,16 @@ export function KOSchedule({ tranche, quotes }: Props) {
         </table>
       </div>
 
-      <p className="mt-2 text-[10.5px] text-[var(--text-muted)]">
+      <p className="mt-2 text-[10.5px] text-[var(--text-muted)] leading-relaxed">
         Past observations use the OFFICIAL close on the obs date in each underlying&apos;s home session
         (US session for US stocks, HK session for HK stocks, etc.) — intraday dips don&apos;t trigger KO. Future
-        observations show live spot as a &quot;would-KO&quot; indicator. Autocall fires only when ALL
-        underlyings closed at or above their KO levels on the obs date.
+        observations show live spot as a &quot;would-KO&quot; indicator.
+        <br /><br />
+        <strong>🔒 Memorised KO rule:</strong> each underlying remembers its first close above KO. Even if it
+        later falls back below, it stays &ldquo;touched&rdquo;. The tranche knocks out at the observation where the
+        LAST underlying finally touches — so partial touches across different observations still add up to a
+        full KO. &ldquo;Touched &amp; memorised&rdquo; is the first time a stock crosses; &ldquo;Memorised
+        (obs #N)&rdquo; means it was already locked-in from an earlier obs.
       </p>
     </section>
   );

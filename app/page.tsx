@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { DailyObsBanner } from "@/components/DailyObsBanner";
 import { ProductParser } from "@/components/ProductParser";
 import { ProductTable } from "@/components/ProductTable";
 import { Dashboard } from "@/components/Dashboard";
@@ -99,6 +100,11 @@ export default function HomePage() {
 
   return (
     <>
+      {/* Daily KO observation alert — shown at the very top so the user sees
+          it the moment they open the app. Reads Pocket and surfaces any
+          observations falling on today's Malaysia date. */}
+      <DailyObsBanner />
+
       <ProductParser onParsed={handleParsed} />
 
       {parsed?.warnings.length ? (

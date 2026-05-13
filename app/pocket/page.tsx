@@ -10,6 +10,7 @@ import {
 import {
   listPocket, removePocket, togglePin, updateTrancheFields, savePocket, type PocketEntry,
 } from "@/lib/storage";
+import { DailyObsBanner, EnableDailyAlertsButton } from "@/components/DailyObsBanner";
 import { useQuotes } from "@/lib/hooks/useQuotes";
 import { assessRisk, currentKoLevel, formatPx } from "@/lib/calc";
 import type { Currency, MarketCode, RiskBand } from "@/lib/types";
@@ -175,6 +176,11 @@ export default function PocketPage() {
           <button onClick={refresh} className="underline">refresh</button>
         </div>
       </header>
+
+      {/* Daily KO observation alert + (when not yet granted) a one-tap
+          button to enable notifications. */}
+      <DailyObsBanner />
+      <div className="mb-3"><EnableDailyAlertsButton /></div>
 
       {/* Backup / restore controls — interim until cloud sync (Supabase auth +
           Google login + biometric) is wired. Lets the user survive a browser

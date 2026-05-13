@@ -24,7 +24,7 @@
 
 import { useEffect, useState } from "react";
 import type { Tranche } from "../types";
-import { koSchedule } from "../calc";
+import { koSchedule, memorisedKOCheck } from "../calc";
 import { setKnockedOutByTranche, getKnockedOutByTranche } from "../storage";
 import { useObservationCloses } from "./useObservationCloses";
 
@@ -53,7 +53,10 @@ export function useDetectedKO(tranche: Tranche | null): {
     if (pending) return;             // wait for historical closes
     const sched = koSchedule(tranche);
     const today = new Date().toISOString().slice(0, 10);
-    let d: number | null = null;
+
+    // ─── Path 1: Same-obs KO (classic worst-of rule) ───
+    // Latest past observation where worst-of close ≥ KO on THAT obs.
+    let sameObsKO: number | null = null;
     for (const o of sched) {
       if (o.date >= today) break;
       const obsData = closes[o.n];
@@ -67,10 +70,28 @@ export function useDetectedKO(tranche: Tranche | null): {
         const cushion = ((hist - koPx) / koPx) * 100;
         if (worstCushion == null || cushion < worstCushion) worstCushion = cushion;
       }
-      // Confirmed KO only when we have closes for ALL underlyings AND
-      // the worst-of's close was at/above the KO trigger.
-      if (allResolved && worstCushion != null && worstCushion >= 0) d = o.n;
+      if (allResolved && worstCushion != null && worstCushion >= 0) sameObsKO = o.n;
     }
+
+    // ─── Path 2: Memorised KO (cumulative rule) ───
+    // Only consider PAST observations — pass a filtered closes dict so
+    // the helper doesn't accidentally count today / future obs.
+    const pastCloses: Record<number, Record<string, { close: number }>> = {};
+    for (const o of sched) {
+      if (o.date >= today) continue;
+      if (closes[o.n]) pastCloses[o.n] = closes[o.n];
+    }
+    const memo = memorisedKOCheck(tranche, pastCloses);
+
+    // The note is considered KO'd if EITHER rule fires. Use whichever
+    // observation triggered first (earlier obs = earlier KO).
+    let d: number | null = null;
+    if (sameObsKO != null && memo.memorisedKOAtObs != null) {
+      d = Math.min(sameObsKO, memo.memorisedKOAtObs);
+    } else {
+      d = sameObsKO ?? memo.memorisedKOAtObs;
+    }
+
     setDetected(d);
     setKnockedOutByTranche(tranche.trancheCode, d);
     // eslint-disable-next-line react-hooks/exhaustive-deps
