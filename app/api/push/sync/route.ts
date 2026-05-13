@@ -22,13 +22,18 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "endpoint + pocket required" }, { status: 400 });
   }
 
-  const { error, count } = await supa
+  // .select() returns the affected rows so we can verify the endpoint
+  // existed before reporting success. Avoids supabase-js v2's typed
+  // count+head overload, which TS resolves inconsistently across versions.
+  const { error, data } = await supa
     .from("push_subscriptions")
     .update({ pocket_tranches: body.pocket })
     .eq("endpoint", body.endpoint)
-    .select("id", { count: "exact", head: true });
+    .select("id");
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  if (!count) return NextResponse.json({ error: "subscription not found" }, { status: 404 });
-  return NextResponse.json({ ok: true, count });
+  if (!data || data.length === 0) {
+    return NextResponse.json({ error: "subscription not found" }, { status: 404 });
+  }
+  return NextResponse.json({ ok: true, count: data.length });
 }
