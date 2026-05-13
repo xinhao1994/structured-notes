@@ -12,6 +12,8 @@ export interface StockHook {
   familiarProducts: string[];
   whyItMoves?: string[];
   malaysiaTie?: string;
+  /** Main listed competitors (ticker symbols). Used by the Compare button. */
+  competitors?: string[];
   noMalaysiaTie?: boolean;
 }
 
@@ -25,6 +27,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["SanDisk pen drives", "SD / micro-SD cards", "Cruzer & iXpand USB drives", "SSDs for laptops", "Memory for AI data centres"],
     whyItMoves: ["NAND flash prices \u2014 when memory is in shortage, profits jump", "AI server demand for high-capacity storage", "Smartphone & PC sales cycles"],
     malaysiaTie: "Western Digital (SanDisk's former parent) operates a major hard-drive plant in Petaling Jaya \u2014 many of the drives Malaysians buy were partly built locally.",
+    competitors: ["WDC", "MU"],
   },
   WDC: {
     hook: "If you bought an external hard disk at Lowyat Plaza in the last 15 years, there's a good chance it was a Western Digital.",
@@ -35,6 +38,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["WD My Passport portable HDD", "WD Blue / Black / Red internal drives", "WD SSDs", "Storage for AWS, Azure, Google Cloud"],
     whyItMoves: ["Cloud-provider capex cycles", "HDD price levels", "AI demand for cheap mass storage"],
     malaysiaTie: "WD runs a massive HDD assembly plant in Petaling Jaya. One of Selangor's biggest tech employers.",
+    competitors: ["MU", "SNDK"],
   },
   MU: {
     hook: "Inside every laptop, phone, and AI server is a memory chip. Micron is one of only three companies in the world that make them (the others are Samsung and SK Hynix).",
@@ -45,6 +49,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Crucial-brand consumer SSDs / RAM", "Memory inside iPhones, Galaxy phones", "HBM stacks inside Nvidia H100/B200 AI chips"],
     whyItMoves: ["Memory price cycles (DRAM and NAND)", "AI server demand for HBM", "Smartphone shipment trends"],
     malaysiaTie: "Micron has a back-end memory assembly & test facility in Penang Bayan Lepas \u2014 one of their key SEA operations.",
+    competitors: ["WDC", "SNDK", "AMD"],
   },
   NVDA: {
     hook: "If you have ever seen 'GeForce' on a gaming laptop or heard 'AI chips' in the news \u2014 that is Nvidia.",
@@ -55,6 +60,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["GeForce RTX gaming graphics cards", "Switch console chip (custom)", "Data-centre AI chips (H100, B200)", "Nvidia DRIVE for self-driving cars"],
     whyItMoves: ["AI capex spending from Big Tech (Meta, Microsoft, Google)", "Quarterly earnings \u2014 they regularly beat by huge margins", "Geopolitics \u2014 export bans to China hurt revenue"],
     malaysiaTie: "Nvidia partners with YTL Power to build a 100 MW AI data centre in Kulai, Johor \u2014 one of the biggest Nvidia GPU deployments in Southeast Asia.",
+    competitors: ["AMD", "INTC", "AVGO", "QCOM", "MRVL"],
   },
   AMD: {
     hook: "AMD is the cheaper, fast-rising rival to Intel \u2014 the chips inside gaming PCs, PS5, Xbox, and now AI servers.",
@@ -65,6 +71,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Ryzen CPUs in laptops/desktops", "EPYC server processors", "PS5 and Xbox Series X chips", "Instinct AI accelerators"],
     whyItMoves: ["PC market cycle", "AI server share vs Nvidia", "Console refresh cycles"],
     malaysiaTie: "AMD has a major chip design + test facility in Penang Bayan Lepas. Hundreds of Malaysian engineers work there.",
+    competitors: ["NVDA", "INTC", "AVGO", "QCOM"],
   },
   INTC: {
     hook: "The 'Intel Inside' sticker on every old laptop. Intel was the king of chips \u2014 now they're fighting to stay relevant in the AI era.",
@@ -75,6 +82,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Intel Core i3 / i5 / i7 / i9 in laptops", "Xeon server processors", "Intel Arc graphics"],
     whyItMoves: ["Whether their new manufacturing process (Intel 18A) works", "AI chip share vs Nvidia/AMD", "Foundry business signing major clients"],
     malaysiaTie: "Intel has its largest assembly & test plant outside the US in Kulim, Kedah \u2014 operating since 1972. One of Malaysia's oldest American tech employers.",
+    competitors: ["NVDA", "AMD", "TSM", "AVGO"],
   },
   AVGO: {
     hook: "You may never have heard of Broadcom, but every WiFi router, every iPhone, and most data-centre switches contain their chips.",
@@ -85,6 +93,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["WiFi chips in iPhones + Android phones", "Set-top box chips for Astro/Unifi TV", "Custom AI chips for Google TPUs", "VMware enterprise software"],
     whyItMoves: ["AI custom-chip orders from Google/Meta", "iPhone cycle (they're an Apple supplier)", "VMware enterprise software renewals"],
     malaysiaTie: "Broadcom has design + back-end ops in Penang Bayan Lepas. Many Malaysians work as RF / chip engineers there.",
+    competitors: ["NVDA", "MRVL", "QCOM", "INTC", "CSCO"],
   },
   MRVL: {
     hook: "Marvell makes the connectors that move your data inside the cloud at lightning speed. Without them, AI training would crawl.",
@@ -95,6 +104,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["5G base-station chips (Verizon, AT&T)", "Storage controllers in enterprise SSDs", "Optical chips inside Meta/Google AI clusters"],
     whyItMoves: ["AI capex cycle (data-centre interconnect)", "5G rollout pace globally", "Custom-silicon wins with hyperscalers"],
     noMalaysiaTie: true,
+    competitors: ["AVGO", "QCOM", "MU", "NVDA"],
   },
   QCOM: {
     hook: "Almost every Android phone in Malaysia uses a Qualcomm Snapdragon chip \u2014 and they collect royalties on every 5G call you make.",
@@ -105,6 +115,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Snapdragon chips in Samsung Galaxy, Xiaomi, OPPO, Vivo phones", "5G modems in iPhones", "Snapdragon X-series laptop chips"],
     whyItMoves: ["Smartphone market growth", "Whether Apple switches its modem in-house", "Auto chip wins (Snapdragon Digital Chassis)"],
     noMalaysiaTie: true,
+    competitors: ["AVGO", "MRVL", "NVDA", "AMD"],
   },
   TSM: {
     hook: "Apple, Nvidia, AMD all design chips. TSMC is the one Taiwanese company that actually makes them \u2014 they're the world's chip factory.",
@@ -115,6 +126,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Manufactures Apple A18 / M4 chips", "Manufactures Nvidia H100 / B200 AI chips", "Manufactures AMD Ryzen / Threadripper"],
     whyItMoves: ["Apple iPhone cycle", "AI capex cycle from Nvidia customers", "Taiwan-China geopolitical tensions"],
     malaysiaTie: "TSMC's customers (Apple, Nvidia) test/package some chips at OSAT plants in Penang (UTAC, ASE). TSMC itself is Taiwan-only.",
+    competitors: ["INTC", "ASML", "AMAT", "LRCX"],
   },
   ASML: {
     hook: "You can't make modern chips without ASML. They're the only company in the world that builds the ultra-advanced EUV lithography machines.",
@@ -125,6 +137,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["EUV machines used by TSMC, Samsung, Intel", "DUV machines for mature-node chip fabs"],
     whyItMoves: ["Chip-industry capex cycle (foundries buying machines)", "US export controls \u2014 restricts sales to China", "Backlog growth/shrink"],
     noMalaysiaTie: true,
+    competitors: ["AMAT", "LRCX", "TSM"],
   },
   AAPL: {
     hook: "iPhone in your pocket, AirPods in your ears, MacBook on your desk \u2014 Apple is the most familiar tech name in Malaysia.",
@@ -135,6 +148,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["iPhone", "iPad", "MacBook", "AirPods", "Apple Watch", "Apple TV+ / Music / Pay"],
     whyItMoves: ["iPhone unit sales cycle", "Services growth (App Store)", "China demand (Apple's #2 market)"],
     malaysiaTie: "Apple suppliers Foxconn, Pegatron, and Inventec have factories in Malaysia (Johor, Penang) producing accessories and components.",
+    competitors: ["MSFT", "GOOGL", "AMZN", "META"],
   },
   MSFT: {
     hook: "Every office computer you have ever used probably ran Windows and Microsoft Office. That's Microsoft. But the new growth story is Azure cloud and AI.",
@@ -145,6 +159,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Windows", "Microsoft 365 (Word, Excel, Teams)", "Xbox", "LinkedIn", "Azure cloud + Copilot AI"],
     whyItMoves: ["Azure growth rate (vs AWS, Google Cloud)", "Copilot AI adoption inside enterprises", "Office 365 seat counts"],
     malaysiaTie: "Microsoft committed USD 2.2 billion to open Malaysia data centres + train 200k Malaysians in AI \u2014 announced May 2024.",
+    competitors: ["GOOGL", "AAPL", "AMZN", "ORCL", "CRM"],
   },
   GOOGL: {
     hook: "Google search, YouTube, Gmail, Google Maps \u2014 you use them every single day without thinking about it. Alphabet is the company behind all of them.",
@@ -155,6 +170,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Google Search", "YouTube", "Gmail", "Google Maps", "Android phones", "Google Cloud", "Pixel phones"],
     whyItMoves: ["Search ad market (faces ChatGPT competition)", "YouTube ad revenue & subscriptions", "Cloud growth vs AWS/Azure"],
     noMalaysiaTie: true,
+    competitors: ["META", "MSFT", "AAPL", "AMZN"],
   },
   META: {
     hook: "Facebook, Instagram, WhatsApp \u2014 if you message your friends or scroll Reels at night, you are inside Meta's ecosystem.",
@@ -165,6 +181,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Facebook", "Instagram", "WhatsApp (used by every Malaysian)", "Threads", "Quest VR headsets", "Ray-Ban Meta smart glasses"],
     whyItMoves: ["Ad revenue growth (Reels + AI targeting)", "Reality Labs (VR) losses \u2014 how big they get", "Regulatory action in EU / US"],
     malaysiaTie: "Meta confirmed plans for a Malaysia data centre in Johor in 2024, and runs a regional engineering presence in Singapore that supports Malaysian users.",
+    competitors: ["GOOGL", "NFLX", "AAPL", "AMZN"],
   },
   AMZN: {
     hook: "If you have ever streamed a movie on Prime Video, or your friend shopped on Amazon US \u2014 they made the box. But the real money is the cloud behind almost every app on your phone.",
@@ -175,6 +192,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Amazon.com shopping", "Prime Video", "Alexa / Echo speakers", "Kindle e-readers", "AWS cloud (behind your favourite apps)"],
     whyItMoves: ["AWS growth rate (currently re-accelerating)", "Retail margins improving", "Ad revenue growth"],
     malaysiaTie: "AWS opened its Malaysia Region (Selangor data centres) in 2024 \u2014 a USD 6 billion local investment over 15 years.",
+    competitors: ["MSFT", "GOOGL", "WMT", "COST", "AAPL"],
   },
   TSLA: {
     hook: "Even if you have never seen a Tesla on Malaysian roads, you have heard about Elon Musk. Tesla is the EV brand the world watches.",
@@ -185,6 +203,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Model Y SUV", "Model 3 sedan", "Cybertruck", "Tesla Powerwall home battery", "Solar Roof"],
     whyItMoves: ["EV demand vs Chinese rivals (BYD, NIO)", "FSD / robotaxi progress", "Elon Musk headlines"],
     malaysiaTie: "Tesla opened its first Malaysian showroom in Bandar Utama in 2024. Some Model Y units sold in Malaysia are imported via Tesla Singapore.",
+    competitors: ["NVDA"],
   },
   NFLX: {
     hook: "Late-night Netflix and chill \u2014 they have changed how you watch TV. Every Malaysian household has a subscription now.",
@@ -195,6 +214,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Netflix streaming", "Squid Game (Korean original)", "Stranger Things", "Money Heist (La Casa de Papel)"],
     whyItMoves: ["Subscriber additions (especially in Asia)", "Password-sharing crackdown impact", "Content slate hits/misses"],
     noMalaysiaTie: true,
+    competitors: ["DIS", "META", "AMZN"],
   },
   NOW: {
     hook: "If you have ever filed a 'helpdesk ticket' at work \u2014 to fix a broken laptop, reset a password, or get IT help \u2014 there's a very good chance it was on ServiceNow. They're the boring-but-essential plumbing of corporate IT.",
@@ -205,6 +225,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["IT helpdesk software at major Malaysian banks (Maybank, CIMB, Public Bank all use it)", "HR self-service portals at MNCs", "Workflow automation in government agencies"],
     whyItMoves: ["Enterprise software spend cycle", "AI features (NowAssist) driving more subscription value", "New customer wins from older competitors like SAP/Oracle"],
     malaysiaTie: "ServiceNow has a Malaysian office in KL and is widely deployed by Malaysian banks and telcos (Maybank, CIMB, Petronas, Astro, etc.) for their IT operations.",
+    competitors: ["CRM", "ORCL", "WDAY", "ADBE", "MSFT"],
   },
   CRM: {
     hook: "If you have ever been called by a bank or insurance agent who 'has all your details on screen', they're probably using Salesforce.",
@@ -215,6 +236,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Salesforce CRM (used by Maybank, AmBank, AIA, Allianz Malaysia)", "Slack messaging", "Tableau analytics", "MuleSoft integration"],
     whyItMoves: ["Enterprise IT spending", "AI agent (Agentforce) adoption", "Operating margin improvement"],
     malaysiaTie: "Salesforce has a Malaysian office in KL and is the CRM behind Maybank, AmBank, AIA Malaysia, Allianz Malaysia, and many other big local players.",
+    competitors: ["NOW", "ORCL", "ADBE", "MSFT", "WDAY"],
   },
   ORCL: {
     hook: "Every big company keeps its data in a database. Oracle was the king of databases for 40 years \u2014 and now they're a fast-growing cloud + AI infrastructure player.",
@@ -225,6 +247,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Oracle Database (runs most Malaysian banks' core systems)", "Oracle ERP / HCM", "Oracle Cloud Infrastructure"],
     whyItMoves: ["Cloud revenue growth (OCI vs AWS/Azure)", "AI infrastructure deals (Nvidia, OpenAI partnerships)", "Database renewal pricing"],
     malaysiaTie: "Oracle has a Malaysian office in KL and its database is the backbone of Maybank, CIMB, Bank Islam, and most Malaysian government systems.",
+    competitors: ["MSFT", "CRM", "NOW", "IBM", "AMZN"],
   },
   ADBE: {
     hook: "If you have ever opened a PDF or seen 'Photoshop' on a designer's screen, you're using Adobe.",
@@ -235,6 +258,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Photoshop, Illustrator, Premiere (used by every Malaysian designer/marketer)", "Acrobat Reader / PDFs", "Adobe Express"],
     whyItMoves: ["AI features (Firefly) \u2014 defence vs Midjourney, ChatGPT image gen", "Subscription pricing power", "Creative Cloud subscriber count"],
     malaysiaTie: "Adobe has a regional Singapore office serving Malaysia. Adobe Creative Cloud is the standard at Malaysian design studios, agencies, and universities.",
+    competitors: ["CRM", "MSFT", "ORCL", "NOW"],
   },
   IBM: {
     hook: "IBM was the original computing giant \u2014 they built the IBM PC, mainframes, and decades of corporate IT. Today they're betting on AI and hybrid cloud.",
@@ -245,6 +269,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["IBM mainframes (runs most Malaysian banks' core)", "Red Hat Enterprise Linux", "watsonx AI platform", "IBM Consulting"],
     whyItMoves: ["Consulting growth (vs Accenture)", "Red Hat / hybrid cloud adoption", "watsonx AI traction with enterprises"],
     malaysiaTie: "IBM Malaysia is one of the oldest American tech operations here (since 1961). Maintains Cyberjaya campus + serves nearly all Malaysian banks.",
+    competitors: ["MSFT", "ORCL", "CSCO"],
   },
   CSCO: {
     hook: "Every WiFi network at an office or airport probably runs on Cisco gear. Routers, switches, video calls (Webex) \u2014 they wire the corporate internet.",
@@ -255,6 +280,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Cisco routers / switches (in every Malaysian office)", "Webex video conferencing", "Splunk cybersecurity", "Meraki WiFi"],
     whyItMoves: ["Enterprise IT capex cycle", "Splunk integration progress", "AI data-centre networking demand"],
     malaysiaTie: "Cisco has been in Malaysia since 1995 with a regional office in KL. Cisco gear is in most Malaysian banks, government departments, and ISPs.",
+    competitors: ["ANET", "PANW", "CRWD", "AVGO"],
   },
   SNOW: {
     hook: "Companies generate huge amounts of data. Snowflake is the cloud warehouse where they put it all \u2014 and Wall Street loved them.",
@@ -265,6 +291,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Snowflake Data Cloud (used by some Malaysian banks, fintechs, telcos for analytics)"],
     whyItMoves: ["Consumption growth (customers using more)", "Net retention rate (existing customers spending more)", "AI features (Cortex) driving incremental usage"],
     noMalaysiaTie: true,
+    competitors: ["ORCL", "MSFT", "GOOGL"],
   },
   PLTR: {
     hook: "Palantir helps governments and big companies make sense of massive data \u2014 including counter-terrorism agencies, the US military, and large corporates.",
@@ -275,6 +302,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Foundry (commercial \u2014 used by airlines, automakers)", "Gotham (defence \u2014 US military, intelligence)", "AIP (AI platform for enterprises)"],
     whyItMoves: ["US defence budget", "Commercial customer wins", "AIP (AI) revenue acceleration"],
     noMalaysiaTie: true,
+    competitors: ["NOW", "CRM", "ORCL", "MSFT", "SNOW"],
   },
   V: {
     hook: "Every time you tap your card on a debit reader, swipe it abroad, or use Apple/Google Pay \u2014 Visa takes a tiny cut.",
@@ -285,6 +313,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Visa cards (Maybank, CIMB, HSBC, Public Bank issue them locally)", "Apple Pay / Google Pay transactions", "Cross-border payments"],
     whyItMoves: ["Global consumer spending", "Cross-border travel volumes", "Cash-to-card shift in emerging markets"],
     malaysiaTie: "Visa has a Malaysian office in KL. Most Malaysian credit/debit cards (Maybank, CIMB, HSBC, etc.) run on the Visa network.",
+    competitors: ["MA", "PYPL"],
   },
   MA: {
     hook: "Visa's twin. Every time you use a Mastercard, they take their cut. Smaller than Visa but growing slightly faster.",
@@ -295,6 +324,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Mastercard credit/debit cards", "Maestro debit", "Mastercard contactless payments"],
     whyItMoves: ["Global consumer spending", "Cross-border travel", "Value-added services growth (faster than transaction fees)"],
     malaysiaTie: "Mastercard has an office in KL. Most Malaysian banks issue both Visa and Mastercard.",
+    competitors: ["V", "PYPL"],
   },
   JPM: {
     hook: "The biggest US bank by market cap. If you have ever heard of 'Wall Street', JPMorgan is at the centre of it.",
@@ -305,6 +335,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Chase consumer banking", "JPMorgan Private Bank (wealth management)", "Investment banking advisory"],
     whyItMoves: ["US interest rates (higher rates = more net interest income)", "Investment banking deal volumes", "Loan loss provisions during recessions"],
     noMalaysiaTie: true,
+    competitors: ["BAC", "GS", "MS", "WFC"],
   },
   WMT: {
     hook: "Walmart is the world's biggest retailer \u2014 like a giant Tesco or AEON, but US-focused. Cheap groceries, everyday essentials, and increasingly e-commerce.",
@@ -315,6 +346,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Walmart stores (US)", "Sam's Club", "Walmart+ membership", "Walmart.com"],
     whyItMoves: ["US consumer spending", "E-commerce growth", "Margin expansion from ads + membership"],
     noMalaysiaTie: true,
+    competitors: ["COST", "AMZN"],
   },
   COST: {
     hook: "Costco is the warehouse-club chain \u2014 you pay an annual membership for access to bulk groceries, electronics, and even gold bars at near-cost prices.",
@@ -325,6 +357,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Costco warehouse stores", "Kirkland Signature private label", "Costco gas stations"],
     whyItMoves: ["Membership renewal rate + fee increases", "Same-store sales growth", "International expansion (no Malaysia yet)"],
     noMalaysiaTie: true,
+    competitors: ["WMT", "AMZN"],
   },
   KO: {
     hook: "Coca-Cola \u2014 the most recognised brand on Earth. From mamak stalls to KLCC restaurants, every Malaysian has had a Coke.",
@@ -335,6 +368,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Coca-Cola", "Sprite", "Fanta", "Minute Maid", "Powerade", "Schweppes (in some markets)"],
     whyItMoves: ["Global volume growth (especially emerging markets)", "Pricing power", "FX (US dollar strength hurts overseas profits)"],
     malaysiaTie: "Coca-Cola Bottlers (Malaysia) operates plants in Selangor + Sabah. Famously a long-time partner of many Malaysian restaurants and 7-Eleven.",
+    competitors: ["PEP"],
   },
   MCD: {
     hook: "McDonald's \u2014 every Malaysian kid's first fast-food memory. Big Mac, McChicken, McSpicy.",
@@ -345,6 +379,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Big Mac, McChicken, McSpicy", "McD Breakfast (Sausage McMuffin)", "McCaf\u00e9"],
     whyItMoves: ["Same-store sales growth globally", "Menu pricing power vs inflation", "Geopolitical / boycott risks (e.g. Middle East protests)"],
     malaysiaTie: "McDonald's Malaysia is operated by Gerbang Alaf Restaurants (owned by Saudi-linked Lionhorn). Over 300 stores across Malaysia.",
+    competitors: ["SBUX"],
   },
   SBUX: {
     hook: "Starbucks \u2014 premium coffee chain. Once a luxury, now a daily routine for many urban Malaysians.",
@@ -355,6 +390,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Frappuccino", "Pumpkin Spice Latte", "Starbucks Rewards", "Tumblers / merchandise"],
     whyItMoves: ["Same-store sales (especially China market)", "Margin expansion via app & rewards", "Coffee bean cost"],
     malaysiaTie: "Starbucks Malaysia is operated by Berjaya Food (BJFOOD on Bursa). Over 380 stores across Malaysia.",
+    competitors: ["MCD"],
   },
   DIS: {
     hook: "Disney \u2014 Mickey Mouse, Marvel, Star Wars, Pixar, ESPN, and Hulu. They own most of the world's beloved characters.",
@@ -365,6 +401,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Disneyland / Disney World / Disney Cruise", "Marvel + Star Wars movies", "Disney+ streaming", "ESPN sports"],
     whyItMoves: ["Disney+ subscriber growth + ARPU", "Theme park attendance", "Box-office hits/misses"],
     noMalaysiaTie: true,
+    competitors: ["NFLX", "META", "AAPL"],
   },
   LLY: {
     hook: "Eli Lilly makes Mounjaro and Zepbound \u2014 the latest blockbuster weight-loss / diabetes drugs that have taken the world by storm.",
@@ -375,6 +412,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Mounjaro / Zepbound (GLP-1 weight-loss + diabetes)", "Verzenio (breast cancer)", "Trulicity (diabetes)"],
     whyItMoves: ["GLP-1 drug demand + supply (still rationed)", "Insurance coverage for weight-loss drugs", "Novo Nordisk (rival Ozempic maker) competition"],
     noMalaysiaTie: true,
+    competitors: ["PFE", "MRK", "ABBV", "JNJ"],
   },
   UNH: {
     hook: "UnitedHealth is the largest US health insurer \u2014 they cover ~50 million Americans and own a vast medical-services business too.",
@@ -385,6 +423,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["UnitedHealthcare insurance plans", "Optum Rx pharmacy benefits", "Optum Care clinics"],
     whyItMoves: ["US healthcare cost trends", "Medicare Advantage policies", "Optum growth"],
     noMalaysiaTie: true,
+    competitors: ["LLY", "PFE"],
   },
   ANET: {
     hook: "Cloud companies need fast switches to connect their AI servers. Arista is the company that built the high-speed switch business that AWS, Microsoft, and Meta use.",
@@ -395,6 +434,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Arista 7000 / 7800 data-centre switches", "EOS network operating system", "CloudVision management software"],
     whyItMoves: ["AI data-centre buildout (more switches per cluster)", "Customer concentration risk (Microsoft + Meta = ~40%)", "Cisco competition in enterprise"],
     noMalaysiaTie: true,
+    competitors: ["CSCO", "AVGO"],
   },
   APH: {
     hook: "Amphenol makes the connectors and cables inside almost every electronic device \u2014 smartphones, cars, jet engines, AI servers. Boring but everywhere.",
@@ -415,6 +455,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Endura PVD deposition systems", "Producer CVD systems", "Centura etch systems"],
     whyItMoves: ["Chip-industry capex cycle", "China demand (US export restrictions hurt)", "Service-contract growth"],
     malaysiaTie: "Applied Materials has a manufacturing & R&D site in Penang, opened in 2018 to serve the regional chip industry.",
+    competitors: ["LRCX", "ASML"],
   },
   LRCX: {
     hook: "Lam Research is the king of chip etching \u2014 the process that carves circuits onto silicon wafers. Together with AMAT and ASML, they're the trio that enables every chip.",
@@ -425,6 +466,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Kiyo etch systems", "ALTUS deposition systems", "VECTOR ALD systems"],
     whyItMoves: ["Memory chip capex cycle (Samsung, SK Hynix, Micron)", "HBM demand from AI chip makers", "China sales restrictions"],
     noMalaysiaTie: true,
+    competitors: ["AMAT", "ASML"],
   },
   ABNB: {
     hook: "Airbnb \u2014 the homestay platform that changed how Malaysians travel. From Tokyo apartments to Penang heritage shophouses.",
@@ -445,6 +487,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Shopify store builder", "Shop Pay checkout", "Shopify POS for retail"],
     whyItMoves: ["E-commerce growth", "Take-rate on payments", "Merchant churn"],
     malaysiaTie: "Many Malaysian D2C brands run on Shopify. They have a regional office in Singapore serving Malaysia.",
+    competitors: ["AMZN"],
   },
   UBER: {
     hook: "Uber \u2014 the ride-hailing app that changed how the world gets around. In Malaysia, they sold to Grab in 2018 but still huge globally.",
@@ -465,6 +508,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["PayPal checkout", "Venmo (US peer-to-peer)", "Xoom international remittances"],
     whyItMoves: ["Branded checkout share vs Apple Pay, Stripe", "Active accounts trend (have been shrinking)", "Transaction margin"],
     noMalaysiaTie: true,
+    competitors: ["V", "MA"],
   },
   WDAY: {
     hook: "Workday is the cloud HR + finance system that most big companies use to pay employees and manage budgets. Boring but mission-critical.",
@@ -475,6 +519,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Workday HCM (HR)", "Workday Financial Management", "Adaptive Planning"],
     whyItMoves: ["Enterprise IT budgets", "AI agents (Workday Illuminate) adoption", "International growth"],
     malaysiaTie: "Workday has Malaysian customers (Maybank, AIA Malaysia among others). Sold via partners + regional Singapore office.",
+    competitors: ["ADBE", "ORCL", "CRM", "NOW", "INTU"],
   },
   INTU: {
     hook: "If you have ever used TurboTax or QuickBooks, that is Intuit. They own the US tax and small-business accounting software market.",
@@ -485,6 +530,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["TurboTax", "QuickBooks Online", "Credit Karma", "Mailchimp"],
     whyItMoves: ["US tax-filing season (Q3 of fiscal year)", "Small-business creation trends", "AI assistant (Intuit Assist) adoption"],
     noMalaysiaTie: true,
+    competitors: ["ADBE", "CRM"],
   },
   PG: {
     hook: "Procter & Gamble \u2014 the consumer goods giant behind Pampers, Pantene, Gillette, Tide, Olay. You probably have 5+ P&G products at home.",
@@ -495,6 +541,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Pampers diapers", "Pantene shampoo", "Gillette razors", "Tide / Ariel laundry detergent", "Olay skincare", "SK-II (premium in Asia)"],
     whyItMoves: ["Pricing power vs commodity costs", "China demand (especially SK-II)", "Volume growth in emerging markets"],
     malaysiaTie: "P&G has had Malaysian operations since 1989, with a regional HQ in Bandar Sunway and a manufacturing plant in Bangi. P&G products are sold in every Malaysian supermarket.",
+    competitors: ["KO", "PEP"],
   },
   JNJ: {
     hook: "Johnson & Johnson \u2014 the band-aid and baby shampoo company that grew into a pharma + medical-device giant.",
@@ -505,6 +552,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Stelara (autoimmune)", "Darzalex (cancer)", "Ethicon surgical instruments", "DePuy orthopaedic implants"],
     whyItMoves: ["Stelara patent expiration (biosimilars coming)", "Talc lawsuits (legal overhang)", "MedTech device sales"],
     noMalaysiaTie: true,
+    competitors: ["PFE", "MRK", "ABBV", "LLY"],
   },
   PFE: {
     hook: "Pfizer \u2014 became a household name during COVID for their vaccine. Post-COVID, they're rebuilding with cancer drugs and a big oncology acquisition (Seagen).",
@@ -515,6 +563,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Comirnaty (COVID vaccine)", "Paxlovid (COVID treatment)", "Eliquis (blood thinner)", "Ibrance (breast cancer)"],
     whyItMoves: ["Post-COVID revenue normalisation", "Seagen oncology pipeline payoff", "Patent cliffs late this decade"],
     noMalaysiaTie: true,
+    competitors: ["MRK", "JNJ", "ABBV", "LLY"],
   },
   MRK: {
     hook: "Merck makes Keytruda \u2014 the world's best-selling drug. A cancer immunotherapy that's now used for 30+ cancer types.",
@@ -525,6 +574,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Keytruda (cancer immunotherapy)", "Gardasil 9 (HPV vaccine)", "Animal-health products"],
     whyItMoves: ["Keytruda patent cliff in 2028", "Pipeline replacements (subQ Keytruda, Lynparza, Welireg)", "China Gardasil sales (cyclical)"],
     noMalaysiaTie: true,
+    competitors: ["PFE", "JNJ", "ABBV", "LLY"],
   },
   ABBV: {
     hook: "AbbVie \u2014 spun off from Abbott in 2013. Famous for Humira (autoimmune drug) which was the world's #1 drug for years. Now navigating life after Humira patents.",
@@ -535,6 +585,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Humira (autoimmune)", "Skyrizi (psoriasis)", "Rinvoq (autoimmune)", "Botox (cosmetic + medical)"],
     whyItMoves: ["Humira decline vs Skyrizi+Rinvoq replacement", "Botox demand (cyclical / discretionary)", "Pipeline execution"],
     noMalaysiaTie: true,
+    competitors: ["PFE", "MRK", "LLY", "JNJ"],
   },
   BAC: {
     hook: "Bank of America \u2014 the #2 US bank. Massive retail branches across America, plus Merrill Lynch (wealth management).",
@@ -545,6 +596,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["BofA retail banking", "Merrill Lynch wealth management", "BofA Securities investment banking"],
     whyItMoves: ["US interest rates", "Credit-card loss rates", "Investment banking fee recovery"],
     noMalaysiaTie: true,
+    competitors: ["JPM", "WFC", "MS", "GS"],
   },
   GS: {
     hook: "Goldman Sachs \u2014 the most prestigious investment bank on Wall Street. They advise on the biggest M&A deals and trade for global hedge funds.",
@@ -555,6 +607,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Goldman Sachs investment banking advisory", "Asset & Wealth Management", "Trading desks for hedge funds + corporates"],
     whyItMoves: ["M&A and IPO market activity", "Trading volatility", "Asset management AUM growth"],
     noMalaysiaTie: true,
+    competitors: ["MS", "JPM", "BAC"],
   },
   WFC: {
     hook: "Wells Fargo \u2014 the third-biggest US bank. Lots of retail banking + mortgages. Spent years recovering from a 2016 fake-accounts scandal.",
@@ -565,6 +618,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Wells Fargo retail banking", "Wells Fargo Home Mortgage", "Wells Fargo Advisors"],
     whyItMoves: ["US interest rates", "Asset cap regulatory progress (lifted 2025)", "Mortgage market"],
     noMalaysiaTie: true,
+    competitors: ["BAC", "JPM", "MS"],
   },
   BLK: {
     hook: "BlackRock is the world's largest asset manager \u2014 they manage over USD 10 trillion of other people's money. Their ETF brand iShares is everywhere.",
@@ -575,6 +629,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["iShares ETFs (used by retail + institutional)", "Aladdin portfolio management software", "Private markets (Global Infrastructure Partners)"],
     whyItMoves: ["Net inflows into ETFs (especially fixed income)", "Asset price moves (more AUM = more fees)", "Bitcoin ETF flows"],
     noMalaysiaTie: true,
+    competitors: ["MS", "GS"],
   },
   "BRK.B": {
     hook: "Warren Buffett's holding company. Owns insurance (GEICO), railroads (BNSF), energy, plus a stock portfolio (Apple, Coca-Cola, Bank of America).",
@@ -585,6 +640,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["GEICO insurance", "BNSF Railway", "Dairy Queen", "See's Candies", "Apple shares (largest equity holding)"],
     whyItMoves: ["Equity portfolio (Apple, AmEx) performance", "Insurance underwriting profit", "Operating subsidiary results"],
     noMalaysiaTie: true,
+    competitors: ["JPM", "BAC"],
   },
   NKE: {
     hook: "Nike \u2014 the world's biggest sportswear brand. Air Jordan sneakers, Just Do It campaigns, every football jersey.",
@@ -605,6 +661,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Pepsi cola", "Lay's potato chips", "Doritos", "Mountain Dew", "Gatorade", "Quaker Oats"],
     whyItMoves: ["Pricing power vs commodity cost inflation", "Snacks volume (recently soft)", "FX (US dollar strength hurts overseas)"],
     malaysiaTie: "PepsiCo Malaysia operates manufacturing in Bangi. Frito-Lay snacks and Pepsi widely sold across all Malaysian retail.",
+    competitors: ["KO"],
   },
   BA: {
     hook: "Boeing \u2014 the iconic American aircraft maker. They build the 737, 787, and military jets. Recovering from major safety crises (737 MAX, Starliner).",
@@ -635,6 +692,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Exxon + Mobil-branded petrol stations", "Mobil 1 motor oil", "Esso lubricants"],
     whyItMoves: ["Crude oil price (Brent, WTI)", "Refining margins", "Capital discipline / dividend buybacks"],
     malaysiaTie: "ExxonMobil has had Malaysian operations since 1893. Operates offshore oil/gas fields off Terengganu + has refineries in Port Dickson. ExxonMobil Business Support Centre in KL employs thousands.",
+    competitors: ["CVX"],
   },
   CVX: {
     hook: "Chevron \u2014 the #2 US oil company after Exxon. Smaller but more capital-disciplined; high dividend appeal.",
@@ -645,6 +703,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Chevron + Texaco-branded fuel stations (US)", "Caltex (Asia-Pacific brand) \u2014 now sold to Chevron Malaysia"],
     whyItMoves: ["Crude oil prices", "Hess integration synergies", "Capital returns (dividend, buybacks)"],
     malaysiaTie: "Caltex (operated by Chevron Malaysia until 2020 spin-off to Penn-Co) \u2014 many Malaysians remember Caltex stations across the country.",
+    competitors: ["XOM"],
   },
   VZ: {
     hook: "Verizon \u2014 the #1 US wireless carrier. ~120 million mobile subscribers, plus fibre internet (Fios) and 5G networks.",
@@ -655,6 +714,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Verizon Wireless mobile plans", "Fios fibre internet (US)", "Verizon Business enterprise comms"],
     whyItMoves: ["Wireless subscriber adds (vs AT&T, T-Mobile)", "Capex on 5G rollout", "Dividend coverage"],
     noMalaysiaTie: true,
+    competitors: ["T"],
   },
   COIN: {
     hook: "Coinbase \u2014 the most popular US crypto exchange. Tied to crypto prices: when Bitcoin pumps, Coinbase pumps.",
@@ -675,6 +735,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Falcon endpoint protection", "Falcon Cloud Security", "Falcon Identity"],
     whyItMoves: ["Enterprise cybersecurity budgets", "Module attach rate (selling more to same customer)", "Recovery from July 2024 IT outage incident"],
     noMalaysiaTie: true,
+    competitors: ["PANW", "CSCO"],
   },
   PANW: {
     hook: "Palo Alto Networks \u2014 the #1 US enterprise cybersecurity company. Firewalls, cloud security, threat intelligence.",
@@ -685,6 +746,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["PA-Series firewalls", "Prisma Cloud", "Cortex XDR"],
     whyItMoves: ["Enterprise cyber spend cycle", "Platformisation strategy (selling 3+ products per customer)", "Competitive dynamics with CRWD, ZS"],
     noMalaysiaTie: true,
+    competitors: ["CRWD", "CSCO"],
   },
   SMCI: {
     hook: "Super Micro Computer \u2014 they build the AI servers that house Nvidia chips. Hot stock during the AI boom, then bumpy after an accounting controversy.",
@@ -695,6 +757,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Liquid-cooled GPU servers", "AI training racks", "Edge / IoT servers"],
     whyItMoves: ["AI server orders (Nvidia GPU allocation)", "Gross margin pressure", "Accounting / governance concerns (post-2024)"],
     noMalaysiaTie: true,
+    competitors: ["DELL"],
   },
   DELL: {
     hook: "Dell \u2014 the PC and server company every Malaysian office knows. Now riding the AI server wave alongside Super Micro.",
@@ -705,6 +768,7 @@ export const STOCK_HOOKS: Record<string, StockHook> = {
     familiarProducts: ["Dell XPS / Inspiron laptops", "PowerEdge servers", "PowerStore storage", "Dell AI Factory (with Nvidia)"],
     whyItMoves: ["AI server orders (Nvidia GPU allocation)", "PC refresh cycle", "Storage / VMware (EMC heritage) competition"],
     malaysiaTie: "Dell has a major presence in Penang since 1995 \u2014 their largest manufacturing & support operations outside the US. Cyberjaya has a Dell global services centre.",
+    competitors: ["SMCI", "IBM"],
   },
   ENPH: {
     hook: "Enphase Energy \u2014 they make the microinverters that turn solar-panel DC into household AC. Solar boom names like this swing a lot with interest rates.",

@@ -24,7 +24,7 @@ import {
   LineChart, Search, AlertTriangle, Copy, Check, Download,
   Building2, TrendingUp, BarChart3, Target, Sparkles, MapPin,
   ExternalLink, PieChart, Activity, Calendar, ArrowUpRight, ArrowDownRight,
-  Users, DollarSign,
+  Users, DollarSign, Swords, ArrowRight,
 } from "lucide-react";
 import {
   LineChart as RLineChart, Line, ResponsiveContainer, XAxis, YAxis, Tooltip,
@@ -130,6 +130,27 @@ function AnalyzePageContent() {
   const [data, setData] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // ─── Compare state ────────────────────────────────────────────────
+  // When the user taps a "Compare" button on a competitor pill, we fetch
+  // that competitor's profile and render a side-by-side table at the
+  // bottom. compareRef lets us scroll the user there automatically.
+  const [compareData, setCompareData] = useState<Profile | null>(null);
+  const [compareLoading, setCompareLoading] = useState(false);
+  const compareRef = useRef<HTMLDivElement>(null);
+
+  async function loadCompare(symbol: string, mkt: MarketCode) {
+    setCompareLoading(true);
+    try {
+      const r = await fetch(`/api/stock-profile?symbol=${encodeURIComponent(symbol)}&market=${mkt}`, { cache: "no-store" });
+      if (!r.ok) throw new Error("compare lookup failed");
+      const j = await r.json() as Profile;
+      setCompareData(j);
+      // Scroll to comparison after data lands. setTimeout to let render flush.
+      setTimeout(() => compareRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 80);
+    } catch { setCompareData(null); }
+    finally { setCompareLoading(false); }
+  }
+
 
   async function load(symbol: string, mkt: MarketCode) {
     setLoading(true); setError(null);
@@ -237,6 +258,7 @@ function AnalyzePageContent() {
             </div>
           )}
           <BackgroundCard data={data} />
+          <CompetitorsCard data={data} onCompare={loadCompare} />
           <FundamentalsCard data={data} />
           <RangeCard data={data} />
           <CapitalStructureCard data={data} />
@@ -247,6 +269,7 @@ function AnalyzePageContent() {
           <NextEarningsCard data={data} />
           <UpgradesCard data={data} />
           <ScenariosCard data={data} />
+          <CompareCard a={data} b={compareData} loading={compareLoading} sectionRef={compareRef} />
         </>
       )}
 
@@ -1120,6 +1143,283 @@ function DownloadButton({ targetRef, filename }: { targetRef: React.RefObject<HT
       <Download size={12} /> {busy ? "..." : "PNG"}
     </button>
   );
+}
+
+
+/* ───────────── COMPETITORS CARD ─────────────
+   Lists the main listed peers for the current stock. Each has a Compare
+   button that fetches that competitor's profile and renders a side-by-side
+   metric table in the Compare card below. */
+function CompetitorsCard({ data, onCompare }: { data: Profile; onCompare: (sym: string, mkt: MarketCode) => void }) {
+  const hook = STOCK_HOOKS[data.symbol];
+  const comps = hook?.competitors ?? [];
+  if (comps.length === 0) return null;
+  return (
+    <section className="card mb-3 p-4">
+      <header className="mb-2 flex items-center justify-between">
+        <div>
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+            <Swords size={11} className="mr-1 inline" /> Who they compete with
+          </div>
+          <h2 className="text-lg font-semibold">Main competitors</h2>
+          <div className="text-[11px] text-[var(--text-muted)]">
+            Tap <strong>Compare</strong> to see {data.symbol} vs that company side-by-side.
+          </div>
+        </div>
+      </header>
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        {comps.map((c) => {
+          const ch = STOCK_HOOKS[c];
+          const oneLiner = ch?.whatTheyDo?.split(/(?<=[.!?])\s+/)[0] ?? "";
+          return (
+            <div key={c} className="flex items-center justify-between gap-2 rounded-xl border border-[var(--line)] bg-[var(--surface-2)] p-3">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="font-mono font-semibold text-[13px]">{c}</span>
+                  {ch?.familiarProducts?.[0] && (
+                    <span className="text-[10.5px] text-[var(--text-muted)] truncate">{ch.familiarProducts[0]}</span>
+                  )}
+                </div>
+                <p className="mt-0.5 text-[11.5px] leading-tight text-[var(--text-muted)] line-clamp-2">
+                  {oneLiner || "Listed competitor — tap Compare to see side-by-side metrics."}
+                </p>
+              </div>
+              <button onClick={() => onCompare(c, "US")} className="btn btn-primary h-8 shrink-0 px-2.5 text-[11px]" title={`Compare ${data.symbol} vs ${c}`}>
+                <Swords size={11} /> Compare
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+/* ───────────── COMPARE CARD ─────────────
+   Side-by-side metric table for two stocks. The "winner" on each metric
+   gets a sage-green dot (lower-is-better for valuation; higher for growth,
+   margins, etc). End with a summary verdict line per category. */
+function CompareCard({ a, b, loading, sectionRef }: { a: Profile; b: Profile | null; loading: boolean; sectionRef: React.RefObject<HTMLDivElement> }) {
+  if (!b && !loading) {
+    return (
+      <section ref={sectionRef} className="card mb-3 p-4">
+        <header className="mb-2">
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+            <Swords size={11} className="mr-1 inline" /> Side-by-side
+          </div>
+          <h2 className="text-lg font-semibold">Comparison</h2>
+        </header>
+        <p className="text-[12.5px] text-[var(--text-muted)]">
+          Tap a <strong>Compare</strong> button on a competitor above to populate this section.
+        </p>
+      </section>
+    );
+  }
+  if (loading) {
+    return (
+      <section ref={sectionRef} className="card mb-3 p-4">
+        <p className="text-[12.5px] text-[var(--text-muted)]">Loading comparison...</p>
+      </section>
+    );
+  }
+  if (!b) return null;
+
+  // Compute analyst bullish % and beat-rate for both.
+  const bullPctA = a.analystRec ? bullishPct(a.analystRec) : null;
+  const bullPctB = b.analystRec ? bullishPct(b.analystRec) : null;
+  const beatRateA = beatRate(a.earnings);
+  const beatRateB = beatRate(b.earnings);
+
+  const groups: CompareGroup[] = [
+    {
+      title: "Valuation — what investors pay per dollar of earnings",
+      tone: "neutral",
+      rows: [
+        cmpRow("Forward P/E", a.fundamentals.forwardPE, b.fundamentals.forwardPE, "lower", (n) => `${n.toFixed(1)}×`, "Lower = cheaper relative to expected earnings."),
+        cmpRow("Trailing P/E", a.fundamentals.trailingPE, b.fundamentals.trailingPE, "lower", (n) => `${n.toFixed(1)}×`, "Lower = cheaper on last 12 months of earnings."),
+        cmpRow("PEG ratio", a.fundamentals.pegRatio, b.fundamentals.pegRatio, "lower", (n) => `${n.toFixed(2)}`, "P/E divided by growth. < 1.0 = growth not fully priced in."),
+        cmpRow("EV / Sales", a.fundamentals.evRevenue, b.fundamentals.evRevenue, "lower", (n) => `${n.toFixed(1)}×`, "Lower = revenue is cheaper relative to the whole-company price."),
+        cmpRow("EV / EBITDA", a.fundamentals.evEbitda, b.fundamentals.evEbitda, "lower", (n) => `${n.toFixed(1)}×`, "Cleaner than P/E (strips out tax + leverage)."),
+      ],
+    },
+    {
+      title: "Growth — how fast is the business expanding",
+      tone: "positive",
+      rows: [
+        cmpRow("Revenue growth (last Q YoY)", pctOrNull(a.fundamentals.revenueGrowth), pctOrNull(b.fundamentals.revenueGrowth), "higher", (n) => `${n >= 0 ? "+" : ""}${n.toFixed(1)}%`, "Quarter-over-quarter year-on-year top-line growth."),
+        cmpRow("Earnings growth (last Q YoY)", pctOrNull(a.fundamentals.earningsGrowth), pctOrNull(b.fundamentals.earningsGrowth), "higher", (n) => `${n >= 0 ? "+" : ""}${n.toFixed(1)}%`, "Profit growth — usually amplifies revenue growth via operating leverage."),
+        cmpRow("30-day price move", a.snapshot.perf30d, b.snapshot.perf30d, "higher", (n) => `${n >= 0 ? "+" : ""}${n.toFixed(1)}%`, "Short-term momentum — useful for entry timing, not investment thesis."),
+      ],
+    },
+    {
+      title: "Profitability — how efficient at making money",
+      tone: "positive",
+      rows: [
+        cmpRow("Profit margin", pctOrNull(a.fundamentals.profitMargin), pctOrNull(b.fundamentals.profitMargin), "higher", (n) => `${n.toFixed(1)}%`, "Cents of profit per dollar of revenue. Higher = pricing power."),
+        cmpRow("Operating margin", pctOrNull(a.fundamentals.operatingMargin), pctOrNull(b.fundamentals.operatingMargin), "higher", (n) => `${n.toFixed(1)}%`, "Operating efficiency — strips out tax + interest."),
+      ],
+    },
+    {
+      title: "Balance sheet — can they survive bad times",
+      tone: "neutral",
+      rows: [
+        cmpRow("Cash", a.fundamentals.totalCash, b.fundamentals.totalCash, "higher", (n) => fmtBigNum(n), "Liquid cash on hand. Higher = more firepower for buybacks, acquisitions, R&D."),
+        cmpRow("Debt", a.fundamentals.totalDebt, b.fundamentals.totalDebt, "lower", (n) => fmtBigNum(n), "Total borrowing. Lower = lower financial risk in a downturn."),
+        cmpRow("Net cash position", netCash(a), netCash(b), "higher", (n) => fmtBigNum(n), "Cash minus debt. Positive = company has more cash than debt."),
+      ],
+    },
+    {
+      title: "Income & risk — for investors who care about dividends + volatility",
+      tone: "neutral",
+      rows: [
+        cmpRow("Dividend yield", pctOrNull(a.snapshot.dividendYield), pctOrNull(b.snapshot.dividendYield), "higher", (n) => `${n.toFixed(2)}%`, "Annual dividend as a % of price. Higher = more income."),
+        cmpRow("Beta", a.snapshot.beta, b.snapshot.beta, "lower", (n) => n.toFixed(2), "Volatility vs market (1.0 = market). Lower = less volatile."),
+      ],
+    },
+    {
+      title: "Market view — what analysts + size tell us",
+      tone: "neutral",
+      rows: [
+        cmpRow("Market cap", a.snapshot.marketCap, b.snapshot.marketCap, "higher", (n) => fmtBigNum(n), "Bigger = more institutional ownership, less volatile typically."),
+        cmpRow("Employees", a.profile.fullTimeEmployees, b.profile.fullTimeEmployees, "higher", (n) => n.toLocaleString(), "Scale of operations."),
+        cmpRow("Analyst bullish %", bullPctA, bullPctB, "higher", (n) => `${n.toFixed(0)}%`, "Strong Buy + Buy ratings as % of all analysts covering the stock."),
+        cmpRow("Earnings beat rate", beatRateA, beatRateB, "higher", (n) => `${n.toFixed(0)}%`, "Quarters they beat estimates over the last 4 reported. Higher = consistent execution."),
+      ],
+    },
+  ];
+
+  const ccyA = a.snapshot.currency || "";
+  const ccyB = b.snapshot.currency || "";
+
+  const wa = buildCompareCopy(a, b, groups);
+
+  return (
+    <section ref={sectionRef} className="card mb-3 p-4">
+      <header className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+            <Swords size={11} className="mr-1 inline" /> Side-by-side
+          </div>
+          <h2 className="text-lg font-semibold">
+            {a.symbol} <ArrowRight size={14} className="inline text-[var(--text-muted)]" /> vs {b.symbol}
+          </h2>
+          <div className="text-[11px] text-[var(--text-muted)]">
+            {a.snapshot.longName} ({ccyA}) vs {b.snapshot.longName} ({ccyB})
+          </div>
+        </div>
+        <CopyButton text={wa} label="Copy" />
+      </header>
+
+      <div className="grid grid-cols-3 gap-2 text-center text-[11px] mb-3">
+        <div className="rounded-lg bg-[var(--surface-2)] p-2">
+          <div className="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Metric</div>
+        </div>
+        <div className="rounded-lg bg-[var(--surface-2)] p-2 border-l-2 border-l-accent">
+          <div className="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">{a.symbol}</div>
+        </div>
+        <div className="rounded-lg bg-[var(--surface-2)] p-2 border-l-2 border-l-warning">
+          <div className="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">{b.symbol}</div>
+        </div>
+      </div>
+
+      {groups.map((g) => {
+        const aWins = g.rows.filter((r) => r.winner === "A").length;
+        const bWins = g.rows.filter((r) => r.winner === "B").length;
+        const verdict = aWins > bWins ? `${a.symbol} leads ${aWins} vs ${bWins}` :
+                        bWins > aWins ? `${b.symbol} leads ${bWins} vs ${aWins}` :
+                        `Tied ${aWins} vs ${bWins}`;
+        return (
+          <div key={g.title} className="mb-3">
+            <div className="mb-1.5 flex items-center justify-between gap-2">
+              <h3 className="text-[12px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">{g.title}</h3>
+              <span className="rounded-full bg-[var(--surface-2)] px-2 py-0.5 text-[10px] text-[var(--text-muted)]">{verdict}</span>
+            </div>
+            <div className="space-y-1">
+              {g.rows.map((r, i) => (
+                <div key={i} className="grid grid-cols-3 gap-2 items-center rounded-lg border border-[var(--line)] bg-[var(--surface-2)] p-2 text-[12px]">
+                  <div className="flex items-center gap-1">
+                    <span className="text-[11px] leading-tight text-[var(--text-muted)]" title={r.tooltip}>{r.label}</span>
+                  </div>
+                  <div className={`tabular text-center font-semibold ${r.winner === "A" ? "text-success" : ""}`}>
+                    {r.aFmt ?? "—"}
+                    {r.winner === "A" && <span className="ml-1 text-[10px]">●</span>}
+                  </div>
+                  <div className={`tabular text-center font-semibold ${r.winner === "B" ? "text-success" : ""}`}>
+                    {r.bFmt ?? "—"}
+                    {r.winner === "B" && <span className="ml-1 text-[10px]">●</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+
+      <p className="mt-2 text-[10.5px] text-[var(--text-muted)] leading-relaxed">
+        Each row compares one metric. The green dot ● marks the better value on that metric
+        (for valuation: lower P/E is better; for growth + margins: higher is better; for debt: lower is better).
+        Tap and hold any metric label to see what it means.
+      </p>
+    </section>
+  );
+}
+
+/* ─── comparison helpers ─── */
+interface CompareGroup { title: string; tone: "positive" | "negative" | "neutral"; rows: CompareRow[]; }
+interface CompareRow { label: string; aRaw: number | null; bRaw: number | null; aFmt: string | null; bFmt: string | null; winner: "A" | "B" | "tie" | "n/a"; tooltip: string; }
+
+function cmpRow(
+  label: string,
+  a: number | null,
+  b: number | null,
+  better: "higher" | "lower",
+  fmt: (n: number) => string,
+  tooltip: string
+): CompareRow {
+  const aFmt = a != null && isFinite(a) ? fmt(a) : null;
+  const bFmt = b != null && isFinite(b) ? fmt(b) : null;
+  let winner: CompareRow["winner"] = "n/a";
+  if (a != null && b != null && isFinite(a) && isFinite(b)) {
+    if (a === b) winner = "tie";
+    else if (better === "higher") winner = a > b ? "A" : "B";
+    else winner = a < b ? "A" : "B";
+  }
+  return { label, aRaw: a, bRaw: b, aFmt, bFmt, winner, tooltip };
+}
+
+function pctOrNull(n: number | null): number | null {
+  return n == null ? null : n * 100;
+}
+function netCash(p: Profile): number | null {
+  const c = p.fundamentals.totalCash, d = p.fundamentals.totalDebt;
+  if (c == null && d == null) return null;
+  return (c ?? 0) - (d ?? 0);
+}
+function bullishPct(rec: { strongBuy: number; buy: number; hold: number; sell: number; strongSell: number }): number | null {
+  const total = rec.strongBuy + rec.buy + rec.hold + rec.sell + rec.strongSell;
+  if (total === 0) return null;
+  return ((rec.strongBuy + rec.buy) / total) * 100;
+}
+function beatRate(rows: Profile["earnings"]): number | null {
+  const resolved = rows.filter((r) => r.verdict != null);
+  if (resolved.length === 0) return null;
+  const beats = resolved.filter((r) => r.verdict === "beat").length;
+  return (beats / resolved.length) * 100;
+}
+
+function buildCompareCopy(a: Profile, b: Profile, groups: CompareGroup[]): string {
+  const lines: string[] = [];
+  lines.push(`⚔️ *${a.symbol} vs ${b.symbol} — Side-by-side*`);
+  lines.push("");
+  for (const g of groups) {
+    lines.push(`*${g.title}*`);
+    for (const r of g.rows) {
+      const winnerTag = r.winner === "A" ? ` ✓ ${a.symbol}` : r.winner === "B" ? ` ✓ ${b.symbol}` : "";
+      lines.push(`  ${r.label}: ${a.symbol} ${r.aFmt ?? "—"} | ${b.symbol} ${r.bFmt ?? "—"}${winnerTag}`);
+    }
+    lines.push("");
+  }
+  return lines.join("\n").trim();
 }
 
 /* ───────────── formatters ───────────── */
