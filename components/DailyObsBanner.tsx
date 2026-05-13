@@ -20,7 +20,7 @@ import { BellRing, AlertTriangle, Calendar, X, CheckCircle } from "lucide-react"
 import { listPocket, type PocketEntry } from "@/lib/storage";
 import { koSchedule } from "@/lib/calc";
 import { useQuotes } from "@/lib/hooks/useQuotes";
-import { requestSubscribe, unsubscribe, isSubscribedLocally } from "@/lib/pushClient";
+import { requestSubscribe, unsubscribe, isSubscribedLocally, detectPlatform } from "@/lib/pushClient";
 import type { MarketCode, Tranche } from "@/lib/types";
 
 const NOTIFIED_KEY = "snd.dailyObs.notifiedFor";
@@ -193,20 +193,22 @@ function TodayCard({
 export function EnableDailyAlertsButton() {
   const [state, setState] = useState<"unknown" | "off" | "on" | "busy">("unknown");
   const [error, setError] = useState<string | null>(null);
+  const [errorCode, setErrorCode] = useState<string | null>(null);
+  const [platform, setPlatform] = useState<{ isIOS: boolean; isInstalled: boolean; canSubscribe: boolean } | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const subbed = isSubscribedLocally();
-    setState(subbed ? "on" : "off");
+    setPlatform(detectPlatform());
+    setState(isSubscribedLocally() ? "on" : "off");
   }, []);
 
   async function enable() {
-    setState("busy"); setError(null);
+    setState("busy"); setError(null); setErrorCode(null);
     try {
       const res = await requestSubscribe(listPocket());
       if (res.ok) setState("on");
-      else { setState("off"); setError(res.reason || "subscribe failed"); }
-    } catch (e: any) { setState("off"); setError(e?.message || "subscribe failed"); }
+      else { setState("off"); setError(res.reason || "Subscribe failed."); setErrorCode(res.reasonCode || null); }
+    } catch (e: any) { setState("off"); setError(e?.message || "Subscribe failed."); }
   }
 
   async function disable() {
@@ -217,8 +219,19 @@ export function EnableDailyAlertsButton() {
 
   if (state === "unknown") return null;
 
+  // Show the iOS install walkthrough proactively, BEFORE the user taps Enable,
+  // when we detect iOS + not-installed. Avoids the dead-end "notifications
+  // unsupported" message and shows the actual steps.
+  const showIOSInstallHint =
+    state !== "on" &&
+    platform?.isIOS &&
+    !platform?.isInstalled &&
+    !errorCode; // first time — pre-emptive hint
+
+  const showIOSInstallError = errorCode === "ios-needs-install";
+
   return (
-    <div className="flex flex-col gap-1">
+    <div className="flex flex-col gap-2">
       {state === "on" ? (
         <button onClick={disable} className="btn h-8 px-3 text-[11px]" disabled={(state as string) === "busy"}>
           <CheckCircle size={12} className="text-success" /> Morning alerts on — tap to disable
@@ -228,12 +241,37 @@ export function EnableDailyAlertsButton() {
           <AlertTriangle size={12} /> {state === "busy" ? "Subscribing..." : "Enable 9am morning alerts"}
         </button>
       )}
-      {error && (
-        <p className="text-[10.5px] text-danger">
-          {error}
-          {error.includes("Add to Home Screen") && " — long-press Share → Add to Home Screen, then retry from the installed app."}
-        </p>
+
+      {/* iOS-specific install walkthrough — shown both pre-emptively AND on the
+          ios-needs-install error code so the user gets exact steps. */}
+      {(showIOSInstallHint || showIOSInstallError) && (
+        <div className="rounded-xl border-l-4 border-l-warning border-[var(--line)] bg-[var(--surface-2)] p-3 text-[12px] leading-relaxed">
+          <div className="mb-1.5 font-semibold text-warning">
+            📱 iOS — install to home screen first
+          </div>
+          <p className="mb-2 text-[var(--text-muted)]">
+            Apple only allows push notifications when the app is installed to your home screen. Here are the exact steps:
+          </p>
+          <ol className="ml-5 list-decimal space-y-1">
+            <li>You must be in <strong>Safari</strong> (not Chrome on iOS).</li>
+            <li>Tap the <strong>Share</strong> button at the bottom (the square with arrow up).</li>
+            <li>Scroll down → tap <strong>Add to Home Screen</strong>.</li>
+            <li>Tap <strong>Add</strong> in the top right.</li>
+            <li>Close Safari. Open the new app icon on your home screen.</li>
+            <li>Go to the <strong>Pocket</strong> tab. Tap <strong>Enable 9am morning alerts</strong> again.</li>
+            <li>Tap <strong>Allow</strong> when iOS asks for notification permission.</li>
+          </ol>
+          <p className="mt-2 text-[10.5px] text-[var(--text-muted)]">
+            iOS 16.4 or later is required. Settings → General → Software Update.
+          </p>
+        </div>
       )}
+
+      {/* Other errors — show as a plain red note */}
+      {error && !showIOSInstallError && (
+        <p className="text-[10.5px] text-danger">{error}</p>
+      )}
+
       {state === "on" && (
         <p className="text-[10.5px] text-[var(--text-muted)]">
           You'll get a push notification at 9am Malaysia time on any day a Pocket tranche has a KO observation.
