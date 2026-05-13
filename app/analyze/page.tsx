@@ -1196,9 +1196,14 @@ function CompetitorsCard({ data, onCompare }: { data: Profile; onCompare: (sym: 
 }
 
 /* ───────────── COMPARE CARD ─────────────
-   Side-by-side metric table for two stocks. The "winner" on each metric
-   gets a sage-green dot (lower-is-better for valuation; higher for growth,
-   margins, etc). End with a summary verdict line per category. */
+   Side-by-side metric table with plain-English explanations for non-native
+   English readers. Each metric has:
+     • a "what this means" caption shown always
+     • a "winner sentence" rendered after the row, explaining what the
+       winning value implies for the client
+     • a per-category mini-verdict
+   At the bottom, an overall conclusion summarises which stock looks
+   stronger and what kind of investor each suits. */
 function CompareCard({ a, b, loading, sectionRef }: { a: Profile; b: Profile | null; loading: boolean; sectionRef: React.RefObject<HTMLDivElement> }) {
   if (!b && !loading) {
     return (
@@ -1224,74 +1229,139 @@ function CompareCard({ a, b, loading, sectionRef }: { a: Profile; b: Profile | n
   }
   if (!b) return null;
 
-  // Compute analyst bullish % and beat-rate for both.
   const bullPctA = a.analystRec ? bullishPct(a.analystRec) : null;
   const bullPctB = b.analystRec ? bullishPct(b.analystRec) : null;
   const beatRateA = beatRate(a.earnings);
   const beatRateB = beatRate(b.earnings);
 
+  const A = a.symbol, B = b.symbol;
+  // Helpers to build winner sentences. `say(W, L, txt)` returns a
+  // sentence interpolated with the winner and loser symbols.
+  const say = (W: string, L: string, txt: string) => txt.replace(/{W}/g, W).replace(/{L}/g, L);
+
   const groups: CompareGroup[] = [
     {
       title: "Valuation — what investors pay per dollar of earnings",
-      tone: "neutral",
+      layman: "Cheaper is usually better — but only if growth + quality hold up. Lower numbers in this section = paying less for the same business.",
       rows: [
-        cmpRow("Forward P/E", a.fundamentals.forwardPE, b.fundamentals.forwardPE, "lower", (n) => `${n.toFixed(1)}×`, "Lower = cheaper relative to expected earnings."),
-        cmpRow("Trailing P/E", a.fundamentals.trailingPE, b.fundamentals.trailingPE, "lower", (n) => `${n.toFixed(1)}×`, "Lower = cheaper on last 12 months of earnings."),
-        cmpRow("PEG ratio", a.fundamentals.pegRatio, b.fundamentals.pegRatio, "lower", (n) => `${n.toFixed(2)}`, "P/E divided by growth. < 1.0 = growth not fully priced in."),
-        cmpRow("EV / Sales", a.fundamentals.evRevenue, b.fundamentals.evRevenue, "lower", (n) => `${n.toFixed(1)}×`, "Lower = revenue is cheaper relative to the whole-company price."),
-        cmpRow("EV / EBITDA", a.fundamentals.evEbitda, b.fundamentals.evEbitda, "lower", (n) => `${n.toFixed(1)}×`, "Cleaner than P/E (strips out tax + leverage)."),
+        cmpRow("Forward P/E", a.fundamentals.forwardPE, b.fundamentals.forwardPE, "lower", (n) => `${n.toFixed(1)}×`,
+          "Share price ÷ expected earnings for next year. Lower = paying less for the same future profit.",
+          "Lower is better. If the P/E is 20×, you're paying $20 today for every $1 of next year's expected profit. <15× usually cheap, 15-25× typical, >25× expensive (only worth it if growth is fast).",
+          (W, L) => say(W, L, "{W} is priced cheaper than {L} on next year's expected earnings — you get more future profit per dollar invested. Just check that {L}'s premium isn't justified by stronger growth.")),
+        cmpRow("Trailing P/E", a.fundamentals.trailingPE, b.fundamentals.trailingPE, "lower", (n) => `${n.toFixed(1)}×`,
+          "Share price ÷ last 12 months of actual earnings. Lower = cheaper on proven results.",
+          "Lower is better. Uses real recent profits, not estimates — so harder to manipulate. <15× = bargain territory, 15-25× = fair, >25× = priced for growth.",
+          (W, L) => say(W, L, "{W} trades at a lower multiple on proven (not forecast) earnings — closer to a value buy than {L}, assuming the business model still works.")),
+        cmpRow("PEG ratio", a.fundamentals.pegRatio, b.fundamentals.pegRatio, "lower", (n) => `${n.toFixed(2)}`,
+          "P/E divided by expected growth rate. Adjusts valuation for growth.",
+          "Lower is better. <1.0 means the stock is cheap relative to its growth (Peter Lynch's rule of thumb). 1.0-1.5 fair, >1.5 = paying a lot for the growth.",
+          (W, L) => say(W, L, "{W}'s price is more reasonable when you factor in its growth rate. {L} either trades at a higher P/E or grows slower — you're paying more for each percent of growth.")),
+        cmpRow("EV / Sales", a.fundamentals.evRevenue, b.fundamentals.evRevenue, "lower", (n) => `${n.toFixed(1)}×`,
+          "Whole company value (debt + equity) divided by annual revenue. Lower = cheaper per dollar of sales.",
+          "Lower is better. Useful for unprofitable or low-margin businesses where P/E doesn't work. <3× cheap, 3-10× normal, >10× rich (SaaS levels).",
+          (W, L) => say(W, L, "{W}'s entire business (equity + debt) is cheaper per dollar of revenue than {L}'s. For revenue-driven names, this is a key cheapness check.")),
+        cmpRow("EV / EBITDA", a.fundamentals.evEbitda, b.fundamentals.evEbitda, "lower", (n) => `${n.toFixed(1)}×`,
+          "Enterprise value divided by operating cash earnings (EBITDA). Cleaner than P/E.",
+          "Lower is better. Strips out tax + interest + accounting noise — what cash the business throws off. <10× cheap, 10-15× typical, >15× rich.",
+          (W, L) => say(W, L, "{W} produces more operating cash per dollar of enterprise value than {L}. Less affected by capital structure or tax — a purer cheapness signal.")),
       ],
     },
     {
       title: "Growth — how fast is the business expanding",
-      tone: "positive",
+      layman: "Faster is better — fast-growing businesses usually deserve higher valuations. Higher numbers in this section = bigger growth runway.",
       rows: [
-        cmpRow("Revenue growth (last Q YoY)", pctOrNull(a.fundamentals.revenueGrowth), pctOrNull(b.fundamentals.revenueGrowth), "higher", (n) => `${n >= 0 ? "+" : ""}${n.toFixed(1)}%`, "Quarter-over-quarter year-on-year top-line growth."),
-        cmpRow("Earnings growth (last Q YoY)", pctOrNull(a.fundamentals.earningsGrowth), pctOrNull(b.fundamentals.earningsGrowth), "higher", (n) => `${n >= 0 ? "+" : ""}${n.toFixed(1)}%`, "Profit growth — usually amplifies revenue growth via operating leverage."),
-        cmpRow("30-day price move", a.snapshot.perf30d, b.snapshot.perf30d, "higher", (n) => `${n >= 0 ? "+" : ""}${n.toFixed(1)}%`, "Short-term momentum — useful for entry timing, not investment thesis."),
+        cmpRow("Revenue growth (last Q YoY)", pctOrNull(a.fundamentals.revenueGrowth), pctOrNull(b.fundamentals.revenueGrowth), "higher",
+          (n) => `${n >= 0 ? "+" : ""}${n.toFixed(1)}%`,
+          "Top-line growth from a year ago, last quarter.",
+          "Higher is better. 0-10% = slow / mature, 10-25% = healthy, >25% = hyper-growth. Compare to inflation (~3%) and the sector average.",
+          (W, L) => say(W, L, "{W}'s sales are growing faster than {L}'s — the business is gaining customers, market share, or pricing power more quickly. Faster growth usually justifies a higher valuation.")),
+        cmpRow("Earnings growth (last Q YoY)", pctOrNull(a.fundamentals.earningsGrowth), pctOrNull(b.fundamentals.earningsGrowth), "higher",
+          (n) => `${n >= 0 ? "+" : ""}${n.toFixed(1)}%`,
+          "Profit growth, last quarter vs same quarter year ago.",
+          "Higher is better. Should usually outpace revenue growth (operating leverage). Negative = profits shrinking — red flag unless explained by reinvestment.",
+          (W, L) => say(W, L, "{W}'s profits are growing faster — meaning costs are under control and operating leverage is kicking in. {L} either isn't scaling profits as well or is investing heavily into growth.")),
+        cmpRow("30-day price move", a.snapshot.perf30d, b.snapshot.perf30d, "higher",
+          (n) => `${n >= 0 ? "+" : ""}${n.toFixed(1)}%`,
+          "Share-price change over the last ~30 days.",
+          "Higher is better as a short-term sign — but the LOWER one might be the better entry point. Use for timing, not the investment thesis.",
+          (W, L) => say(W, L, "{W}'s share price has outperformed {L} in the last month. Momentum is one signal — but if you haven't bought yet, the weaker one might offer better value RIGHT NOW.")),
       ],
     },
     {
       title: "Profitability — how efficient at making money",
-      tone: "positive",
+      layman: "Higher margins = better business. A company that keeps more cents of profit from each dollar of sales has pricing power or operating discipline (or both).",
       rows: [
-        cmpRow("Profit margin", pctOrNull(a.fundamentals.profitMargin), pctOrNull(b.fundamentals.profitMargin), "higher", (n) => `${n.toFixed(1)}%`, "Cents of profit per dollar of revenue. Higher = pricing power."),
-        cmpRow("Operating margin", pctOrNull(a.fundamentals.operatingMargin), pctOrNull(b.fundamentals.operatingMargin), "higher", (n) => `${n.toFixed(1)}%`, "Operating efficiency — strips out tax + interest."),
+        cmpRow("Profit margin", pctOrNull(a.fundamentals.profitMargin), pctOrNull(b.fundamentals.profitMargin), "higher",
+          (n) => `${n.toFixed(1)}%`,
+          "Net profit divided by revenue.",
+          "Higher is better. Software businesses often >20%, retail 2-5%, banks 25-35%. Compare within the same sector.",
+          (W, L) => say(W, L, "{W} keeps more cents of profit per dollar of sales than {L} — usually meaning stronger brand, better cost control, or pricing power. This is one of Warren Buffett's favourite signals.")),
+        cmpRow("Operating margin", pctOrNull(a.fundamentals.operatingMargin), pctOrNull(b.fundamentals.operatingMargin), "higher",
+          (n) => `${n.toFixed(1)}%`,
+          "Operating profit divided by revenue. Strips out tax + interest.",
+          "Higher is better. Shows core business profitability before financial engineering.",
+          (W, L) => say(W, L, "{W}'s core business operations are more efficient than {L}'s. Operating margin is harder to fudge with accounting — it's the cleanest profitability signal.")),
       ],
     },
     {
       title: "Balance sheet — can they survive bad times",
-      tone: "neutral",
+      layman: "More cash + less debt = stronger. A solid balance sheet means the company can keep investing in growth, return capital to shareholders, and survive a downturn.",
       rows: [
-        cmpRow("Cash", a.fundamentals.totalCash, b.fundamentals.totalCash, "higher", (n) => fmtBigNum(n), "Liquid cash on hand. Higher = more firepower for buybacks, acquisitions, R&D."),
-        cmpRow("Debt", a.fundamentals.totalDebt, b.fundamentals.totalDebt, "lower", (n) => fmtBigNum(n), "Total borrowing. Lower = lower financial risk in a downturn."),
-        cmpRow("Net cash position", netCash(a), netCash(b), "higher", (n) => fmtBigNum(n), "Cash minus debt. Positive = company has more cash than debt."),
+        cmpRow("Cash", a.fundamentals.totalCash, b.fundamentals.totalCash, "higher", (n) => fmtBigNum(n),
+          "Liquid cash + short-term investments on the balance sheet.",
+          "Higher is better. Cash is firepower — for buybacks, M&A, R&D, or surviving a downturn.",
+          (W, L) => say(W, L, "{W} sits on more liquid cash than {L} — they can buy back shares, acquire competitors, fund R&D, or weather a recession with less stress.")),
+        cmpRow("Debt", a.fundamentals.totalDebt, b.fundamentals.totalDebt, "lower", (n) => fmtBigNum(n),
+          "Total interest-bearing borrowing.",
+          "Lower is better, ALL ELSE EQUAL. Some debt is fine if it earns more than it costs. But high debt = high risk in recessions.",
+          (W, L) => say(W, L, "{W} carries less debt than {L} — lower interest expense, more financial flexibility, and lower bankruptcy risk if business conditions worsen.")),
+        cmpRow("Net cash position", netCash(a), netCash(b), "higher", (n) => fmtBigNum(n),
+          "Cash minus debt. Positive = cash-rich; negative = net debtor.",
+          "Higher is better. Positive net cash is rare and a clear strength signal — common in Apple, Google, Nvidia, Microsoft.",
+          (W, L) => say(W, L, "{W} is in a stronger net-cash position than {L}. This is the single cleanest balance-sheet signal — positive net cash means the company OWNS more cash than it OWES in debt.")),
       ],
     },
     {
-      title: "Income & risk — for investors who care about dividends + volatility",
-      tone: "neutral",
+      title: "Income & risk — dividends + volatility",
+      layman: "If your client wants income, look at the dividend yield. If they're conservative, look at beta (volatility).",
       rows: [
-        cmpRow("Dividend yield", pctOrNull(a.snapshot.dividendYield), pctOrNull(b.snapshot.dividendYield), "higher", (n) => `${n.toFixed(2)}%`, "Annual dividend as a % of price. Higher = more income."),
-        cmpRow("Beta", a.snapshot.beta, b.snapshot.beta, "lower", (n) => n.toFixed(2), "Volatility vs market (1.0 = market). Lower = less volatile."),
+        cmpRow("Dividend yield", pctOrNull(a.snapshot.dividendYield), pctOrNull(b.snapshot.dividendYield), "higher",
+          (n) => `${n.toFixed(2)}%`,
+          "Annual dividends per share ÷ current share price.",
+          "Higher is better for INCOME investors. Mature businesses pay big dividends (4-6%); high-growth companies usually pay 0-1% and reinvest profits instead.",
+          (W, L) => say(W, L, "{W} pays a higher dividend yield than {L} — better for clients who want recurring income. But check if it's sustainable: very high yields can signal a stock-price drop or upcoming dividend cut.")),
+        cmpRow("Beta", a.snapshot.beta, b.snapshot.beta, "lower", (n) => n.toFixed(2),
+          "How volatile vs the market (1.0 = moves with market, 2.0 = swings twice as much).",
+          "Lower is better for CONSERVATIVE clients (less volatile). Higher beta amplifies both gains AND losses.",
+          (W, L) => say(W, L, "{W} is less volatile than {L} — fewer big swings in either direction. Better for conservative clients who hate seeing red numbers in their portfolio. Higher beta = more upside in a bull market, more pain in a bear market.")),
       ],
     },
     {
       title: "Market view — what analysts + size tell us",
-      tone: "neutral",
+      layman: "Bigger companies are more stable. Higher analyst bullishness signals consensus optimism. A high earnings beat rate means the company consistently exceeds expectations.",
       rows: [
-        cmpRow("Market cap", a.snapshot.marketCap, b.snapshot.marketCap, "higher", (n) => fmtBigNum(n), "Bigger = more institutional ownership, less volatile typically."),
-        cmpRow("Employees", a.profile.fullTimeEmployees, b.profile.fullTimeEmployees, "higher", (n) => n.toLocaleString(), "Scale of operations."),
-        cmpRow("Analyst bullish %", bullPctA, bullPctB, "higher", (n) => `${n.toFixed(0)}%`, "Strong Buy + Buy ratings as % of all analysts covering the stock."),
-        cmpRow("Earnings beat rate", beatRateA, beatRateB, "higher", (n) => `${n.toFixed(0)}%`, "Quarters they beat estimates over the last 4 reported. Higher = consistent execution."),
+        cmpRow("Market cap", a.snapshot.marketCap, b.snapshot.marketCap, "higher", (n) => fmtBigNum(n),
+          "Share price × total shares. The market's price tag on the whole company.",
+          "Higher is better for STABILITY (more institutional ownership, lower volatility). Smaller-cap names have more upside but higher risk.",
+          (W, L) => say(W, L, "{W} is the larger company — more institutional ownership, more analyst coverage, typically less volatile. {L} being smaller could mean more upside if it executes — or more pain if it doesn't.")),
+        cmpRow("Employees", a.profile.fullTimeEmployees, b.profile.fullTimeEmployees, "higher", (n) => n.toLocaleString(),
+          "Full-time staff. A rough measure of operational scale.",
+          "Higher = more scale, more capacity. But also higher fixed costs — can hurt margins in a downturn.",
+          (W, L) => say(W, L, "{W} operates at greater scale than {L}. More people = more capacity, broader operations — but also higher fixed costs.")),
+        cmpRow("Analyst bullish %", bullPctA, bullPctB, "higher", (n) => `${n.toFixed(0)}%`,
+          "Percentage of covering analysts rating the stock Strong Buy or Buy.",
+          "Higher is better as a consensus signal. >70% bullish = Wall Street loves it. <40% = analysts wary.",
+          (W, L) => say(W, L, "Wall Street is more bullish on {W} than {L}. Take with a pinch of salt — analysts often follow price momentum rather than lead it — but extreme consensus does move money.")),
+        cmpRow("Earnings beat rate", beatRateA, beatRateB, "higher", (n) => `${n.toFixed(0)}%`,
+          "Quarters they beat estimates over the last 4. 100% = beat every quarter.",
+          "Higher is better. Consistent beats = management under-promising and over-delivering — sign of operational quality.",
+          (W, L) => say(W, L, "{W} has a more consistent track record of beating Wall Street estimates than {L}. Suggests stronger forecasting discipline and operational execution — qualities long-term investors value.")),
       ],
     },
   ];
 
-  const ccyA = a.snapshot.currency || "";
-  const ccyB = b.snapshot.currency || "";
-
   const wa = buildCompareCopy(a, b, groups);
+  const verdict = overallVerdict(a, b, groups);
 
   return (
     <section ref={sectionRef} className="card mb-3 p-4">
@@ -1301,72 +1371,117 @@ function CompareCard({ a, b, loading, sectionRef }: { a: Profile; b: Profile | n
             <Swords size={11} className="mr-1 inline" /> Side-by-side
           </div>
           <h2 className="text-lg font-semibold">
-            {a.symbol} <ArrowRight size={14} className="inline text-[var(--text-muted)]" /> vs {b.symbol}
+            {A} <ArrowRight size={14} className="inline text-[var(--text-muted)]" /> vs {B}
           </h2>
           <div className="text-[11px] text-[var(--text-muted)]">
-            {a.snapshot.longName} ({ccyA}) vs {b.snapshot.longName} ({ccyB})
+            {a.snapshot.longName} vs {b.snapshot.longName}
           </div>
         </div>
-        <CopyButton text={wa} label="Copy" />
+        <CopyButton text={wa} label="Copy verdict" />
       </header>
 
+      {/* Sticky column headers */}
       <div className="grid grid-cols-3 gap-2 text-center text-[11px] mb-3">
         <div className="rounded-lg bg-[var(--surface-2)] p-2">
           <div className="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Metric</div>
         </div>
         <div className="rounded-lg bg-[var(--surface-2)] p-2 border-l-2 border-l-accent">
-          <div className="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">{a.symbol}</div>
+          <div className="text-[10px] uppercase tracking-wider text-accent">{A}</div>
         </div>
         <div className="rounded-lg bg-[var(--surface-2)] p-2 border-l-2 border-l-warning">
-          <div className="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">{b.symbol}</div>
+          <div className="text-[10px] uppercase tracking-wider text-warning">{B}</div>
         </div>
       </div>
 
       {groups.map((g) => {
-        const aWins = g.rows.filter((r) => r.winner === "A").length;
-        const bWins = g.rows.filter((r) => r.winner === "B").length;
-        const verdict = aWins > bWins ? `${a.symbol} leads ${aWins} vs ${bWins}` :
-                        bWins > aWins ? `${b.symbol} leads ${bWins} vs ${aWins}` :
-                        `Tied ${aWins} vs ${bWins}`;
+        const aW = g.rows.filter((r) => r.winner === "A").length;
+        const bW = g.rows.filter((r) => r.winner === "B").length;
+        const groupTag = aW > bW ? `${A} leads ${aW}–${bW}` : bW > aW ? `${B} leads ${bW}–${aW}` : `Tied ${aW}–${bW}`;
         return (
-          <div key={g.title} className="mb-3">
-            <div className="mb-1.5 flex items-center justify-between gap-2">
+          <div key={g.title} className="mb-4">
+            <div className="mb-2 flex flex-wrap items-baseline justify-between gap-1">
               <h3 className="text-[12px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">{g.title}</h3>
-              <span className="rounded-full bg-[var(--surface-2)] px-2 py-0.5 text-[10px] text-[var(--text-muted)]">{verdict}</span>
+              <span className="rounded-full bg-[var(--surface-2)] px-2 py-0.5 text-[10px] text-[var(--text-muted)]">{groupTag}</span>
             </div>
-            <div className="space-y-1">
-              {g.rows.map((r, i) => (
-                <div key={i} className="grid grid-cols-3 gap-2 items-center rounded-lg border border-[var(--line)] bg-[var(--surface-2)] p-2 text-[12px]">
-                  <div className="flex items-center gap-1">
-                    <span className="text-[11px] leading-tight text-[var(--text-muted)]" title={r.tooltip}>{r.label}</span>
+            {/* Category-level layman explanation */}
+            <p className="mb-2 text-[11.5px] leading-relaxed text-[var(--text-muted)]">{g.layman}</p>
+
+            <div className="space-y-2">
+              {g.rows.map((r, i) => {
+                const winnerSym = r.winner === "A" ? A : r.winner === "B" ? B : null;
+                const loserSym  = r.winner === "A" ? B : r.winner === "B" ? A : null;
+                return (
+                  <div key={i} className="rounded-lg border border-[var(--line)] bg-[var(--surface-2)] p-2.5">
+                    <div className="grid grid-cols-3 items-center gap-2 text-[12px]">
+                      <div className="leading-tight">
+                        <div className="font-semibold">{r.label}</div>
+                      </div>
+                      <div className={`tabular text-center font-semibold ${r.winner === "A" ? "text-success" : ""}`}>
+                        {r.aFmt ?? "—"}
+                        {r.winner === "A" && <span className="ml-1 text-[10px]">●</span>}
+                      </div>
+                      <div className={`tabular text-center font-semibold ${r.winner === "B" ? "text-success" : ""}`}>
+                        {r.bFmt ?? "—"}
+                        {r.winner === "B" && <span className="ml-1 text-[10px]">●</span>}
+                      </div>
+                    </div>
+                    {/* Plain-English caption — always shown */}
+                    {r.layman && (
+                      <p className="mt-1.5 text-[11px] leading-relaxed text-[var(--text-muted)]">
+                        <strong className="text-[var(--text)]">What this means:</strong> {r.layman}
+                      </p>
+                    )}
+                    {/* Winner sentence — shown only when there's a clear winner */}
+                    {winnerSym && loserSym && r.winnerSentence && (
+                      <p className="mt-1 rounded-md border-l-2 border-l-success bg-[var(--surface)] px-2 py-1.5 text-[11px] leading-relaxed">
+                        <span className="font-semibold text-success">{winnerSym} wins.</span>{" "}
+                        {r.winnerSentence(winnerSym, loserSym)}
+                      </p>
+                    )}
                   </div>
-                  <div className={`tabular text-center font-semibold ${r.winner === "A" ? "text-success" : ""}`}>
-                    {r.aFmt ?? "—"}
-                    {r.winner === "A" && <span className="ml-1 text-[10px]">●</span>}
-                  </div>
-                  <div className={`tabular text-center font-semibold ${r.winner === "B" ? "text-success" : ""}`}>
-                    {r.bFmt ?? "—"}
-                    {r.winner === "B" && <span className="ml-1 text-[10px]">●</span>}
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         );
       })}
 
-      <p className="mt-2 text-[10.5px] text-[var(--text-muted)] leading-relaxed">
-        Each row compares one metric. The green dot ● marks the better value on that metric
-        (for valuation: lower P/E is better; for growth + margins: higher is better; for debt: lower is better).
-        Tap and hold any metric label to see what it means.
-      </p>
+      {/* ─── OVERALL VERDICT ─── */}
+      <div className="mt-2 rounded-xl border-l-4 border-l-success border-[var(--line)] bg-[var(--surface-2)] p-3">
+        <div className="mb-1 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+          🏆 Bottom line — what to tell your client
+        </div>
+        <h3 className="text-[14px] font-semibold leading-tight">{verdict.headline}</h3>
+        <p className="mt-2 text-[12px] leading-relaxed">{verdict.summary}</p>
+        {verdict.suitFor.length > 0 && (
+          <div className="mt-2 space-y-1 text-[11.5px]">
+            {verdict.suitFor.map((s, i) => (
+              <div key={i} className="flex gap-2">
+                <span className="text-success">→</span>
+                <span><strong>{s.investor}:</strong> {s.pick}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        <p className="mt-2 text-[10.5px] text-[var(--text-muted)] italic">
+          This is a quantitative scorecard, not investment advice. Cross-check with qualitative factors (management, moat, industry trends) before recommending.
+        </p>
+      </div>
     </section>
   );
 }
 
 /* ─── comparison helpers ─── */
-interface CompareGroup { title: string; tone: "positive" | "negative" | "neutral"; rows: CompareRow[]; }
-interface CompareRow { label: string; aRaw: number | null; bRaw: number | null; aFmt: string | null; bFmt: string | null; winner: "A" | "B" | "tie" | "n/a"; tooltip: string; }
+interface CompareGroup { title: string; layman: string; rows: CompareRow[]; }
+interface CompareRow {
+  label: string;
+  aRaw: number | null; bRaw: number | null;
+  aFmt: string | null; bFmt: string | null;
+  winner: "A" | "B" | "tie" | "n/a";
+  tooltip: string;
+  layman?: string;
+  winnerSentence?: (winner: string, loser: string) => string;
+}
 
 function cmpRow(
   label: string,
@@ -1374,7 +1489,9 @@ function cmpRow(
   b: number | null,
   better: "higher" | "lower",
   fmt: (n: number) => string,
-  tooltip: string
+  tooltip: string,
+  layman?: string,
+  winnerSentence?: (winner: string, loser: string) => string,
 ): CompareRow {
   const aFmt = a != null && isFinite(a) ? fmt(a) : null;
   const bFmt = b != null && isFinite(b) ? fmt(b) : null;
@@ -1384,12 +1501,10 @@ function cmpRow(
     else if (better === "higher") winner = a > b ? "A" : "B";
     else winner = a < b ? "A" : "B";
   }
-  return { label, aRaw: a, bRaw: b, aFmt, bFmt, winner, tooltip };
+  return { label, aRaw: a, bRaw: b, aFmt, bFmt, winner, tooltip, layman, winnerSentence };
 }
 
-function pctOrNull(n: number | null): number | null {
-  return n == null ? null : n * 100;
-}
+function pctOrNull(n: number | null): number | null { return n == null ? null : n * 100; }
 function netCash(p: Profile): number | null {
   const c = p.fundamentals.totalCash, d = p.fundamentals.totalDebt;
   if (c == null && d == null) return null;
@@ -1407,15 +1522,116 @@ function beatRate(rows: Profile["earnings"]): number | null {
   return (beats / resolved.length) * 100;
 }
 
+/* ─── overall verdict ─── */
+interface VerdictSuit { investor: string; pick: string; }
+interface Verdict { headline: string; summary: string; suitFor: VerdictSuit[]; }
+
+function overallVerdict(a: Profile, b: Profile, groups: CompareGroup[]): Verdict {
+  const A = a.symbol, B = b.symbol;
+  let aWins = 0, bWins = 0;
+  const groupWins: Record<string, "A" | "B" | "tie"> = {};
+  for (const g of groups) {
+    let aW = 0, bW = 0;
+    for (const r of g.rows) {
+      if (r.winner === "A") { aW++; aWins++; }
+      else if (r.winner === "B") { bW++; bWins++; }
+    }
+    const key = g.title.split("—")[0].trim().toLowerCase();
+    groupWins[key] = aW > bW ? "A" : bW > aW ? "B" : "tie";
+  }
+
+  const total = aWins + bWins;
+  const margin = Math.abs(aWins - bWins);
+  const leader = aWins > bWins ? A : bWins > aWins ? B : null;
+  const trailer = leader === A ? B : leader === B ? A : null;
+
+  // Build headline
+  let headline: string;
+  if (!leader) {
+    headline = `${A} and ${B} look very evenly matched.`;
+  } else if (margin >= 6) {
+    headline = `${leader} is the clear stronger pick across the board.`;
+  } else if (margin >= 3) {
+    headline = `${leader} edges ahead overall (${aWins > bWins ? aWins : bWins} wins vs ${aWins > bWins ? bWins : aWins}).`;
+  } else {
+    headline = `${leader} slightly ahead — but ${trailer} is competitive.`;
+  }
+
+  // Build the summary paragraph
+  const aStrengths: string[] = [];
+  const bStrengths: string[] = [];
+  for (const key of Object.keys(groupWins)) {
+    const win = groupWins[key];
+    if (win === "A") aStrengths.push(key);
+    else if (win === "B") bStrengths.push(key);
+  }
+  const parts: string[] = [];
+  parts.push(`${A} wins ${aWins} metrics, ${B} wins ${bWins} (of ${total} comparable). `);
+  if (aStrengths.length) parts.push(`${A} leads on ${aStrengths.join(", ")}. `);
+  if (bStrengths.length) parts.push(`${B} leads on ${bStrengths.join(", ")}. `);
+
+  // Style-based suitability
+  const suitFor: VerdictSuit[] = [];
+  const valuationWin = groupWins["valuation"];
+  const growthWin = groupWins["growth"];
+  const balanceWin = groupWins["balance sheet"];
+  const incomeWin = groupWins["income & risk"];
+  const profitWin = groupWins["profitability"];
+
+  if (valuationWin && valuationWin !== "tie") {
+    const w = valuationWin === "A" ? A : B;
+    suitFor.push({ investor: "Value investor (buying cheap)", pick: `${w} — better valuation multiples on earnings + sales.` });
+  }
+  if (growthWin && growthWin !== "tie") {
+    const w = growthWin === "A" ? A : B;
+    suitFor.push({ investor: "Growth investor (chasing momentum)", pick: `${w} — faster revenue + earnings growth.` });
+  }
+  if (balanceWin && balanceWin !== "tie") {
+    const w = balanceWin === "A" ? A : B;
+    suitFor.push({ investor: "Conservative investor (safety first)", pick: `${w} — stronger balance sheet, lower bankruptcy risk.` });
+  }
+  if (incomeWin && incomeWin !== "tie") {
+    const w = incomeWin === "A" ? A : B;
+    suitFor.push({ investor: "Income investor (wants dividends)", pick: `${w} — higher dividend yield + lower volatility.` });
+  }
+  if (profitWin && profitWin !== "tie" && profitWin !== valuationWin) {
+    const w = profitWin === "A" ? A : B;
+    suitFor.push({ investor: "Quality investor (Buffett-style)", pick: `${w} — higher margins, better business economics.` });
+  }
+
+  // Cross-cutting note: if growth and value diverge, that's the classic trade-off
+  let crossNote = "";
+  if (valuationWin && growthWin && valuationWin !== "tie" && growthWin !== "tie" && valuationWin !== growthWin) {
+    const valWin = valuationWin === "A" ? A : B;
+    const grWin = growthWin === "A" ? A : B;
+    crossNote = `Classic trade-off: ${valWin} is cheaper, ${grWin} is faster-growing. Which matters more depends on the client's holding period and risk appetite.`;
+  } else if (leader && margin >= 4) {
+    crossNote = `${leader} wins on multiple dimensions at once — a more decisive signal than a single-metric edge.`;
+  }
+  if (crossNote) parts.push(crossNote);
+
+  return { headline, summary: parts.join(""), suitFor };
+}
+
 function buildCompareCopy(a: Profile, b: Profile, groups: CompareGroup[]): string {
+  const A = a.symbol, B = b.symbol;
+  const v = overallVerdict(a, b, groups);
   const lines: string[] = [];
-  lines.push(`⚔️ *${a.symbol} vs ${b.symbol} — Side-by-side*`);
+  lines.push(`⚔️ *${A} vs ${B} — Side-by-side*`);
+  lines.push("");
+  lines.push(`🏆 *Bottom line:* ${v.headline}`);
+  lines.push(v.summary);
+  if (v.suitFor.length) {
+    lines.push("");
+    lines.push("*Best fit:*");
+    for (const s of v.suitFor) lines.push(`• ${s.investor}: ${s.pick}`);
+  }
   lines.push("");
   for (const g of groups) {
     lines.push(`*${g.title}*`);
     for (const r of g.rows) {
-      const winnerTag = r.winner === "A" ? ` ✓ ${a.symbol}` : r.winner === "B" ? ` ✓ ${b.symbol}` : "";
-      lines.push(`  ${r.label}: ${a.symbol} ${r.aFmt ?? "—"} | ${b.symbol} ${r.bFmt ?? "—"}${winnerTag}`);
+      const tag = r.winner === "A" ? ` ✓ ${A}` : r.winner === "B" ? ` ✓ ${B}` : "";
+      lines.push(`  ${r.label}: ${A} ${r.aFmt ?? "—"} | ${B} ${r.bFmt ?? "—"}${tag}`);
     }
     lines.push("");
   }
