@@ -65,7 +65,15 @@ export function Header() {
   const snaps = marketSnapshots(now) as Snap[];
 
   return (
-    <header className="sticky top-0 z-40 border-b border-[var(--line)] bg-[var(--surface)]/80 backdrop-blur-md">
+    <header
+      className="sticky top-0 z-40 border-b border-[var(--line)] bg-[var(--surface)]/80 backdrop-blur-md"
+      // On installed iOS PWAs the page extends UNDER the Dynamic Island /
+      // notch / status bar. Without this padding the brand + theme toggle
+      // sit inside that 50px-tall cutout area where touches don't register.
+      // env(safe-area-inset-top) returns 0 on platforms without a notch,
+      // so this is a no-op on desktop and Android.
+      style={{ paddingTop: "env(safe-area-inset-top)" }}
+    >
       {/* Row 1 — brand, MY clock, theme toggle */}
       <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-2 sm:px-6">
         <div className="flex items-center gap-2">
