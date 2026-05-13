@@ -30,6 +30,14 @@ export function listPocket(): PocketEntry[] {
 export function savePocket(list: PocketEntry[]): void {
   if (typeof window === "undefined") return;
   window.localStorage.setItem(KEY, JSON.stringify(list));
+  // Fire-and-forget sync to the server when push is enabled. Lives in a
+  // separate module so server code can import storage without dragging in
+  // the push client. Wrapped in try so a failed sync never breaks a save.
+  try {
+    // Dynamic import — avoids pulling pushClient (and its `navigator` refs)
+    // into the SSR bundle.
+    import("./pushClient").then((m) => m.syncPocket(list).catch(() => {})).catch(() => {});
+  } catch {}
 }
 
 export function upsertTranche(t: Tranche): PocketEntry {

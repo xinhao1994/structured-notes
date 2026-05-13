@@ -16,10 +16,11 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { BellRing, AlertTriangle, Calendar, X } from "lucide-react";
+import { BellRing, AlertTriangle, Calendar, X, CheckCircle } from "lucide-react";
 import { listPocket, type PocketEntry } from "@/lib/storage";
 import { koSchedule } from "@/lib/calc";
 import { useQuotes } from "@/lib/hooks/useQuotes";
+import { requestSubscribe, unsubscribe, isSubscribedLocally } from "@/lib/pushClient";
 import type { MarketCode, Tranche } from "@/lib/types";
 
 const NOTIFIED_KEY = "snd.dailyObs.notifiedFor";
@@ -180,31 +181,64 @@ function TodayCard({
 }
 
 /**
- * Small helper for surfaces that don't have notification permission yet —
- * shows a one-tap button to enable. Used in the bottom of the banner or
- * standalone in settings.
+ * Server-push enable / disable button.
+ *
+ * Tap once → subscribe to push, POST the current Pocket to the server.
+ * From then on the Vercel Cron will send a notification at 09:00 Malaysia
+ * even when the app isn't open.
+ *
+ * Tap again → unsubscribe, delete the server row, revoke the browser
+ * subscription.
  */
 export function EnableDailyAlertsButton() {
-  const [granted, setGranted] = useState<boolean | null>(null);
+  const [state, setState] = useState<"unknown" | "off" | "on" | "busy">("unknown");
+  const [error, setError] = useState<string | null>(null);
+
   useEffect(() => {
-    if (typeof window === "undefined" || !("Notification" in window)) { setGranted(false); return; }
-    setGranted(Notification.permission === "granted");
+    if (typeof window === "undefined") return;
+    const subbed = isSubscribedLocally();
+    setState(subbed ? "on" : "off");
   }, []);
-  if (granted === null || granted === true) return null;
+
+  async function enable() {
+    setState("busy"); setError(null);
+    try {
+      const res = await requestSubscribe(listPocket());
+      if (res.ok) setState("on");
+      else { setState("off"); setError(res.reason || "subscribe failed"); }
+    } catch (e: any) { setState("off"); setError(e?.message || "subscribe failed"); }
+  }
+
+  async function disable() {
+    setState("busy");
+    try { await unsubscribe(); } catch {}
+    setState("off");
+  }
+
+  if (state === "unknown") return null;
+
   return (
-    <button
-      onClick={async () => {
-        try {
-          const r = await Notification.requestPermission();
-          setGranted(r === "granted");
-          if (r === "granted") new Notification("Daily alerts enabled", {
-            body: "You'll get a notification each morning when your Pocket has a KO observation that day.",
-          });
-        } catch {}
-      }}
-      className="btn h-8 px-3 text-[11px]"
-    >
-      <AlertTriangle size={12} /> Enable daily KO alerts
-    </button>
+    <div className="flex flex-col gap-1">
+      {state === "on" ? (
+        <button onClick={disable} className="btn h-8 px-3 text-[11px]" disabled={(state as string) === "busy"}>
+          <CheckCircle size={12} className="text-success" /> Morning alerts on — tap to disable
+        </button>
+      ) : (
+        <button onClick={enable} className="btn btn-primary h-8 px-3 text-[11px]" disabled={(state as string) === "busy"}>
+          <AlertTriangle size={12} /> {state === "busy" ? "Subscribing..." : "Enable 9am morning alerts"}
+        </button>
+      )}
+      {error && (
+        <p className="text-[10.5px] text-danger">
+          {error}
+          {error.includes("Add to Home Screen") && " — long-press Share → Add to Home Screen, then retry from the installed app."}
+        </p>
+      )}
+      {state === "on" && (
+        <p className="text-[10.5px] text-[var(--text-muted)]">
+          You'll get a push notification at 9am Malaysia time on any day a Pocket tranche has a KO observation.
+        </p>
+      )}
+    </div>
   );
 }
