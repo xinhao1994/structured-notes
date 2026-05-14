@@ -2,22 +2,23 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, Wallet, Calculator, LineChart } from "lucide-react";
+import { LayoutDashboard, Wallet, Calculator, LineChart, MessageCircle } from "lucide-react";
 import clsx from "clsx";
 
-// 4-tab nav. Analyze = single-stock research dashboard for RM client briefs.
+// 5-tab nav. Chat = team realtime chat via Supabase Realtime.
 const tabs = [
   { href: "/", label: "Desk", icon: LayoutDashboard },
   { href: "/pocket", label: "Pocket", icon: Wallet },
   { href: "/calculator", label: "Calc", icon: Calculator },
   { href: "/analyze", label: "Analyze", icon: LineChart },
+  { href: "/chat", label: "Chat", icon: MessageCircle },
 ];
 
 export function BottomNav() {
   const path = usePathname();
   return (
     <nav className="no-print fixed inset-x-0 bottom-0 z-40 border-t border-[var(--line)] bg-[var(--surface)]/95 backdrop-blur-md">
-      <div className="mx-auto grid max-w-6xl grid-cols-4 px-1 pb-[max(env(safe-area-inset-bottom),6px)] pt-1.5">
+      <div className="mx-auto grid max-w-6xl grid-cols-5 px-1 pb-[max(env(safe-area-inset-bottom),6px)] pt-1.5">
         {tabs.map((t) => {
           const active = t.href === "/" ? path === "/" : path.startsWith(t.href);
           const Icon = t.icon;
@@ -26,11 +27,11 @@ export function BottomNav() {
               key={t.href}
               href={t.href}
               className={clsx(
-                "flex flex-col items-center justify-center gap-0.5 py-1.5 text-[11px] font-medium",
+                "flex flex-col items-center justify-center gap-0.5 py-1.5 text-[10.5px] font-medium",
                 active ? "text-accent dark:text-[var(--accent)]" : "text-[var(--text-muted)]"
               )}
             >
-              <Icon size={20} className={active ? "stroke-[2.4]" : ""} />
+              <Icon size={19} className={active ? "stroke-[2.4]" : ""} />
               <span>{t.label}</span>
             </Link>
           );
