@@ -261,11 +261,20 @@ export default function ChatPage() {
   }
 
   return (
-    <>
+    // Fixed-height container: header + name bar + (scrollable list) + composer
+    // all fit inside the viewport. Only the message list scrolls. Height is
+    // 100dvh minus the room reserved for the app's sticky header at top and
+    // the bottom-nav at the bottom (≈ 200px combined on phones).
+    // Using `dvh` (dynamic viewport) so the iOS Safari URL bar collapsing
+    // doesn't break the layout.
+    <div
+      className="flex flex-col"
+      style={{ height: "calc(100dvh - 200px)" }}
+    >
       <ChatHeader />
 
       {/* Sender-name row — editable inline, plus Clear-chat */}
-      <section className="card mb-3 flex items-center justify-between gap-2 p-3">
+      <section className="card mb-2 flex flex-shrink-0 items-center justify-between gap-2 p-3">
         {editingName ? (
           <div className="flex flex-1 items-center gap-2">
             <span className="text-[11px] uppercase tracking-wider text-[var(--text-muted)]">Your name</span>
@@ -301,9 +310,11 @@ export default function ChatPage() {
         )}
       </section>
 
-      {/* Message list */}
-      <section className="card mb-3 flex flex-col" style={{ minHeight: "55vh" }}>
-        <div className="flex-1 space-y-2 overflow-y-auto p-3" style={{ maxHeight: "60vh" }}>
+      {/* Message list — the ONLY scrollable area on this page. Takes up all
+          remaining vertical space (flex-1) and uses min-h-0 so flex correctly
+          constrains it instead of letting it expand to fit content. */}
+      <section className="card mb-2 flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div className="flex-1 space-y-2 overflow-y-auto p-3">
           {loading && <p className="text-center text-[12px] text-[var(--text-muted)]">Loading messages...</p>}
           {!loading && messages.length === 0 && (
             <div className="py-8 text-center">
@@ -371,8 +382,9 @@ export default function ChatPage() {
         )}
       </section>
 
-      {/* Composer */}
-      <section className="card sticky bottom-[88px] z-30 p-2.5">
+      {/* Composer — sits at the bottom of the flex column. No need for sticky
+          since the parent's fixed height keeps it pinned automatically. */}
+      <section className="card flex-shrink-0 p-2.5">
         <div className="flex items-end gap-1.5">
           {/* Image attach */}
           <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={pickImage} />
@@ -439,22 +451,19 @@ export default function ChatPage() {
         )}
       </section>
 
-      {error && <p className="mt-2 text-center text-[11px] text-danger">{error}</p>}
-      <p className="mt-3 text-center text-[10.5px] text-[var(--text-muted)]">
-        Messages stored in Supabase. Images + voice notes uploaded to chat-attachments bucket.
-      </p>
-    </>
+      {error && <p className="mt-1 flex-shrink-0 text-center text-[11px] text-danger">{error}</p>}
+    </div>
   );
 }
 
 function ChatHeader() {
+  // Compact header — no description text and tighter spacing so the chat
+  // area gets as much vertical room as possible on phone.
   return (
-    <header className="mb-3">
-      <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">Team chat</div>
-      <h1 className="text-xl font-semibold flex items-center gap-2"><MessageCircle size={18} /> Chat</h1>
-      <p className="mt-1 text-[12px] text-[var(--text-muted)]">
-        Secure internal team channel. Messages deliver in real time.
-      </p>
+    <header className="mb-2 flex-shrink-0">
+      <h1 className="text-base font-semibold flex items-center gap-2">
+        <MessageCircle size={16} /> Team chat
+      </h1>
     </header>
   );
 }
