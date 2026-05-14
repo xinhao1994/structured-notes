@@ -97,13 +97,33 @@ body {
 .bank-table tbody tr:nth-child(even) {
   background: var(--surface-2);
 }
-.bank-table tbody tr:hover,
-.bank-table tbody tr:hover td:first-child {
-  background: rgba(124, 167, 224, 0.08); /* soft accent tint */
+/* Hover row tint — only on devices with a real pointer (mouse / trackpad).
+   On touchscreens, :hover gets STUCK after a tap because the OS has no
+   pointer-leave event, which causes the row to stay highlighted until
+   the user taps somewhere else — and worse, the highlight gets baked
+   into PNG/PDF exports. Gating on `(hover: hover)` excludes phones. */
+@media (hover: hover) and (pointer: fine) {
+  .bank-table tbody tr:hover,
+  .bank-table tbody tr:hover td:first-child {
+    background: rgba(124, 167, 224, 0.08);
+  }
+  .dark .bank-table tbody tr:hover,
+  .dark .bank-table tbody tr:hover td:first-child {
+    background: rgba(199, 160, 224, 0.10);
+  }
 }
-.dark .bank-table tbody tr:hover,
-.dark .bank-table tbody tr:hover td:first-child {
-  background: rgba(199, 160, 224, 0.10); /* soft lavender tint in dark mode */
+
+/* Suppress iOS Safari's blue tap-highlight + the long-press text-selection
+   callout when the user taps the underlying name (which is a Next.js Link).
+   The link still navigates — we just don't want the cell to flash blue
+   or trigger a "Copy / Look Up" selection menu. */
+.bank-table tbody tr,
+.bank-table tbody td,
+.bank-table tbody a {
+  -webkit-tap-highlight-color: transparent;
+}
+.bank-table tbody td {
+  -webkit-touch-callout: none;
 }
 
 /* Subtle pulse for live elements */
