@@ -54,31 +54,56 @@ body {
   border-collapse: separate;
   border-spacing: 0;
   font-variant-numeric: tabular-nums;
+  color: var(--text);
 }
 .bank-table th, .bank-table td {
   border-bottom: 1px solid var(--line);
-  padding: 10px 12px;
+  padding: 11px 14px;
   text-align: right;
   white-space: nowrap;
+  font-size: 12.5px;
 }
 .bank-table th:first-child, .bank-table td:first-child {
   text-align: left;
-}
-.bank-table thead th {
-  font-size: 11px;
-  letter-spacing: .04em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-  background: var(--surface-2);
   position: sticky;
-  top: 0;
+  left: 0;
   z-index: 1;
 }
-.bank-table tbody tr:hover {
-  background: rgba(10, 58, 102, 0.03);
+/* Sticky header — slightly darker than surface-2 with a soft border underneath */
+.bank-table thead th {
+  font-size: 10.5px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: var(--surface-2);
+  border-bottom: 1.5px solid var(--line);
+  position: sticky;
+  top: 0;
+  z-index: 2;
 }
-.dark .bank-table tbody tr:hover {
-  background: rgba(105, 162, 216, 0.06);
+.bank-table thead th:first-child {
+  z-index: 3;
+}
+/* Sticky first column gets the same background as its row so it doesn't
+   look like a floating chip when the user scrolls right. */
+.bank-table tbody td:first-child {
+  background: var(--surface);
+}
+.bank-table tbody tr:nth-child(even) td:first-child {
+  background: var(--surface-2);
+}
+/* Subtle zebra striping — bands of surface vs surface-2 for readability */
+.bank-table tbody tr:nth-child(even) {
+  background: var(--surface-2);
+}
+.bank-table tbody tr:hover,
+.bank-table tbody tr:hover td:first-child {
+  background: rgba(124, 167, 224, 0.08); /* soft accent tint */
+}
+.dark .bank-table tbody tr:hover,
+.dark .bank-table tbody tr:hover td:first-child {
+  background: rgba(199, 160, 224, 0.10); /* soft lavender tint in dark mode */
 }
 
 /* Subtle pulse for live elements */

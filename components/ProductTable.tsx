@@ -126,7 +126,12 @@ export const ProductTable = forwardRef<ProductTableHandle, Props>(function Produ
         </div>
       </header>
 
-      <div ref={tableRef} className="bg-white text-ink-900">
+      {/* No more forced bg-white — the theme-aware bank-table CSS handles
+          surface colour, zebra striping, sticky header, and hover state.
+          PNG/PDF export still works (html-to-image captures whatever's on
+          screen, so the dark theme exports as-is, which actually looks more
+          professional than the old white version). */}
+      <div ref={tableRef} className="bg-[var(--surface)]">
         <div className="scroll-x">
           <table className="bank-table">
             <thead>
@@ -159,13 +164,13 @@ export const ProductTable = forwardRef<ProductTableHandle, Props>(function Produ
                         title="Open in Stock Analyze"
                       >
                         <span className="font-medium underline-offset-2 group-hover:underline">{r.underlying.rawName}</span>
-                        <span className="rounded bg-ink-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-ink-700">
+                        <span className="rounded bg-[var(--surface-2)] border border-[var(--line)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
                           {r.underlying.market}
                         </span>
                         <LineChart size={12} className="opacity-0 transition-opacity group-hover:opacity-70" />
                       </Link>
                     </td>
-                    <td className="tabular text-ink-700">
+                    <td className="tabular text-[var(--text)]">
                       {isEditing ? (
                         <span className="inline-flex items-center gap-1">
                           <input
@@ -178,11 +183,11 @@ export const ProductTable = forwardRef<ProductTableHandle, Props>(function Produ
                               if (e.key === "Enter") commitEdit(r.underlying.symbol);
                               if (e.key === "Escape") setEditingSym(null);
                             }}
-                            className="w-24 rounded border border-ink-300 bg-white px-1 py-0.5 text-right text-[12px]"
+                            className="w-24 rounded border border-[var(--line)] bg-[var(--surface)] text-[var(--text)] px-1 py-0.5 text-right text-[12px]"
                           />
                           <button onClick={() => commitEdit(r.underlying.symbol)} className="text-success" title="Save"><Check size={14} /></button>
-                          <button onClick={() => setEditingSym(null)} className="text-ink-500" title="Cancel"><X size={14} /></button>
-                          <button onClick={() => clearOverride(r.underlying.symbol)} className="text-ink-500" title="Reset to auto"><RotateCcw size={12} /></button>
+                          <button onClick={() => setEditingSym(null)} className="text-[var(--text-muted)]" title="Cancel"><X size={14} /></button>
+                          <button onClick={() => clearOverride(r.underlying.symbol)} className="text-[var(--text-muted)]" title="Reset to auto"><RotateCcw size={12} /></button>
                         </span>
                       ) : (
                         <button
@@ -213,7 +218,7 @@ export const ProductTable = forwardRef<ProductTableHandle, Props>(function Produ
             </tbody>
           </table>
         </div>
-        <div className="border-t border-[var(--line)] px-4 py-2 text-[10px] text-ink-500">
+        <div className="border-t border-[var(--line)] px-4 py-2 text-[10px] text-[var(--text-muted)]">
           Initial Fixing {tranche.isIndicativeFixing ? "(indicative — latest close)" : "(actual)"}
           {" · "}Click any Initial Fixing cell to override manually.
           {" · "}Strike = Initial × {(tranche.strikePct * 100).toFixed(0)}%
