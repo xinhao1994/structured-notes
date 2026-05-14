@@ -119,6 +119,28 @@ body {
 }
 .live-dot.closed { background: #b3261e; animation: none; }
 
+/* ── Live price tick animations ── */
+/* Brief background flash on a price change. Sage green for up-ticks,
+   dusty coral for down-ticks — same palette as the rest of the app. */
+@keyframes tick-up-flash {
+  0%   { background: rgba(124, 192, 158, 0.45); }
+  100% { background: transparent; }
+}
+@keyframes tick-down-flash {
+  0%   { background: rgba(224, 133, 125, 0.45); }
+  100% { background: transparent; }
+}
+.tick-up   { animation: tick-up-flash   700ms ease-out; color: #5FA77E; }
+.tick-down { animation: tick-down-flash 700ms ease-out; color: #C26B62; }
+
+/* Subtle "live" glow — when the market is open and we haven't ticked
+   recently, breathe gently so the value looks alive rather than frozen. */
+@keyframes live-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(124, 167, 224, 0.0); }
+  50%      { box-shadow: 0 0 0 3px rgba(124, 167, 224, 0.15); }
+}
+.live-glow { animation: live-pulse 2.5s ease-in-out infinite; }
+
 /* Card */
 .card {
   background: var(--surface);

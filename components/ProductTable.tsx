@@ -7,6 +7,8 @@ import * as htmlToImage from "html-to-image";
 import jsPDF from "jspdf";
 import type { Tranche, PriceQuote } from "@/lib/types";
 import { tableRows, formatPx } from "@/lib/calc";
+import { TickingPrice } from "@/components/TickingPrice";
+import { isMarketOpen } from "@/lib/markets";
 
 interface Props {
   tranche: Tranche;
@@ -200,7 +202,14 @@ export const ProductTable = forwardRef<ProductTableHandle, Props>(function Produ
                         </button>
                       )}
                     </td>
-                    <td className="tabular font-semibold">{formatPx(r.live, r.currency)}</td>
+                    <td className="font-semibold">
+                      <TickingPrice
+                        price={r.live}
+                        currency={r.currency}
+                        marketOpen={isMarketOpen(r.underlying.market).open}
+                        compact
+                      />
+                    </td>
                     <td className={`tabular font-medium ${
                       delta == null ? "" : delta >= 0 ? "text-success" : "text-danger"
                     }`}>

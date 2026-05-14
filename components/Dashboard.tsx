@@ -5,6 +5,7 @@ import Link from "next/link";
 import { ArrowDown, ArrowUp, CalendarClock, CircleDollarSign, Clock, Hash, Landmark, Repeat, LineChart } from "lucide-react";
 import type { PriceQuote, Tranche } from "@/lib/types";
 import { assessRisk, currentKoLevel, formatPx } from "@/lib/calc";
+import { TickingPrice } from "@/components/TickingPrice";
 import { isMarketOpen, MARKETS } from "@/lib/markets";
 
 interface Props {
@@ -89,7 +90,12 @@ export function Dashboard({ tranche, quotes }: Props) {
                 </div>
               </header>
               <div className="flex items-end justify-between gap-2">
-                <div className="tabular text-2xl font-semibold leading-none">{formatPx(q?.price, q?.currency)}</div>
+                <TickingPrice
+                  price={q?.price}
+                  currency={q?.currency}
+                  marketOpen={mktState.open}
+                  className="text-2xl font-semibold leading-none"
+                />
                 {dailyPct !== undefined && (
                   <div className={clsx("tabular flex items-center gap-1 text-sm font-semibold", dailyPct >= 0 ? "text-success" : "text-danger")}>
                     {dailyPct >= 0 ? <ArrowUp size={14} /> : <ArrowDown size={14} />}{dailyPct.toFixed(2)}%

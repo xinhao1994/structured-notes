@@ -40,7 +40,10 @@ export default function HomePage() {
     () => (tranche?.underlyings ?? []).map((u) => ({ symbol: u.symbol, market: u.market })),
     [tranche]
   );
-  const { quotes, loading, asOf, refresh } = useQuotes(items, 15_000);
+  // Poll quotes every 6s — feels "live" for the tick animations without
+  // blowing up the data-provider rate limits. (Yahoo + Stooq cache server-side
+  // anyway, so most polls are <100ms and use the edge cache.)
+  const { quotes, loading, asOf, refresh } = useQuotes(items, 6_000);
 
   // Latest available price per underlying.
   // For future-dated tranches (pre-trade), the user wants this to mirror the
