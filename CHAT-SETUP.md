@@ -1,11 +1,20 @@
 # Team Chat — Setup
 
-Two manual steps before the new **Chat** tab works:
+The Chat tab needs **three** manual one-time steps:
 
-## Step 1 — Run the chat table SQL
+1. Run a SQL migration to create the table + storage bucket.
+2. Add the Supabase anon key to Vercel env vars.
+3. Redeploy.
 
-1. Open your Supabase project → **SQL Editor** → **New query**.
-2. Paste the entire contents of `db/chat-messages.sql` (also reproduced below) → click **Run** → choose **Run and enable RLS** if prompted.
+After that, the tab supports plain messages, **image attachments**, **voice messages** (hold-to-record), a **floating "X is typing..."** indicator, and a **Clear chat** admin button.
+
+---
+
+## Step 1 — Run BOTH migrations in Supabase
+
+### 1a. Base table
+
+Supabase → **SQL Editor** → **New query**. Paste this ONLY (no markdown, just SQL):
 
 ```sql
 create table if not exists chat_messages (
@@ -19,58 +28,109 @@ create index if not exists chat_messages_created_at_idx on chat_messages(created
 alter table chat_messages enable row level security;
 
 drop policy if exists "chat read" on chat_messages;
-create policy "chat read"   on chat_messages for select using (true);
+create policy "chat read" on chat_messages for select using (true);
 
 drop policy if exists "chat insert" on chat_messages;
 create policy "chat insert" on chat_messages for insert with check (
   length(sender_name) between 1 and 32
-  and length(body) between 1 and 2000
+  and length(body) between 0 and 2000
 );
 
 alter publication supabase_realtime add table chat_messages;
 ```
 
-You should see "Success. No rows returned." Done.
+Click **Run** → "Run and enable RLS" if prompted. Should see "Success. No rows returned."
 
-## Step 2 — Add the anon key as a Vercel env var
+### 1b. Attachment fields + storage bucket (v2)
 
-The Chat tab reads + writes through Supabase from the browser, so it uses the **anon (public)** key — different from the `service_role` key you already added.
+In the same SQL editor, click **New query** again. Paste this:
 
-1. In Supabase, go to **Project Settings → API** (same page as before).
-2. Under **"Project API keys"**, copy the row labelled **`anon`** **`public`** (the SHORT one, not service_role).
+```sql
+-- Add attachment fields to messages
+alter table chat_messages
+  add column if not exists attachment_url  text,
+  add column if not exists attachment_type text;
+
+-- Create a public storage bucket for chat attachments (10MB max per file)
+insert into storage.buckets (id, name, public, file_size_limit)
+values ('chat-attachments', 'chat-attachments', true, 10485760)
+on conflict (id) do update set public = true, file_size_limit = 10485760;
+
+-- Allow anon role to upload + read from the bucket
+drop policy if exists "chat upload" on storage.objects;
+create policy "chat upload" on storage.objects for insert to anon
+  with check (bucket_id = 'chat-attachments');
+
+drop policy if exists "chat read" on storage.objects;
+create policy "chat read" on storage.objects for select to anon
+  using (bucket_id = 'chat-attachments');
+```
+
+Click **Run**. Same "Success. No rows returned."
+
+---
+
+## Step 2 — Add the anon key to Vercel
+
+You already have `NEXT_PUBLIC_SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` set. The chat additionally needs:
+
+1. In Supabase, **Settings → API → Project API keys**.
+2. Copy the row labelled **`anon` `public`** (NOT service_role).
 3. In Vercel → your project → **Settings → Environment Variables → Add New**:
 
 | Variable | Value |
 | --- | --- |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | (paste the anon public key) |
 
-Tick Production + Preview, save.
+Tick **Production + Preview**, save.
 
-4. Redeploy from **Deployments → ⋯ → Redeploy** (without build cache).
+4. **Redeploy without build cache:** Deployments → ⋯ → Redeploy → uncheck "Use existing Build Cache" → Redeploy.
+
+---
 
 ## Step 3 — Use it
 
-1. Open the app on your phone (installed PWA from home screen).
-2. Tap the new **Chat** tab in the bottom navigation.
-3. First time: enter your name (e.g. "Aiden"). Stored locally — only set it once per device.
-4. Type a message → tap **Send** (or hit Enter).
-5. Anyone else with the app installed on their phone sees your message instantly. Messages appear in real time without refreshing.
+Open the PWA on your phone (installed via Safari → Add to Home Screen). Tap the **Chat** tab.
 
-## Sharing with colleagues
+### What each button does
 
-Send them the app URL — they install the PWA the same way (Safari → Share → Add to Home Screen), open the Chat tab, set their name, and they're in. No registration, no logins. Whoever has the URL has access.
+| Button | Behaviour |
+| --- | --- |
+| **🖼️ Image** | File picker → pick photo/screenshot → uploaded to Supabase Storage → message sends instantly with the image inline. |
+| **🎤 Mic** | **Hold** to record. Release to send. Captures via your device microphone (iOS will ask permission once). Voice plays inline with a player. |
+| **Text input** | Type message + tap **Send** (or Enter). Shift+Enter for new line. |
+| **Edit** (top right) | Change your display name. |
+| **Clear chat** (top right, red) | Wipes ALL messages for everyone. Confirms first. |
 
-## Security model
+### Typing indicator
 
-- **Open read + open write**: anyone with the `NEXT_PUBLIC_SUPABASE_ANON_KEY` (which ships in your built JS bundle) and knowledge of the app URL can read every message and post new ones. Fine for a small private RM team.
-- **Length-checked**: RLS policy enforces 1–32 chars on sender name, 1–2000 chars on message body — limits abuse.
-- **No deletes from client**: only the RLS policies above allow `SELECT` and `INSERT`. There's no `UPDATE` or `DELETE` policy, so messages are append-only. If you ever need to clear chat, go to Supabase Table Editor → chat_messages → select rows → delete.
-- **If chat goes public** beyond your team: revoke the anon key in Supabase (Settings → API → Reset anon key), update Vercel, redeploy. Everyone's existing sessions break and you need to re-share the new key.
+When anyone else types in the input box, a floating **"X is typing..."** appears at the bottom of the message list with three pulsing dots. Auto-disappears 3.5 seconds after they stop. Rate-limited to ≤1 broadcast per 1.5s so typing doesn't spam the channel.
+
+---
+
+## Permissions on iOS
+
+The first time you tap the mic button, iOS will ask for microphone permission. Tap **Allow**. If you accidentally denied it, go to:
+
+- **iOS Settings → [your installed app name] → Microphone → Allow**, OR
+- **Settings → Safari → Camera & Microphone → Allow for this site** (if PWA), OR
+- Uninstall the PWA from home screen and re-install (then permit when prompted)
+
+---
+
+## Security notes
+
+- The anon key + the deployed URL together grant read+post access to anyone. Keep both private to your team.
+- Voice notes + images go to a **public Supabase storage bucket** — anyone with a direct URL can view them. The URLs are unguessable random strings, but treat the bucket as semi-public.
+- Messages are append-only via RLS. Only `/api/chat/clear` (server-side, service_role) can delete — and any client can call it. If you want to lock that down, add an env-var-based admin password check inside the route.
+
+---
 
 ## Limits (Supabase free tier)
 
-- 200 concurrent realtime connections — fine for a 10-person team
-- 2M realtime messages / month — fine unless you're sending 100s of msgs/day
-- Database storage 500 MB — chat is text, won't hit this
+- 200 concurrent realtime connections (your team won't hit this)
+- 2M realtime messages / month
+- 1GB storage for attachments (voice notes are tiny — a 10-second clip is ~50KB)
+- 500MB database — chat metadata is text, will last years
 
-If you scale beyond a small team, upgrade to Supabase Pro ($25/month) for higher limits.
+Upgrade to Supabase Pro ($25/month) if you outgrow these.
