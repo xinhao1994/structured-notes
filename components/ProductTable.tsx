@@ -34,9 +34,15 @@ async function captureFullTable(node: HTMLElement): Promise<string> {
   };
   if (scrollEl) { scrollEl.style.overflow = "visible"; scrollEl.style.width = `${fullWidth}px`; }
   node.style.width = `${fullWidth}px`;
+  // Use the ACTUAL theme background colour so the canvas matches the dark
+  // surface in dark mode, not a hardcoded white. Falls back to the
+  // computed --surface CSS var; if unavailable, falls back to white.
+  const surfaceVar = getComputedStyle(document.documentElement)
+    .getPropertyValue("--surface").trim();
+  const bg = surfaceVar || getComputedStyle(node).backgroundColor || "#ffffff";
   try {
     return await htmlToImage.toPng(node, {
-      backgroundColor: "white", pixelRatio: 2, width: fullWidth,
+      backgroundColor: bg, pixelRatio: 2, width: fullWidth,
       style: { width: `${fullWidth}px` }, cacheBust: true,
     });
   } finally {

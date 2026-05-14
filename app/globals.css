@@ -93,7 +93,12 @@ body {
 .bank-table tbody tr:nth-child(even) td:first-child {
   background: var(--surface-2);
 }
-/* Subtle zebra striping — bands of surface vs surface-2 for readability */
+/* Solid backgrounds on every row — explicit on both odd and even so
+   nothing falls back to transparency. Transparent rows broke PNG export
+   (white canvas leaked through where the row had no background). */
+.bank-table tbody tr {
+  background: var(--surface);
+}
 .bank-table tbody tr:nth-child(even) {
   background: var(--surface-2);
 }
