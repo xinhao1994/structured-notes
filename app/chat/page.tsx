@@ -297,7 +297,7 @@ function ChatHeader() {
         <MessageCircle size={18} /> Chat
       </h1>
       <p className="mt-1 text-[12px] text-[var(--text-muted)]">
-        Quick chat for colleagues using this app. Real-time — your messages appear instantly on every device.
+        Secure internal team channel. Messages deliver in real time.
       </p>
     </header>
   );
