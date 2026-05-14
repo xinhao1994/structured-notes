@@ -25,6 +25,17 @@ import type { MarketCode, Tranche } from "@/lib/types";
 
 const NOTIFIED_KEY = "snd.dailyObs.notifiedFor";
 
+// Pre-generated values for the env vars we control (VAPID + CRON_SECRET).
+// The user just copy-pastes these into Vercel. Same values as in PUSH-SETUP.md.
+// Supabase keys are user-specific so we don't preset those.
+const PRESET_ENV: Record<string, string> = {
+  VAPID_PUBLIC_KEY:              "BFcHsg7xZ-jnngGO1hDbg4Yb8-eaWPxkUY5RQp2wcCv5_llKwqRBHcTXLB0HlaQr0Wqu_D9xboJvcMiPbjl7chg",
+  NEXT_PUBLIC_VAPID_PUBLIC_KEY:  "BFcHsg7xZ-jnngGO1hDbg4Yb8-eaWPxkUY5RQp2wcCv5_llKwqRBHcTXLB0HlaQr0Wqu_D9xboJvcMiPbjl7chg",
+  VAPID_PRIVATE_KEY:             "tUFnMMvGaVoAvt-78MHc_X88Jf9pAwhpXw7uK8v6Fx8",
+  VAPID_SUBJECT:                 "mailto:chyi0728016@gmail.com",
+  CRON_SECRET:                   "f7e0d761141078908ab1b83cfdd3dcee4ce539a8c02d528a288026fdb007311c",
+};
+
 /** Today's date in YYYY-MM-DD on the Malaysia clock (UTC+8). */
 function malaysiaTodayISO(): string {
   const now = new Date();
@@ -194,6 +205,7 @@ export function EnableDailyAlertsButton() {
   const [state, setState] = useState<"unknown" | "off" | "on" | "busy">("unknown");
   const [error, setError] = useState<string | null>(null);
   const [errorCode, setErrorCode] = useState<string | null>(null);
+  const [missingEnv, setMissingEnv] = useState<string[] | null>(null);
   const [platform, setPlatform] = useState<{ isIOS: boolean; isInstalled: boolean; canSubscribe: boolean } | null>(null);
 
   useEffect(() => {
@@ -203,11 +215,23 @@ export function EnableDailyAlertsButton() {
   }, []);
 
   async function enable() {
-    setState("busy"); setError(null); setErrorCode(null);
+    setState("busy"); setError(null); setErrorCode(null); setMissingEnv(null);
     try {
       const res = await requestSubscribe(listPocket());
       if (res.ok) setState("on");
-      else { setState("off"); setError(res.reason || "Subscribe failed."); setErrorCode(res.reasonCode || null); }
+      else {
+        setState("off");
+        setError(res.reason || "Subscribe failed.");
+        setErrorCode(res.reasonCode || null);
+        // If it's a server-side config issue, fetch the setup status so we
+        // can tell the user exactly which env vars they're missing.
+        if (res.reasonCode === "server-error" || res.reasonCode === "no-vapid") {
+          try {
+            const sr = await fetch("/api/setup-status").then((r) => r.json());
+            if (sr && Array.isArray(sr.missing)) setMissingEnv(sr.missing);
+          } catch {}
+        }
+      }
     } catch (e: any) { setState("off"); setError(e?.message || "Subscribe failed."); }
   }
 
@@ -270,6 +294,49 @@ export function EnableDailyAlertsButton() {
       {/* Other errors — show as a plain red note */}
       {error && !showIOSInstallError && (
         <p className="text-[10.5px] text-danger">{error}</p>
+      )}
+
+      {/* Server-config error — render the missing env vars with copy-paste
+          values where we pre-generated them. The Supabase keys, the user
+          has to grab themselves from their Supabase project. */}
+      {missingEnv && missingEnv.length > 0 && (
+        <div className="rounded-xl border-l-4 border-l-warning border-[var(--line)] bg-[var(--surface-2)] p-3 text-[12px] leading-relaxed">
+          <div className="mb-1.5 font-semibold text-warning">
+            ⚙️ Server config not ready — paste these into Vercel
+          </div>
+          <p className="mb-2 text-[var(--text-muted)]">
+            Vercel → Project → Settings → Environment Variables. Tick Production +
+            Preview + Development for each, then redeploy.
+          </p>
+          <table className="w-full text-[11px]">
+            <tbody>
+              {missingEnv.map((k) => {
+                const preset = PRESET_ENV[k];
+                return (
+                  <tr key={k} className="border-t border-[var(--line)]">
+                    <td className="py-1.5 pr-2 align-top">
+                      <code className="font-mono text-[10.5px]">{k}</code>
+                    </td>
+                    <td className="py-1.5 align-top">
+                      {preset ? (
+                        <code className="block break-all rounded bg-[var(--surface)] px-1.5 py-1 text-[10px] font-mono">{preset}</code>
+                      ) : (
+                        <span className="text-[var(--text-muted)] italic">
+                          {k.includes("SUPABASE_URL") && "Your Supabase project URL (Settings → API → Project URL)"}
+                          {k.includes("SERVICE_ROLE") && "Your Supabase service_role key (Settings → API → Project API keys)"}
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <p className="mt-2 text-[10.5px] text-[var(--text-muted)]">
+            Full guide: <code>PUSH-SETUP.md</code> in your repo. After setting,
+            visit <code>/api/setup-status</code> to verify before retrying.
+          </p>
+        </div>
       )}
 
       {state === "on" && (

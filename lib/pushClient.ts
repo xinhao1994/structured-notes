@@ -86,8 +86,15 @@ export async function requestSubscribe(pocket: PocketEntry[]): Promise<Subscribe
   if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
     return { ok: false, reasonCode: "browser-unsupported", reason: "This browser does not support Push (need Chrome, Edge, Firefox, or installed iOS Safari)." };
   }
-  const vapidPublic = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
-  if (!vapidPublic) return { ok: false, reasonCode: "no-vapid", reason: "VAPID public key not configured on server. Check /api/setup-status." };
+  // Bundled VAPID public key — same value as PUSH-SETUP.md and the env var.
+  // The PUBLIC half of a VAPID keypair is, by design, public — it's sent
+  // with every subscribe request to identify our server. Keeping it as
+  // a constant here eliminates one env-var setup step. The PRIVATE half
+  // still must be set as VAPID_PRIVATE_KEY on the server.
+  // Override by setting NEXT_PUBLIC_VAPID_PUBLIC_KEY in Vercel env if you
+  // rotate the keypair.
+  const DEFAULT_VAPID_PUBLIC = "BFcHsg7xZ-jnngGO1hDbg4Yb8-eaWPxkUY5RQp2wcCv5_llKwqRBHcTXLB0HlaQr0Wqu_D9xboJvcMiPbjl7chg";
+  const vapidPublic = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || DEFAULT_VAPID_PUBLIC;
 
   const perm = await Notification.requestPermission();
   if (perm !== "granted") return { ok: false, reasonCode: "permission-denied", reason: "Notification permission denied. Enable in iOS Settings → Notifications → Structured Notes." };
