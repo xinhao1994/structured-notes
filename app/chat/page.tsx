@@ -385,13 +385,26 @@ export default function ChatPage() {
             <ImageIcon size={16} />
           </button>
 
-          {/* Voice — press & hold to record */}
+          {/* Voice — press & hold to record.
+              The inline CSS suppresses iOS Safari's default behaviours that
+              kick in when you hold a button: blue tap-highlight flash,
+              text-selection highlight, magnifying-glass context menu, and
+              the "Copy/Share/Look Up" callout that pops up on long-press. */}
           <button
             onPointerDown={(e) => { e.preventDefault(); if (name.trim() && !sending) startRecording(); }}
             onPointerUp={(e) => { e.preventDefault(); if (recording) stopRecording(); }}
+            onPointerCancel={() => { if (recording) stopRecording(); }}
             onPointerLeave={() => { if (recording) stopRecording(); }}
+            onContextMenu={(e) => e.preventDefault()}
             disabled={!name.trim() || sending}
-            className={`btn h-10 px-2.5 ${recording ? "bg-danger/20 text-danger" : ""}`}
+            className={`btn h-10 px-2.5 select-none ${recording ? "bg-danger/20 text-danger" : ""}`}
+            style={{
+              WebkitTapHighlightColor: "transparent",
+              WebkitTouchCallout: "none",
+              WebkitUserSelect: "none",
+              userSelect: "none",
+              touchAction: "none",
+            }}
             title="Hold to record a voice message"
           >
             {recording ? <Square size={14} /> : <Mic size={16} />}
