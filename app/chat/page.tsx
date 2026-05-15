@@ -269,7 +269,7 @@ export default function ChatPage() {
     // doesn't break the layout.
     <div
       className="flex flex-col"
-      style={{ height: "calc(100dvh - 200px)" }}
+      style={{ height: "calc(100svh - 200px)" }}
     >
       <ChatHeader />
 
