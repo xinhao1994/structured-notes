@@ -2,7 +2,8 @@
 // schedule, calculator and risk widgets. Pure functions; no side effects;
 // no I/O. Easy to unit-test.
 
-import { addMyBusinessDays, addMonthsThenSnapMy } from "./markets";
+import { addMyBusinessDays, addMonthsThenSnapMy, addMonthsThenSnap } from "./markets";
+import type { MarketCode } from "./types";
 import type {
   Currency,
   KoObservation,
@@ -36,6 +37,26 @@ export function ekiPrices(t: Tranche): Record<string, number> {
 }
 
 /**
+ * Pick the business-day calendar market for valuation date calculation.
+ *
+ * Uses the dominant market of the underlying stocks. If no underlyings are
+ * present, falls back to a currency-based default. This ensures HK-listed
+ * stocks (HKEX) use the HK public holiday calendar, and MY-listed stocks
+ * (KLSE) use the Malaysian calendar — matching the issuer's actual dates.
+ */
+function koMarket(t: Tranche): MarketCode {
+  if (t.underlyings.length > 0) {
+    const counts: Partial<Record<MarketCode, number>> = {};
+    for (const u of t.underlyings) counts[u.market] = (counts[u.market] ?? 0) + 1;
+    return (Object.entries(counts).sort((a, b) => (b[1] as number) - (a[1] as number))[0][0]) as MarketCode;
+  }
+  const ccyMap: Partial<Record<string, MarketCode>> = {
+    MYR: "MY", HKD: "HK", SGD: "HK", USD: "US", JPY: "JP", AUD: "AU",
+  };
+  return ccyMap[t.currency] ?? "MY";
+}
+
+/**
  * Generate the full KO observation schedule.
  *
  * For an N-month, monthly-observed autocallable with KO start = K0 and
@@ -48,36 +69,24 @@ export function ekiPrices(t: Tranche): Record<string, number> {
  * to avoid negative levels in degenerate inputs.
  *
  * If `koObsFreqMonths > 1` we observe less frequently.
+ *
+ * Valuation date formula (derived from real MSI tranche data):
+ *   Valuation N = trade date + N months (same calendar day, clamped to EOM)
+ *                 → snapped forward to next business day on the underlying's
+ *                   exchange calendar (HK, MY, US, etc.)
+ *
+ * Verified: MSIT250518 (SGD/HK) and MSIT260598 (MYR) match this formula.
  */
 export function koSchedule(t: Tranche): KoObservation[] {
   const obs: KoObservation[] = [];
   const freq = Math.max(1, t.koObsFreqMonths);
   const total = Math.floor(t.tenorMonths / freq);
-
-  // Issuer convention (MSI, derived empirically):
-  //   Obs 1  = trade date + 1 calendar month, then + 4 MY business days
-  //            (skipping MY weekends + public holidays).
-  //   Obs N  = Obs (N−1) + 1 calendar month, snapped forward to next MY
-  //            business day if it lands on a weekend/holiday.
-  // The "+ 4 biz days" only applies to obs 1; subsequent observations
-  // anchor to the month-anniversary of obs 1, so the day-of-month stays
-  // consistent (e.g. May 7, Jun 8, Jul 7, ...).
-  let prevDate: string | null = null;
+  const market = koMarket(t);
 
   for (let i = 1; i <= total; i++) {
     const koPct = Math.max(0, t.koStartPct - (i - 1) * t.koStepdownPct);
-    let date: string;
-    if (i === 1) {
-      // Obs 1 = trade + 1 month + 4 MY business days (skipping weekends + holidays).
-      // The +1m anniversary itself is rolled to next biz day if needed, then
-      // we walk forward 4 MY business days from there.
-      const anniversary = addMonthsThenSnapMy(t.tradeDate, freq);
-      date = addMyBusinessDays(anniversary, 4);
-    } else {
-      // Obs N = Obs (N-1) + 1 calendar month, snapped forward to next MY biz day.
-      date = addMonthsThenSnapMy(prevDate!, freq);
-    }
-    prevDate = date;
+    // Valuation N = trade date + i*freq months, snapped to next exchange business day.
+    const date = addMonthsThenSnap(t.tradeDate, i * freq, market);
     const koPriceBySymbol: Record<string, number> = {};
     if (t.initialFixing) {
       for (const u of t.underlyings) {

@@ -106,10 +106,25 @@ const HOLIDAYS: Record<MarketCode, string[]> = {
     "2026-06-19", "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25",
   ],
   HK: [
-    "2025-01-01", "2025-01-29", "2025-01-30", "2025-04-04", "2025-04-18",
-    "2025-05-01", "2025-05-05", "2025-07-01", "2025-10-01", "2025-12-25",
-    "2026-01-01", "2026-02-17", "2026-02-18", "2026-04-03", "2026-04-06",
-    "2026-05-01", "2026-05-25", "2026-07-01", "2026-10-01", "2026-12-25",
+    // 2025
+    "2025-01-01",                                     // New Year's Day
+    "2025-01-29", "2025-01-30", "2025-01-31",        // CNY Day 1-3
+    "2025-04-04",                                     // Ching Ming
+    "2025-04-18", "2025-04-19", "2025-04-21",        // Good Fri / Easter Sat / Easter Mon
+    "2025-05-01",                                     // Labour Day
+    "2025-05-05",                                     // Buddha's Birthday
+    "2025-07-01",                                     // HKSAR Establishment Day
+    "2025-10-01", "2025-10-07",                      // National Day / Chung Yeung
+    "2025-12-25", "2025-12-26",                      // Christmas / Boxing Day
+    // 2026
+    "2026-01-01",                                     // New Year's Day
+    "2026-02-17", "2026-02-18", "2026-02-19",        // CNY Day 1-3
+    "2026-04-03", "2026-04-06",                      // Good Friday / Easter Monday
+    "2026-05-01",                                     // Labour Day
+    "2026-05-25",                                     // Buddha's Birthday
+    "2026-07-01",                                     // HKSAR Establishment Day
+    "2026-10-01", "2026-10-26",                      // National Day / Chung Yeung
+    "2026-12-25", "2026-12-26",                      // Christmas / Boxing Day
   ],
   MY: [
     "2025-01-01", "2025-02-01", "2025-03-31", "2025-04-01", "2025-05-01",
@@ -363,5 +378,47 @@ export function addMonthsThenSnapMy(iso: string, months: number): string {
   const day = Math.min(d, lastDayOfTargetMonth);
   const target = new Date(Date.UTC(targetY, targetM, day));
   return snapForwardMy(target.toISOString().slice(0, 10));
+}
+
+/**
+ * Snap an ISO date forward to the next business day for any market, skipping
+ * weekends and that market's public holidays. Returns unchanged if already a
+ * business day.
+ *
+ * This is the generic equivalent of snapForwardMy — use this when the
+ * underlying market is known (HK stocks → "HK", MY stocks → "MY", etc.).
+ */
+export function snapForwardBizDay(iso: string, market: MarketCode): string {
+  const holidays = new Set(HOLIDAYS[market] || []);
+  let ymd = iso;
+  while (true) {
+    const d = new Date(ymd + "T00:00:00Z");
+    const dow = d.getUTCDay();
+    if (dow !== 0 && dow !== 6 && !holidays.has(ymd)) return ymd;
+    d.setUTCDate(d.getUTCDate() + 1);
+    ymd = d.toISOString().slice(0, 10);
+  }
+}
+
+/**
+ * Add `months` calendar months to an ISO date (clamping day to end-of-month)
+ * and snap forward to the next business day for the given market.
+ *
+ * This is the core formula for computing valuation dates:
+ *   Valuation N = tradeDate + N months → next business day (market calendar)
+ *
+ * Verified against real MSI tranches:
+ *   MSIT250518 (SGD / HK): 12/12 observations match with market = "HK"
+ *   MSIT260598 (MYR):       7/7  observations match with market = "MY"
+ */
+export function addMonthsThenSnap(iso: string, months: number, market: MarketCode): string {
+  const [y, m, d] = iso.split("-").map((s) => parseInt(s, 10));
+  const targetMonthAbs = m - 1 + months;
+  const targetY = y + Math.floor(targetMonthAbs / 12);
+  const targetM = ((targetMonthAbs % 12) + 12) % 12;
+  const lastDayOfTargetMonth = new Date(Date.UTC(targetY, targetM + 1, 0)).getUTCDate();
+  const day = Math.min(d, lastDayOfTargetMonth);
+  const target = new Date(Date.UTC(targetY, targetM, day));
+  return snapForwardBizDay(target.toISOString().slice(0, 10), market);
 }
 
