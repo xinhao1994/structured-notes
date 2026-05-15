@@ -1,31 +1,35 @@
 "use client";
 
-// Team chat — 5th bottom-nav tab. Real-time via Supabase Realtime.
+// Team chat — fully fixed page (only the message list scrolls).
 // Features:
-//   - Plain text messages with sender name + avatar initials
+//   - Plain text messages
 //   - Image attachments (gallery picker)
-//   - Voice messages (hold to record, release to send)
+//   - Shared tranche cards (posted from Pocket → click to save to own Pocket)
 //   - "X is typing..." floating indicator via Realtime broadcast
-//   - Clear-all-chat admin button (calls /api/chat/clear, service_role)
+//   - Clear-all-chat admin button
+// Voice messages removed by user request.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  MessageCircle, Send, AlertTriangle, Pencil, Mic, Image as ImageIcon,
-  Trash2, Square,
+  MessageCircle, Send, AlertTriangle, Pencil, Image as ImageIcon,
+  Trash2, Briefcase, BookmarkPlus, Check,
 } from "lucide-react";
 import { getSupabaseBrowser } from "@/lib/supabaseClient";
+import { upsertTranche } from "@/lib/storage";
+import { decodeTranche } from "@/lib/trancheShare";
+import type { Tranche } from "@/lib/types";
 
 const NAME_KEY = "snd.chat.senderName.v1";
 const MAX_LOAD = 200;
-const TYPING_TTL_MS = 3500;        // hide indicator if no event in this window
-const TYPING_BROADCAST_MS = 1500;  // rate-limit our own typing broadcasts
+const TYPING_TTL_MS = 3500;
+const TYPING_BROADCAST_MS = 1500;
 
 interface ChatMessage {
   id: string;
   sender_name: string;
   body: string;
   attachment_url: string | null;
-  attachment_type: "image" | "audio" | null;
+  attachment_type: "image" | "audio" | "tranche" | null;
   created_at: string;
 }
 
@@ -61,14 +65,20 @@ export default function ChatPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
-  const [typingUsers, setTypingUsers] = useState<Record<string, number>>({});  // name → expiresAt
-  const [recording, setRecording] = useState(false);
+  const [typingUsers, setTypingUsers] = useState<Record<string, number>>({});
   const listEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const recordedChunksRef = useRef<Blob[]>([]);
   const lastTypingBroadcast = useRef<number>(0);
   const typingChannelRef = useRef<any>(null);
+
+  // ─── Lock document scroll while on /chat ───
+  // Prevents the whole page bouncing when the user keyboard-types, taps
+  // the composer, or pulls down to refresh. Restored on unmount.
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = prev; };
+  }, []);
 
   // ─── Hydrate name ───
   useEffect(() => {
@@ -98,7 +108,7 @@ export default function ChatPage() {
     return () => { cancelled = true; };
   }, [supa]);
 
-  // ─── Realtime: new messages + typing broadcasts on a separate channel ───
+  // ─── Realtime: new messages + delete sync + typing broadcasts ───
   useEffect(() => {
     if (!supa) return;
     const msgCh = supa.channel("chat_messages_inserts")
@@ -108,7 +118,6 @@ export default function ChatPage() {
         setTimeout(() => listEndRef.current?.scrollIntoView({ behavior: "smooth" }), 30);
       })
       .on("postgres_changes", { event: "DELETE", schema: "public", table: "chat_messages" }, () => {
-        // When admin clears, every device should also empty its list.
         setMessages([]);
       })
       .subscribe();
@@ -125,7 +134,7 @@ export default function ChatPage() {
     return () => { supa.removeChannel(msgCh); supa.removeChannel(typeCh); };
   }, [supa]);
 
-  // ─── Expire stale typing indicators ───
+  // Expire stale typing indicators
   useEffect(() => {
     const id = setInterval(() => {
       setTypingUsers((prev) => {
@@ -141,7 +150,6 @@ export default function ChatPage() {
     return () => clearInterval(id);
   }, []);
 
-  // ─── Broadcast our own typing event (rate-limited) ───
   const broadcastTyping = useCallback(() => {
     const ch = typingChannelRef.current;
     if (!ch || !name) return;
@@ -158,12 +166,12 @@ export default function ChatPage() {
     setEditingName(false);
   }
 
-  async function uploadAttachment(file: Blob, kind: "image" | "audio"): Promise<string | null> {
+  async function uploadImage(file: Blob): Promise<string | null> {
     if (!supa) return null;
-    const ext = kind === "image" ? (file.type.split("/")[1] || "jpg") : (file.type.split("/")[1] || "webm");
+    const ext = (file.type.split("/")[1] || "jpg").split(";")[0];
     const path = `chat/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
     const { error } = await supa.storage.from("chat-attachments").upload(path, file, {
-      contentType: file.type || (kind === "image" ? "image/jpeg" : "audio/webm"),
+      contentType: file.type || "image/jpeg",
       upsert: false,
     });
     if (error) { setError(error.message); return null; }
@@ -171,10 +179,10 @@ export default function ChatPage() {
     return data.publicUrl;
   }
 
-  async function send(opts?: { attachmentUrl?: string; attachmentType?: "image" | "audio"; bodyOverride?: string }) {
+  async function send(opts?: { attachmentUrl?: string; attachmentType?: "image" | "tranche"; bodyOverride?: string }) {
     if (!supa) return;
     const text = (opts?.bodyOverride ?? input).trim();
-    const hasAttachment = !!opts?.attachmentUrl;
+    const hasAttachment = !!opts?.attachmentUrl || opts?.attachmentType === "tranche";
     if ((!text && !hasAttachment) || !name.trim()) return;
     setSending(true);
     if (!opts?.bodyOverride) setInput("");
@@ -190,43 +198,13 @@ export default function ChatPage() {
 
   async function pickImage(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
-    e.target.value = "";  // reset so picking same file again still fires onChange
+    e.target.value = "";
     if (!file) return;
     if (file.size > 10 * 1024 * 1024) { setError("Image too large (max 10 MB)."); return; }
     setSending(true);
-    const url = await uploadAttachment(file, "image");
+    const url = await uploadImage(file);
     if (url) await send({ attachmentUrl: url, attachmentType: "image", bodyOverride: "" });
     setSending(false);
-  }
-
-  async function startRecording() {
-    if (!navigator.mediaDevices?.getUserMedia) { setError("Microphone not supported on this device."); return; }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mr = new MediaRecorder(stream);
-      recordedChunksRef.current = [];
-      mr.ondataavailable = (ev) => { if (ev.data.size > 0) recordedChunksRef.current.push(ev.data); };
-      mr.onstop = async () => {
-        stream.getTracks().forEach((t) => t.stop());
-        const blob = new Blob(recordedChunksRef.current, { type: "audio/webm" });
-        if (blob.size < 1000) return;  // ignore micro-taps
-        setSending(true);
-        const url = await uploadAttachment(blob, "audio");
-        if (url) await send({ attachmentUrl: url, attachmentType: "audio", bodyOverride: "" });
-        setSending(false);
-      };
-      mr.start();
-      mediaRecorderRef.current = mr;
-      setRecording(true);
-    } catch (e: any) {
-      setError("Mic permission denied — enable in iOS Settings → " + (window.location.host));
-    }
-  }
-  function stopRecording() {
-    const mr = mediaRecorderRef.current;
-    if (mr && mr.state !== "inactive") mr.stop();
-    mediaRecorderRef.current = null;
-    setRecording(false);
   }
 
   async function clearAllChat() {
@@ -237,10 +215,9 @@ export default function ChatPage() {
     setMessages([]);
   }
 
-  // Filter out our own name from the typing list — we don't need to see ourselves.
   const typingOthers = Object.keys(typingUsers).filter((n) => n !== name);
 
-  // ─── render: unconfigured state ───
+  // ─── Render: unconfigured state ───
   if (!supa) {
     return (
       <>
@@ -250,10 +227,7 @@ export default function ChatPage() {
             <AlertTriangle size={14} /> Chat not yet configured
           </div>
           <p className="text-[var(--text-muted)]">
-            The team chat needs <code>NEXT_PUBLIC_SUPABASE_ANON_KEY</code> set
-            in Vercel env vars. Get it from Supabase Settings → API → Project
-            API keys → <strong>anon public</strong>. Add it to Vercel + redeploy +
-            run the SQL in <code>db/chat-messages.sql</code>.
+            Set <code>NEXT_PUBLIC_SUPABASE_ANON_KEY</code> in Vercel + run the SQL in <code>db/chat-messages.sql</code>.
           </p>
         </div>
       </>
@@ -261,19 +235,21 @@ export default function ChatPage() {
   }
 
   return (
-    // Fixed-height container: header + name bar + (scrollable list) + composer
-    // all fit inside the viewport. Only the message list scrolls. Height is
-    // 100dvh minus the room reserved for the app's sticky header at top and
-    // the bottom-nav at the bottom (≈ 200px combined on phones).
-    // Using `dvh` (dynamic viewport) so the iOS Safari URL bar collapsing
-    // doesn't break the layout.
+    // Fixed positioning — sits between the sticky header (top) and bottom-nav
+    // (bottom). Body scroll is locked in the useEffect above, so nothing
+    // moves on the page except the message list.
     <div
-      className="flex flex-col"
-      style={{ height: "calc(100svh - 200px)" }}
+      className="fixed inset-x-0 flex flex-col"
+      style={{
+        top: "calc(env(safe-area-inset-top, 0px) + 170px)",
+        bottom: "calc(env(safe-area-inset-bottom, 0px) + 64px)",
+        paddingLeft: "max(env(safe-area-inset-left, 0px), 12px)",
+        paddingRight: "max(env(safe-area-inset-right, 0px), 12px)",
+      }}
     >
       <ChatHeader />
 
-      {/* Sender-name row — editable inline, plus Clear-chat */}
+      {/* Name bar + clear-chat */}
       <section className="card mb-2 flex flex-shrink-0 items-center justify-between gap-2 p-3">
         {editingName ? (
           <div className="flex flex-1 items-center gap-2">
@@ -303,16 +279,14 @@ export default function ChatPage() {
                 <Pencil size={11} /> Edit
               </button>
               <button onClick={clearAllChat} className="btn h-7 px-2 text-[11px] text-danger" title="Wipe all chat history for everyone">
-                <Trash2 size={11} /> Clear chat
+                <Trash2 size={11} /> Clear
               </button>
             </div>
           </div>
         )}
       </section>
 
-      {/* Message list — the ONLY scrollable area on this page. Takes up all
-          remaining vertical space (flex-1) and uses min-h-0 so flex correctly
-          constrains it instead of letting it expand to fit content. */}
+      {/* Message list — the only scrollable area */}
       <section className="card mb-2 flex min-h-0 flex-1 flex-col overflow-hidden">
         <div className="flex-1 space-y-2 overflow-y-auto p-3">
           {loading && <p className="text-center text-[12px] text-[var(--text-muted)]">Loading messages...</p>}
@@ -326,6 +300,7 @@ export default function ChatPage() {
             const prev = messages[i - 1];
             const showAvatar = !prev || prev.sender_name !== m.sender_name;
             const isMe = m.sender_name === name;
+            const trancheData = m.attachment_type === "tranche" ? decodeTranche(m.body) : null;
             return (
               <div key={m.id} className={`flex gap-2 ${isMe ? "flex-row-reverse" : "flex-row"}`}>
                 {showAvatar ? (
@@ -335,27 +310,28 @@ export default function ChatPage() {
                   >{initials(m.sender_name)}</div>
                 ) : (<div className="w-7 flex-shrink-0" />)}
 
-                <div className={`max-w-[78%] flex flex-col ${isMe ? "items-end" : "items-start"}`}>
+                <div className={`max-w-[85%] flex flex-col ${isMe ? "items-end" : "items-start"}`}>
                   {showAvatar && (
                     <div className={`mb-0.5 flex items-baseline gap-1.5 text-[10.5px] ${isMe ? "flex-row-reverse" : "flex-row"}`}>
                       <strong className="text-[var(--text)]">{m.sender_name}</strong>
                       <span className="text-[var(--text-muted)]">{relativeTime(m.created_at)}</span>
                     </div>
                   )}
-                  <div
-                    className={`rounded-2xl px-3 py-2 text-[13px] leading-relaxed ${isMe ? "rounded-br-md" : "bg-[var(--surface-2)] rounded-bl-md"}`}
-                    style={isMe ? { background: "rgba(124, 167, 224, 0.18)" } : undefined}
-                  >
-                    {m.attachment_type === "image" && m.attachment_url && (
-                      <a href={m.attachment_url} target="_blank" rel="noreferrer">
-                        <img src={m.attachment_url} alt="" className="mb-1 max-h-[260px] rounded-lg" />
-                      </a>
-                    )}
-                    {m.attachment_type === "audio" && m.attachment_url && (
-                      <audio controls src={m.attachment_url} className="mb-1 w-[220px] max-w-full" />
-                    )}
-                    {m.body && <span className="whitespace-pre-wrap break-words">{m.body}</span>}
-                  </div>
+                  {trancheData ? (
+                    <TrancheCard tranche={trancheData} />
+                  ) : (
+                    <div
+                      className={`rounded-2xl px-3 py-2 text-[13px] leading-relaxed ${isMe ? "rounded-br-md" : "bg-[var(--surface-2)] rounded-bl-md"}`}
+                      style={isMe ? { background: "rgba(124, 167, 224, 0.18)" } : undefined}
+                    >
+                      {m.attachment_type === "image" && m.attachment_url && (
+                        <a href={m.attachment_url} target="_blank" rel="noreferrer">
+                          <img src={m.attachment_url} alt="" className="mb-1 max-h-[260px] rounded-lg" />
+                        </a>
+                      )}
+                      {m.body && <span className="whitespace-pre-wrap break-words">{m.body}</span>}
+                    </div>
+                  )}
                 </div>
               </div>
             );
@@ -363,7 +339,6 @@ export default function ChatPage() {
           <div ref={listEndRef} />
         </div>
 
-        {/* Floating typing indicator */}
         {typingOthers.length > 0 && (
           <div className="border-t border-[var(--line)] px-3 py-1.5 text-[11px] italic text-[var(--text-muted)]">
             <span className="inline-flex items-center gap-1">
@@ -382,73 +357,39 @@ export default function ChatPage() {
         )}
       </section>
 
-      {/* Composer — sits at the bottom of the flex column. No need for sticky
-          since the parent's fixed height keeps it pinned automatically. */}
+      {/* Composer */}
       <section className="card flex-shrink-0 p-2.5">
         <div className="flex items-end gap-1.5">
-          {/* Image attach */}
           <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={pickImage} />
           <button
             onClick={() => fileInputRef.current?.click()}
-            disabled={!name.trim() || sending || recording}
+            disabled={!name.trim() || sending}
             className="btn h-10 px-2.5"
             title="Attach image"
           >
             <ImageIcon size={16} />
           </button>
 
-          {/* Voice — press & hold to record.
-              The inline CSS suppresses iOS Safari's default behaviours that
-              kick in when you hold a button: blue tap-highlight flash,
-              text-selection highlight, magnifying-glass context menu, and
-              the "Copy/Share/Look Up" callout that pops up on long-press. */}
-          <button
-            onPointerDown={(e) => { e.preventDefault(); if (name.trim() && !sending) startRecording(); }}
-            onPointerUp={(e) => { e.preventDefault(); if (recording) stopRecording(); }}
-            onPointerCancel={() => { if (recording) stopRecording(); }}
-            onPointerLeave={() => { if (recording) stopRecording(); }}
-            onContextMenu={(e) => e.preventDefault()}
-            disabled={!name.trim() || sending}
-            className={`btn h-10 px-2.5 select-none ${recording ? "bg-danger/20 text-danger" : ""}`}
-            style={{
-              WebkitTapHighlightColor: "transparent",
-              WebkitTouchCallout: "none",
-              WebkitUserSelect: "none",
-              userSelect: "none",
-              touchAction: "none",
-            }}
-            title="Hold to record a voice message"
-          >
-            {recording ? <Square size={14} /> : <Mic size={16} />}
-          </button>
-
-          {/* Text input */}
           <textarea
             value={input}
             onChange={(e) => { setInput(e.target.value); broadcastTyping(); }}
             onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-            placeholder={name ? (recording ? "Recording... release to send" : `Message as ${name}...`) : "Set your name above first"}
+            placeholder={name ? `Message as ${name}...` : "Set your name above first"}
             maxLength={2000} rows={1}
-            disabled={!name.trim() || recording}
+            disabled={!name.trim()}
             className="input min-h-[40px] flex-1 resize-none py-2 text-[13px]"
             style={{ maxHeight: 140 }}
           />
 
           <button
             onClick={() => send()}
-            disabled={!input.trim() || !name.trim() || sending || recording}
+            disabled={!input.trim() || !name.trim() || sending}
             className="btn btn-primary h-10 px-3 text-[12px]"
             title="Send (Enter)"
           >
             <Send size={14} />
           </button>
         </div>
-        {recording && (
-          <div className="mt-1.5 flex items-center gap-1.5 text-[11px] text-danger">
-            <span className="h-2 w-2 animate-pulse rounded-full bg-danger" />
-            Recording — release the mic to send
-          </div>
-        )}
       </section>
 
       {error && <p className="mt-1 flex-shrink-0 text-center text-[11px] text-danger">{error}</p>}
@@ -457,13 +398,67 @@ export default function ChatPage() {
 }
 
 function ChatHeader() {
-  // Compact header — no description text and tighter spacing so the chat
-  // area gets as much vertical room as possible on phone.
   return (
     <header className="mb-2 flex-shrink-0">
       <h1 className="text-base font-semibold flex items-center gap-2">
         <MessageCircle size={16} /> Team chat
       </h1>
     </header>
+  );
+}
+
+/* ───────────────── Tranche-share card ─────────────────
+   Rendered inside a chat bubble when attachment_type === "tranche".
+   Compact, banking-style mini-table with a Save-to-Pocket button. */
+function TrancheCard({ tranche }: { tranche: Tranche }) {
+  const [saved, setSaved] = useState(false);
+  function handleSave() {
+    upsertTranche(tranche);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 3000);
+  }
+  return (
+    <div className="rounded-xl border border-[var(--line)] bg-[var(--surface-2)] p-2.5 text-[11.5px] w-[260px] max-w-full">
+      <header className="mb-1.5 flex items-center justify-between gap-2 border-b border-[var(--line)] pb-1.5">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <Briefcase size={12} className="flex-shrink-0 text-accent" />
+          <span className="truncate font-mono text-[12.5px] font-semibold">{tranche.trancheCode}</span>
+        </div>
+        <span className="rounded bg-[var(--surface)] border border-[var(--line)] px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+          {tranche.currency}
+        </span>
+      </header>
+      <div className="grid grid-cols-3 gap-1 text-center">
+        <Cell label="Coupon" value={`${(tranche.couponPa * 100).toFixed(1)}%`} />
+        <Cell label="Tenor"  value={`${tranche.tenorMonths}M`} />
+        <Cell label="Strike" value={`${(tranche.strikePct * 100).toFixed(0)}%`} />
+        <Cell label="KO"     value={`${(tranche.koStartPct * 100).toFixed(0)}%`} />
+        <Cell label="Step"   value={`-${(tranche.koStepdownPct * 100).toFixed(0)}%`} />
+        <Cell label="EKI"    value={`${(tranche.ekiPct * 100).toFixed(0)}%`} />
+      </div>
+      <div className="mt-1.5 flex flex-wrap gap-1">
+        {tranche.underlyings.slice(0, 4).map((u) => (
+          <span key={u.symbol} className="rounded-full bg-[var(--surface)] border border-[var(--line)] px-1.5 py-0.5 text-[10px] font-mono">
+            {u.symbol}<span className="ml-1 text-[var(--text-muted)]">{u.market}</span>
+          </span>
+        ))}
+      </div>
+      <button
+        onClick={handleSave}
+        disabled={saved}
+        className="mt-2 w-full btn btn-primary h-7 text-[11px]"
+      >
+        {saved ? (<><Check size={11} /> Saved to Pocket</>) : (<><BookmarkPlus size={11} /> Save to my Pocket</>)}
+      </button>
+    </div>
+  );
+}
+
+function Cell({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded bg-[var(--surface)] py-1 px-0.5">
+      <div className="text-[9px] uppercase tracking-wider text-[var(--text-muted)]">{label}</div>
+      <div className="tabular text-[11px] font-semibold">{value}</div>
+    </div>
   );
 }

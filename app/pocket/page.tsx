@@ -5,8 +5,10 @@ import Link from "next/link";
 import {
   Search, Trash2, Pin, PinOff, Filter, Pencil, Check, X,
   Shield, AlertTriangle, ShieldAlert, Activity, Wallet, Calendar, StickyNote,
-  Download, Upload, Cloud,
+  Download, Upload, Cloud, Share2,
 } from "lucide-react";
+import { getSupabaseBrowser } from "@/lib/supabaseClient";
+import { encodeTranche } from "@/lib/trancheShare";
 import {
   listPocket, removePocket, togglePin, updateTrancheFields, savePocket, type PocketEntry,
 } from "@/lib/storage";
@@ -100,6 +102,31 @@ export default function PocketPage() {
     removePocket(id); setList(listPocket());
   }
   function handlePin(id: string) { togglePin(id); setList(listPocket()); }
+
+  // Share a tranche to the team chat. Encodes the Tranche as base64 JSON in
+  // the chat message's body, with attachment_type="tranche" so the chat
+  // page renders it as a clickable mini-card (other users tap to save).
+  async function handleShareToChat(entry: PocketEntry) {
+    const supa = getSupabaseBrowser();
+    if (!supa) { alert("Chat not configured. Set NEXT_PUBLIC_SUPABASE_ANON_KEY in Vercel."); return; }
+    let senderName = "";
+    try { senderName = localStorage.getItem("snd.chat.senderName.v1") || ""; } catch {}
+    if (!senderName) {
+      senderName = prompt("Your name (shown to chat readers):") || "";
+      if (!senderName.trim()) return;
+      try { localStorage.setItem("snd.chat.senderName.v1", senderName.trim()); } catch {}
+    }
+    const encoded = encodeTranche(entry.tranche);
+    if (encoded.length > 2000) { alert("Tranche too large to share — too many underlyings or notes."); return; }
+    const { error } = await supa.from("chat_messages").insert({
+      sender_name: senderName.trim().slice(0, 32),
+      body: encoded,
+      attachment_url: null,
+      attachment_type: "tranche",
+    });
+    if (error) alert("Share failed: " + error.message);
+    else alert(`Shared ${entry.tranche.trancheCode} to chat.`);
+  }
   function startEdit(id: string, currentCode: string) { setEditingId(id); setEditingValue(currentCode); }
   function commitEdit(id: string) {
     const v = editingValue.trim();
@@ -330,6 +357,9 @@ export default function PocketPage() {
                   <div className="truncate text-[12px] text-[var(--text-muted)]">{symbols}</div>
                 </div>
                 <div className="flex items-center gap-1">
+                  <button onClick={() => handleShareToChat(entry)} className="btn h-8 px-2 text-accent" title="Share this tranche to team chat">
+                    <Share2 size={14} />
+                  </button>
                   <button onClick={() => handlePin(entry.id)} className="btn h-8 px-2" title={entry.pinned ? "Unpin" : "Pin"}>
                     {entry.pinned ? <PinOff size={14} /> : <Pin size={14} />}
                   </button>
