@@ -6,6 +6,7 @@ import { useTheme } from "./ThemeProvider";
 import { malaysiaNowParts, marketSnapshots } from "@/lib/markets";
 import type { MarketCode } from "@/lib/types";
 import clsx from "clsx";
+import { BreakingTicker } from "@/components/BreakingTicker";
 
 const FLAG: Record<MarketCode, string> = {
   US: "🇺🇸", HK: "🇭🇰", MY: "🇲🇾", SG: "🇸🇬", JP: "🇯🇵", AU: "🇦🇺",
@@ -107,6 +108,12 @@ export function Header() {
           {snaps.map((s) => <TickerCell key={`b-${s.code}`} s={s} />)}
         </div>
       </div>
+
+      {/* Row 3 — Breaking-news rotator. Single-line headline, ~7s fade
+          rotation. Avoids a second scrolling ticker (which would compete
+          with the prices above for the eye's attention). Bloomberg/CNBC
+          use exactly this pattern for breaking text. */}
+      <BreakingTicker />
 
       {/* MY clock for narrow screens */}
       <div className="border-t border-[var(--line)] sm:hidden">
