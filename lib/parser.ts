@@ -65,6 +65,7 @@ const NAME_TO_TICKER: Record<string, Listing> = {
   amphenol: { US: "APH", default: "US" },
   "western digital": { US: "WDC", default: "US" },
   sandisk: { US: "SNDK", default: "US" },
+  seagate: { US: "STX", default: "US" },
   micron: { US: "MU", default: "US" },
   marvell: { US: "MRVL", default: "US" },
   "marvell technology": { US: "MRVL", default: "US" },
