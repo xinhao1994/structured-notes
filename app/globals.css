@@ -31,6 +31,15 @@ body {
   font-feature-settings: "tnum" 1, "ss01" 1, "cv11" 1;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /* Prevent a horizontal scrollbar from appearing if the SwipeNavigator
+     briefly translates <main> off-screen. */
+  overflow-x: hidden;
+  overscroll-behavior-x: contain;
+}
+main {
+  /* Promotion to its own composite layer so transforms during swipe are
+     GPU-accelerated and don't repaint the rest of the page. */
+  will-change: transform;
 }
 
 /* Tabular numbers for everything price-like */

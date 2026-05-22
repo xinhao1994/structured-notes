@@ -1,33 +1,24 @@
 "use client";
 
-// SwipeNavigator — detects a horizontal finger flick on mobile and navigates
-// between the bottom-nav tabs. Mounted once at the layout level so it works
-// on every page.
+// SwipeNavigator — proper swipeable tabs.
+// The <main> element follows the finger horizontally as the user drags.
+// On release: if dragged past threshold (or with enough velocity), the page
+// completes its slide off-screen and we router.push to the next tab; the
+// new tab renders in place. Otherwise the page snaps back to centre.
 //
-// Behaviour:
-//   - Swipe LEFT  → next tab  (Desk → Pocket → Calc → Analyze → Chat)
-//   - Swipe RIGHT → prev tab
-//   - Tab order matches BottomNav.tsx
-//
-// Ignored when:
-//   - touch starts inside an interactive control (input/textarea/select/button)
-//   - touch starts inside a horizontally scrollable area (.scroll-x, the
-//     product table). We don't want a horizontal table scroll to also flip
-//     the tab.
-//   - touch starts inside an element with `data-no-swipe` (escape hatch).
-//   - vertical movement > 50px (likely a scroll, not a swipe).
-//   - horizontal movement < 70px (too small to be intentional).
-//   - touch duration > 500ms (slow drag, probably not a flick).
+// Mounted once at the root layout. Returns null — just installs listeners.
 
 import { useEffect } from "react";
 import { useRouter, usePathname } from "next/navigation";
 
-// Must match BottomNav.tsx tab order
 const TABS = ["/", "/pocket", "/calculator", "/analyze", "/chat"] as const;
 
-const MIN_HORIZONTAL_PX = 70;
-const MAX_VERTICAL_PX = 50;
-const MAX_DURATION_MS = 500;
+// Tuning
+const THRESHOLD_PX = 80;        // dragged past this → commit
+const VELOCITY_THRESHOLD = 0.5; // px/ms — a quick flick commits even at smaller distance
+const COMMIT_MS = 220;          // duration of the "finish the slide off-screen" animation
+const SNAPBACK_MS = 250;        // duration of the "spring back to centre" animation
+const HORIZ_BIAS_PX = 10;       // need at least this much horizontal movement before claiming the gesture
 
 export function SwipeNavigator() {
   const router = useRouter();
@@ -35,13 +26,38 @@ export function SwipeNavigator() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    // Only on touch devices — desktop pointer interactions shouldn't fire this.
-    const isTouch = "ontouchstart" in window;
-    if (!isTouch) return;
+    if (!("ontouchstart" in window)) return;
+
+    const main = document.querySelector("main") as HTMLElement | null;
+    if (!main) return;
+    const body = document.body;
 
     let startX = 0, startY = 0, startT = 0;
     let startEl: HTMLElement | null = null;
     let active = false;
+    let dragging = false;
+    let dx = 0;
+    let canGoNext = false;
+    let canGoPrev = false;
+
+    function currentIdx(): number {
+      return TABS.findIndex((tab) =>
+        tab === "/" ? pathname === "/" : pathname.startsWith(tab)
+      );
+    }
+
+    function clearTransform() {
+      main!.style.transition = "";
+      main!.style.transform = "";
+      body.style.overflowX = "";
+      body.style.touchAction = "";
+    }
+
+    function snapBack() {
+      main!.style.transition = `transform ${SNAPBACK_MS}ms cubic-bezier(.22,.61,.36,1)`;
+      main!.style.transform = "translateX(0)";
+      window.setTimeout(clearTransform, SNAPBACK_MS + 30);
+    }
 
     function onStart(e: TouchEvent) {
       if (e.touches.length !== 1) { active = false; return; }
@@ -51,54 +67,124 @@ export function SwipeNavigator() {
       startT = Date.now();
       startEl = e.target as HTMLElement | null;
       active = true;
+      dragging = false;
+      dx = 0;
+    }
+
+    function onMove(e: TouchEvent) {
+      if (!active) return;
+      const t = e.touches[0];
+      const mx = t.clientX - startX;
+      const my = t.clientY - startY;
+
+      if (!dragging) {
+        // Wait until we have meaningful horizontal motion before claiming.
+        if (Math.abs(mx) < HORIZ_BIAS_PX) return;
+        // If the user is mostly moving vertically, this is a scroll — release.
+        if (Math.abs(my) > Math.abs(mx)) { active = false; return; }
+
+        // Skip if started in something interactive or already-scrollable.
+        if (startEl) {
+          const blocker = startEl.closest(
+            "input, textarea, select, button, a, " +
+            ".scroll-x, .overflow-x-auto, .overflow-y-auto, " +
+            "[data-no-swipe]"
+          );
+          if (blocker) { active = false; return; }
+        }
+
+        // Compute boundaries — at left edge of Desk no prev, right edge of Chat no next.
+        const idx = currentIdx();
+        if (idx === -1) { active = false; return; }
+        canGoNext = idx < TABS.length - 1;
+        canGoPrev = idx > 0;
+
+        if (mx < 0 && !canGoNext) { active = false; return; }
+        if (mx > 0 && !canGoPrev) { active = false; return; }
+
+        dragging = true;
+        // Stop vertical browser scrolling for the rest of this gesture.
+        // Also lock body horizontal overflow so the off-screen sliver doesn't
+        // give the user a horizontal scrollbar.
+        body.style.overflowX = "hidden";
+        body.style.touchAction = "pan-y"; // allow vertical scroll outside if user changes mind
+        main!.style.transition = "none";
+      }
+
+      dx = mx;
+
+      // Slight resistance past the threshold so the user feels a soft limit
+      // even though we're about to commit. Just dx for now (linear feel).
+      main!.style.transform = `translate3d(${dx}px, 0, 0)`;
+
+      // Prevent the page from scrolling vertically while we're dragging horizontally.
+      // `preventDefault` only works because touchmove is registered passive:false.
+      if (e.cancelable) e.preventDefault();
     }
 
     function onEnd(e: TouchEvent) {
-      if (!active) return;
+      if (!active) { return; }
       active = false;
-      const t = e.changedTouches[0];
-      if (!t) return;
-      const dx = t.clientX - startX;
-      const dy = t.clientY - startY;
-      const dt = Date.now() - startT;
+      if (!dragging) { return; }
 
-      // Magnitude + duration checks
-      if (Math.abs(dx) < MIN_HORIZONTAL_PX) return;
-      if (Math.abs(dy) > MAX_VERTICAL_PX) return;
-      if (dt > MAX_DURATION_MS) return;
+      const dt = Math.max(1, Date.now() - startT);
+      const velocity = Math.abs(dx) / dt;          // px/ms
+      const past = Math.abs(dx) > THRESHOLD_PX;
+      const fast = velocity > VELOCITY_THRESHOLD;
 
-      // Skip if the swipe started inside something interactive
-      if (!startEl) return;
-      const blocker = startEl.closest(
-        "input, textarea, select, button, a, " +
-        ".scroll-x, .overflow-x-auto, .overflow-y-auto, " +
-        "[data-no-swipe]"
-      );
-      if (blocker) return;
+      const idx = currentIdx();
+      const wantNext = dx < 0;
+      const target = wantNext ? idx + 1 : idx - 1;
+      const targetOK = target >= 0 && target < TABS.length;
 
-      // Compute current tab index
-      const currentIdx = TABS.findIndex((tab) =>
-        tab === "/" ? pathname === "/" : pathname.startsWith(tab)
-      );
-      if (currentIdx === -1) return;
+      if (!(past || fast) || !targetOK) {
+        snapBack();
+        return;
+      }
 
-      // dx NEGATIVE = finger moved left = user wants the NEXT (right-side) tab
-      // dx POSITIVE = finger moved right = user wants the PREVIOUS (left-side) tab
-      const nextIdx = dx < 0 ? currentIdx + 1 : currentIdx - 1;
-      if (nextIdx < 0 || nextIdx >= TABS.length) return;
+      // Commit — slide the rest of the way off-screen, then navigate.
+      const w = window.innerWidth;
+      const targetX = wantNext ? -w : w;
+      main!.style.transition = `transform ${COMMIT_MS}ms cubic-bezier(.22,.61,.36,1)`;
+      main!.style.transform = `translate3d(${targetX}px, 0, 0)`;
 
-      router.push(TABS[nextIdx]);
+      window.setTimeout(() => {
+        router.push(TABS[target]);
+        // After Next routes, the layout's <main> stays mounted but its
+        // children get replaced. Reset the transform on the next frame so
+        // the new content snaps to centre (no jarring re-slide).
+        requestAnimationFrame(() => {
+          main!.style.transition = "none";
+          main!.style.transform = "";
+          // Restore body styles
+          body.style.overflowX = "";
+          body.style.touchAction = "";
+          // Clear "transition: none" override on next frame so future
+          // transforms (if any) animate normally.
+          requestAnimationFrame(() => { main!.style.transition = ""; });
+        });
+      }, COMMIT_MS);
     }
 
-    function onCancel() { active = false; }
+    function onCancel() {
+      if (dragging) snapBack();
+      active = false;
+      dragging = false;
+    }
 
     document.addEventListener("touchstart", onStart, { passive: true });
+    // touchmove must be passive:false so we can preventDefault and stop
+    // the page from scrolling during a horizontal drag.
+    document.addEventListener("touchmove", onMove, { passive: false });
     document.addEventListener("touchend", onEnd, { passive: true });
     document.addEventListener("touchcancel", onCancel, { passive: true });
+
     return () => {
       document.removeEventListener("touchstart", onStart);
+      document.removeEventListener("touchmove", onMove as any);
       document.removeEventListener("touchend", onEnd);
       document.removeEventListener("touchcancel", onCancel);
+      clearTransform();
     };
   }, [pathname, router]);
 
