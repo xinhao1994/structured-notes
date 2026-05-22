@@ -4,6 +4,7 @@ import { ThemeProvider } from "@/components/ThemeProvider";
 import { ServiceWorkerRegister } from "@/components/ServiceWorkerRegister";
 import { Header } from "@/components/Header";
 import { BottomNav } from "@/components/BottomNav";
+import { SwipeNavigator } from "@/components/SwipeNavigator";
 
 export const metadata: Metadata = {
   title: "Structured Notes Desk",
@@ -41,6 +42,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           </main>
           <BottomNav />
           <ServiceWorkerRegister />
+          <SwipeNavigator />
         </ThemeProvider>
       </body>
     </html>
