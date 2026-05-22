@@ -12,7 +12,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   Search, Trash2, Pin, PinOff, Pencil, Check, X, Share2,
-  Wallet, Calendar, StickyNote, ExternalLink,
+  Wallet, Calendar, StickyNote, ExternalLink, ChevronRight,
 } from "lucide-react";
 import {
   listPocket, removePocket, togglePin, updateTrancheFields, type PocketEntry,
@@ -218,12 +218,25 @@ export default function PocketPage() {
                       <button onClick={() => setEditingId(null)} className="btn h-7 px-2" title="Cancel"><X size={13} /></button>
                     </div>
                   ) : (
-                    <button onClick={() => startEdit(entry.id, t.trancheCode)}
-                      className="group flex items-center gap-1 truncate text-left font-mono text-[14.5px] font-semibold hover:text-accent"
-                      title="Click to rename">
-                      {t.trancheCode}
-                      <Pencil size={11} className="opacity-0 transition-opacity group-hover:opacity-100" />
-                    </button>
+                    <div className="group flex items-center gap-1">
+                      {/* Tranche code is now a one-click drill-in to the
+                          detail / KO-schedule page. Rename moved to the
+                          pencil button so the primary affordance is "open". */}
+                      <Link
+                        href={`/pocket/${encodeURIComponent(entry.id)}`}
+                        className="truncate font-mono text-[14.5px] font-semibold hover:text-accent"
+                        title="Open KO valuation schedule"
+                      >
+                        {t.trancheCode}
+                      </Link>
+                      <button
+                        onClick={() => startEdit(entry.id, t.trancheCode)}
+                        className="rounded p-0.5 text-[var(--text-muted)] opacity-0 transition-opacity hover:text-accent group-hover:opacity-100"
+                        title="Rename tranche"
+                      >
+                        <Pencil size={11} />
+                      </button>
+                    </div>
                   )}
                 </div>
                 {r && (
@@ -303,17 +316,26 @@ export default function PocketPage() {
                 )}
               </div>
 
-              {/* Actions — bottom row */}
-              <div className="mt-2 flex justify-end gap-1.5 border-t border-[var(--line)] pt-2">
-                <button onClick={() => handleShareToChat(entry)} className="btn h-7 px-2 text-[11px] text-accent" title="Share this tranche to team chat">
-                  <Share2 size={11} /> Share
-                </button>
-                <button onClick={() => handlePin(entry.id)} className="btn h-7 px-2 text-[11px]" title={entry.pinned ? "Unpin" : "Pin"}>
-                  {entry.pinned ? <PinOff size={11} /> : <Pin size={11} />}
-                </button>
-                <button onClick={() => handleRemove(entry.id)} className="btn h-7 px-2 text-[11px] text-danger" title="Remove">
-                  <Trash2 size={11} />
-                </button>
+              {/* Actions — bottom row. "View KO" is the primary CTA. */}
+              <div className="mt-2 flex items-center justify-between gap-1.5 border-t border-[var(--line)] pt-2">
+                <Link
+                  href={`/pocket/${encodeURIComponent(entry.id)}`}
+                  className="btn btn-primary h-7 px-2.5 text-[11px]"
+                  title="See live KO valuation schedule for this tranche"
+                >
+                  View KO schedule <ChevronRight size={12} />
+                </Link>
+                <div className="flex gap-1.5">
+                  <button onClick={() => handleShareToChat(entry)} className="btn h-7 px-2 text-[11px] text-accent" title="Share this tranche to team chat">
+                    <Share2 size={11} /> Share
+                  </button>
+                  <button onClick={() => handlePin(entry.id)} className="btn h-7 px-2 text-[11px]" title={entry.pinned ? "Unpin" : "Pin"}>
+                    {entry.pinned ? <PinOff size={11} /> : <Pin size={11} />}
+                  </button>
+                  <button onClick={() => handleRemove(entry.id)} className="btn h-7 px-2 text-[11px] text-danger" title="Remove">
+                    <Trash2 size={11} />
+                  </button>
+                </div>
               </div>
             </article>
           );
