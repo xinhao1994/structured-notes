@@ -82,10 +82,13 @@ export function ProductParser({ onParsed, initialText }: Props) {
           <strong className="text-[var(--text)]">strike / KO / EKI %</strong>, <strong className="text-[var(--text)]">coupon</strong>, <strong className="text-[var(--text)]">tenor</strong>, and <strong className="text-[var(--text)]">underlying stocks</strong> automatically.
         </p>
 
-        {/* Primary CTA — full-width, accent-bordered, single-purpose */}
+        {/* Primary CTA — solid accent fill, bright white text for max contrast.
+            Was previously text-accent on bg-accent/10 which read as washed-out
+            on dark surfaces. White-on-blue is the highest-contrast banking
+            convention. */}
         <button
           onClick={pasteFromClipboard}
-          className="group mt-3 flex w-full items-center justify-center gap-2.5 rounded-xl border-2 border-accent bg-accent/10 px-4 py-3.5 text-[14px] font-semibold text-accent transition hover:bg-accent/20 active:bg-accent/30"
+          className="group mt-3 flex w-full items-center justify-center gap-2.5 rounded-xl bg-accent px-4 py-3.5 text-[14.5px] font-semibold text-white shadow-sm transition hover:bg-accent/90 active:scale-[0.98] active:bg-accent"
         >
           <ClipboardPaste size={18} className="transition-transform group-active:scale-95" />
           Paste from clipboard
