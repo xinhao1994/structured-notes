@@ -49,6 +49,13 @@ export function SwipeNavigator() {
     function clearTransform() {
       main!.style.transition = "";
       main!.style.transform = "";
+      // Critical: remove will-change too. With it set, the browser keeps
+      // <main> as a composite layer, which inadvertently makes it the
+      // containing block for any fixed-positioned descendant (e.g. the
+      // chat page's outer wrapper). That breaks the chat layout — the
+      // conversation list gets sized against <main>'s height rather than
+      // the viewport, and collapses to zero.
+      main!.style.willChange = "";
       body.style.overflowX = "";
       body.style.touchAction = "";
     }
@@ -109,6 +116,10 @@ export function SwipeNavigator() {
         body.style.overflowX = "hidden";
         body.style.touchAction = "pan-y"; // allow vertical scroll outside if user changes mind
         main!.style.transition = "none";
+        // Set will-change only while dragging — promotes main to its own
+        // composite layer for smooth GPU compositing during the swipe.
+        // Cleared in clearTransform() once the gesture completes.
+        main!.style.willChange = "transform";
       }
 
       dx = mx;
@@ -151,17 +162,12 @@ export function SwipeNavigator() {
       window.setTimeout(() => {
         router.push(TABS[target]);
         // After Next routes, the layout's <main> stays mounted but its
-        // children get replaced. Reset the transform on the next frame so
-        // the new content snaps to centre (no jarring re-slide).
+        // children get replaced. Reset the transform AND will-change on
+        // the next frame so the new content snaps to centre with the
+        // viewport as containing block (essential for chat's position:
+        // fixed layout).
         requestAnimationFrame(() => {
-          main!.style.transition = "none";
-          main!.style.transform = "";
-          // Restore body styles
-          body.style.overflowX = "";
-          body.style.touchAction = "";
-          // Clear "transition: none" override on next frame so future
-          // transforms (if any) animate normally.
-          requestAnimationFrame(() => { main!.style.transition = ""; });
+          clearTransform();
         });
       }, COMMIT_MS);
     }

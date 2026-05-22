@@ -36,11 +36,11 @@ body {
   overflow-x: hidden;
   overscroll-behavior-x: contain;
 }
-main {
-  /* Promotion to its own composite layer so transforms during swipe are
-     GPU-accelerated and don't repaint the rest of the page. */
-  will-change: transform;
-}
+/* NOTE: do NOT put `will-change: transform` on <main> globally. It creates
+   a containing block for any fixed-positioned descendant — which breaks
+   the chat page's `position: fixed` layout (the conversation list ends up
+   sized relative to <main> instead of the viewport). The SwipeNavigator
+   sets will-change ONLY while a finger is actively dragging. */
 
 /* Tabular numbers for everything price-like */
 .tabular { font-variant-numeric: tabular-nums; }
