@@ -445,9 +445,13 @@ function ObsCard({
         </div>
       </header>
 
-      {/* Per-underlying mini-table — easy on the eye, no scrollbar */}
+      {/* Per-underlying mini-table — easy on the eye, no scrollbar.
+          Uses FIXED-WIDTH columns (not auto) so headers + numbers always
+          line up regardless of how many digits each value happens to have.
+          Needs and Live get the same width since they're both prices in
+          the same currency; Gap is narrower since it's just a percentage. */}
       <div className="overflow-hidden rounded-lg border border-[var(--line)]">
-        <div className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-x-3 gap-y-0 bg-[var(--surface-2)] px-2.5 py-1 text-[9.5px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+        <div className="grid grid-cols-[minmax(0,1fr)_5rem_5rem_4.5rem] items-center gap-x-2 bg-[var(--surface-2)] px-2.5 py-1 text-[9.5px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
           <div>Stock</div>
           <div className="text-right">Needs</div>
           <div className="text-right">Live</div>
@@ -457,15 +461,18 @@ function ObsCard({
           {rows.map(({ u, koPx, live, gap, ccy }) => (
             <div
               key={u.symbol}
-              className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-x-3 px-2.5 py-1.5 text-[12px]"
+              className="grid grid-cols-[minmax(0,1fr)_5rem_5rem_4.5rem] items-center gap-x-2 px-2.5 py-1.5 text-[12px]"
             >
               <div className="min-w-0 truncate">
                 <span className="font-mono font-semibold">{u.symbol}</span>
               </div>
               <div className="tabular text-right text-[var(--text)]">{formatPx(koPx, ccy)}</div>
-              <div className="tabular text-right">
+              {/* Wrap TickingPrice in a right-justified flex so its rounded
+                  chip aligns to the column's right edge instead of sitting
+                  somewhere in the middle. */}
+              <div className="flex justify-end">
                 {kind === "next" ? (
-                  <TickingPrice price={live ?? null} currency={ccy} compact className="text-[12px] !px-1" />
+                  <TickingPrice price={live ?? null} currency={ccy} compact className="text-[12px]" />
                 ) : (
                   <span className="tabular">{formatPx(live, ccy)}</span>
                 )}
