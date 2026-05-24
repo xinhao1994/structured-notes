@@ -404,8 +404,9 @@ function ChatHeader() {
       <h1 className="text-base font-semibold flex items-center gap-2">
         <MessageCircle size={16} /> Team chat
       </h1>
-      {/* Tiny pixel Tim paces back and forth here — tap to feed him a banana */}
-      <PixelTim trackWidth={130} size={26} />
+      {/* Pixel Tim paces here. Taps to feed him; he speaks motivational
+          quotes in a classic comic bubble that appears below the header. */}
+      <PixelTim trackWidth={140} size={34} />
     </header>
   );
 }
