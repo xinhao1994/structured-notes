@@ -17,6 +17,7 @@ import {
 import { getSupabaseBrowser } from "@/lib/supabaseClient";
 import { upsertTranche } from "@/lib/storage";
 import { decodeTranche } from "@/lib/trancheShare";
+import { PixelTim } from "@/components/PixelTim";
 import type { Tranche } from "@/lib/types";
 
 const NAME_KEY = "snd.chat.senderName.v1";
@@ -399,10 +400,12 @@ export default function ChatPage() {
 
 function ChatHeader() {
   return (
-    <header className="mb-2 flex-shrink-0">
+    <header className="mb-2 flex-shrink-0 flex items-center justify-between gap-2">
       <h1 className="text-base font-semibold flex items-center gap-2">
         <MessageCircle size={16} /> Team chat
       </h1>
+      {/* Tiny pixel Tim paces back and forth here — tap to feed him a banana */}
+      <PixelTim trackWidth={130} size={26} />
     </header>
   );
 }
