@@ -406,7 +406,7 @@ function ChatHeader() {
       </h1>
       {/* Pixel Tim paces here. Taps to feed him; he speaks motivational
           quotes in a classic comic bubble that appears below the header. */}
-      <PixelTim trackWidth={140} size={34} />
+      <PixelTim trackWidth={150} size={38} />
     </header>
   );
 }
