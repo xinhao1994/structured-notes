@@ -400,13 +400,17 @@ export default function ChatPage() {
 
 function ChatHeader() {
   return (
-    <header className="mb-2 flex-shrink-0 flex items-center justify-between gap-2">
-      <h1 className="text-base font-semibold flex items-center gap-2">
-        <MessageCircle size={16} /> Team chat
-      </h1>
-      {/* Pixel Tim paces here. Taps to feed him; he speaks motivational
-          quotes in a classic comic bubble that appears below the header. */}
-      <PixelTim trackWidth={150} size={38} />
+    <header className="mb-2 flex-shrink-0">
+      <div className="flex items-center gap-2">
+        <MessageCircle size={16} />
+        <h1 className="text-base font-semibold">Team chat</h1>
+      </div>
+      {/* Tim gets his own full-width row below the title so he can pace
+          across almost the whole screen, with his speech bubble following
+          his head as he walks. */}
+      <div className="mt-5 flex justify-center">
+        <PixelTim trackWidth={320} size={40} />
+      </div>
     </header>
   );
 }
