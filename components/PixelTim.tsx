@@ -190,9 +190,9 @@ export function PixelTim({ trackWidth = 300, size = 38 }: Props) {
     if (eating) return;
     let timeoutId: number;
     if (mode === "walking") {
-      const delay = 3000 + Math.random() * 4000;
+      const delay = 5000 + Math.random() * 5000; // walks 5-10s before maybe doing something
       timeoutId = window.setTimeout(() => {
-        if (Math.random() < 0.75) setMode(pickRandomNonWalkingMode());
+        if (Math.random() < 0.45) setMode(pickRandomNonWalkingMode());
         else setMode("walking"); // schedule another walking cycle
       }, delay);
     } else {
@@ -255,7 +255,7 @@ export function PixelTim({ trackWidth = 300, size = 38 }: Props) {
     .tim-walker {
       position: absolute; left: 0; top: 2px;
       width: ${size}px; height: ${size}px;
-      animation: tim-pace ${Math.round(walkDist / 22)}s linear infinite alternate;
+      animation: tim-pace ${Math.max(6, Math.round((walkDist * 2) / 55))}s linear infinite;
       will-change: transform;
     }
     .tim-walker.paused { animation-play-state: paused; }
@@ -272,7 +272,7 @@ export function PixelTim({ trackWidth = 300, size = 38 }: Props) {
     .tim-bubble-tracker {
       position: absolute; top: 0; left: 0;
       width: ${size}px; height: 0;
-      animation: tim-pace-bubble ${Math.round(walkDist / 22)}s linear infinite alternate;
+      animation: tim-pace-bubble ${Math.max(6, Math.round((walkDist * 2) / 55))}s linear infinite;
       pointer-events: none;
       z-index: 60;
     }
