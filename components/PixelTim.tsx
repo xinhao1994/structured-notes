@@ -260,11 +260,11 @@ export function PixelTim({ trackWidth = 300, size = 38 }: Props) {
     }
     .tim-walker.paused { animation-play-state: paused; }
     @keyframes tim-pace {
-      0%   { transform: translateX(0) scaleX(1); }
-      48%  { transform: translateX(${walkDist}px) scaleX(1); }
-      50%  { transform: translateX(${walkDist}px) scaleX(-1); }
-      98%  { transform: translateX(0) scaleX(-1); }
-      100% { transform: translateX(0) scaleX(1); }
+      0%    { transform: translateX(0) scaleX(1); }
+      49.5% { transform: translateX(${walkDist}px) scaleX(1); }
+      50%   { transform: translateX(${walkDist}px) scaleX(-1); }
+      99.5% { transform: translateX(0) scaleX(-1); }
+      100%  { transform: translateX(0) scaleX(1); }
     }
     /* Bubble tracker — invisible div that moves in lockstep with Tim
        (matching duration + easing) but never flips. The bubble sits
@@ -278,12 +278,23 @@ export function PixelTim({ trackWidth = 300, size = 38 }: Props) {
     }
     .tim-bubble-tracker.paused { animation-play-state: paused; }
     @keyframes tim-pace-bubble {
-      0%   { transform: translateX(0); }
-      48%  { transform: translateX(${walkDist}px); }
-      50%  { transform: translateX(${walkDist}px); }
-      98%  { transform: translateX(0); }
-      100% { transform: translateX(0); }
+      0%    { transform: translateX(0); }
+      49.5% { transform: translateX(${walkDist}px); }
+      50%   { transform: translateX(${walkDist}px); }
+      99.5% { transform: translateX(0); }
+      100%  { transform: translateX(0); }
     }
+    /* Effects tracker — follows Tim's X exactly (same animation), holds
+       the banana, hearts, Z's, and big heart so they stay glued to Tim
+       wherever he is in the track. Doesn't flip with scaleX. */
+    .tim-fx-tracker {
+      position: absolute; top: 0; left: 0;
+      width: ${size}px; height: 100%;
+      animation: tim-pace-bubble ${Math.max(6, Math.round((walkDist * 2) / 55))}s linear infinite;
+      pointer-events: none;
+      z-index: 5;
+    }
+    .tim-fx-tracker.paused { animation-play-state: paused; }
 
     /* Inner bouncer handles vertical motion, rotations, scales — so the
        horizontal translateX on the outer .tim-walker isn't disturbed. */
@@ -519,14 +530,16 @@ export function PixelTim({ trackWidth = 300, size = 38 }: Props) {
             )}
           </div>
         </div>
-        {eating && <BananaSprite />}
-        {eating && <span className="tim-heart h1">♥</span>}
-        {eating && <span className="tim-heart h2">♥</span>}
-        {eating && <span className="tim-heart h3">♥</span>}
-        {mode === "sleeping" && !eating && <span className="tim-z z1">Z</span>}
-        {mode === "sleeping" && !eating && <span className="tim-z z2">Z</span>}
-        {mode === "sleeping" && !eating && <span className="tim-z z3">Z</span>}
-        {mode === "heart" && !eating && <span className="tim-big-heart">♥</span>}
+        <div className={`tim-fx-tracker ${horizontalPaused ? "paused" : ""}`}>
+          {eating && <BananaSprite />}
+          {eating && <span className="tim-heart h1">♥</span>}
+          {eating && <span className="tim-heart h2">♥</span>}
+          {eating && <span className="tim-heart h3">♥</span>}
+          {mode === "sleeping" && !eating && <span className="tim-z z1">Z</span>}
+          {mode === "sleeping" && !eating && <span className="tim-z z2">Z</span>}
+          {mode === "sleeping" && !eating && <span className="tim-z z3">Z</span>}
+          {mode === "heart" && !eating && <span className="tim-big-heart">♥</span>}
+        </div>
       </div>
 
       {/* Bubble tracker — moves in lockstep with Tim above his head */}
