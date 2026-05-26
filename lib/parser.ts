@@ -508,7 +508,7 @@ function extractTickers(text: string, exclude: Set<string>): Underlying[] {
     // words that distributors put in product blurbs. This is the primary
     // defence against parsing things like "Currency SGD" (no colon)
     // as ticker CURRENCY listed on the SG market.
-    if (/^(Strike|KO|Coupon|Yield|Interest|Tenor|Tenure|EKI|Offering|Offer|Trade|Settlement|Tranche|Currency|Notional|Maturity|Underlyings?|Issuer|Bank|Type|Note|Notes|Reference|Ref|Product|MYR|USD|HKD|SGD|JPY|AUD)\b/i.test(raw)) continue;
+    if (/^(Strike|KO|Autocall|Coupon|Yield|Interest|Tenor|Tenure|EKI|Offering|Offer|Trade|Settlement|Tranche|Currency|Notional|Maturity|Underlyings?|Issuer|Bank|Type|Note|Notes|Reference|Ref|Product|MYR|USD|HKD|SGD|JPY|AUD)\b/i.test(raw)) continue;
     // Multi-word "Label: value" lines (e.g. "Trade date:", "Initial
     // fixing:", "Settlement details:"). Requires AT LEAST two
     // whitespace-separated words before the colon, so plain ticker
@@ -585,7 +585,9 @@ export function parseTrancheText(input: string): ParseResult {
   const text = input.trim();
 
   const issuerLines = text.split(/\r?\n/).map((l) => stripDecor(l).trim()).filter(Boolean);
-  const issuer = issuerLines.find((l) => /^[A-Z]{2,8}$/.test(l));
+  // Exclude known ticker aliases from issuer detection — e.g. "TSMC" is a stock,
+  // not the issuing bank.
+  const issuer = issuerLines.find((l) => /^[A-Z]{2,8}$/.test(l) && !NAME_TO_TICKER[l.toLowerCase()]);
 
   const trancheCode =
     parseField(text, /Tranche\s*code[:\s]+([A-Z0-9-]+)/i) ||
@@ -649,12 +651,13 @@ export function parseTrancheText(input: string): ParseResult {
   const strikePct = pct(parseField(text, /Strike\s*:?\s+([0-9.]+\s*%)/i)) ?? 1.0;
   const ekiPct = pct(parseField(text, /EKI\s*:?\s+([0-9.]+\s*%)/i)) ?? 0.6;
 
-  const koLine = parseField(text, /KO\s*:?\s+([^\n]+)/i) || "";
+  // Accept "KO" or "Autocall" as the knock-out/autocall field label.
+  const koLine = parseField(text, /(?:KO|Autocall)\s*:?\s+([^\n]+)/i) || "";
   const koStartPct = pct(koLine.match(/([0-9.]+\s*%)/)?.[1]) ?? 1.0;
-  // Stepdown can be written as "stepdown 4%" OR "4% stepdown" OR "4 stepdown".
+  // Stepdown can be written as "stepdown 4%", "4% stepdown", "4% step down", "(3% step down)".
   const stepdownPct =
-    pct(koLine.match(/stepdown\s*:?\s+([0-9.]+\s*%)/i)?.[1]) ??
-    pct(koLine.match(/([0-9.]+\s*%)\s+stepdown/i)?.[1]) ??
+    pct(koLine.match(/step\s*down\s*:?\s+([0-9.]+\s*%)/i)?.[1]) ??
+    pct(koLine.match(/([0-9.]+\s*%)\s+step\s*down/i)?.[1]) ??
     0;
 
   const koObsFreqMonths = 1;
