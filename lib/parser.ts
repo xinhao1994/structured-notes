@@ -77,6 +77,7 @@ const NAME_TO_TICKER: Record<string, Listing> = {
   "taiwan semiconductor": { US: "TSM", default: "US" },
   workday: { US: "WDAY", default: "US" },
   intuit: { US: "INTU", default: "US" },
+  "texas instruments": { US: "TXN", default: "US" },
 
   // ─── US financials / consumer / healthcare ──────────────────────────────
   jpmorgan: { US: "JPM", default: "US" },
@@ -248,6 +249,7 @@ const NAME_TO_TICKER: Record<string, Listing> = {
   aph: { US: "APH", default: "US" },
   wdc: { US: "WDC", default: "US" },
   sndk: { US: "SNDK", default: "US" },
+  txn: { US: "TXN", default: "US" },
   amat: { US: "AMAT", default: "US" },
   lrcx: { US: "LRCX", default: "US" },
   tsm: { US: "TSM", default: "US" },
@@ -541,6 +543,20 @@ function extractTickers(text: string, exclude: Set<string>): Underlying[] {
       }
     }
 
+    // Format B-alt: "Company Name (TICKER MARKET)" — parenthesized ticker after name.
+    //   e.g. "Texas Instruments Inc (TXN US)", "Alibaba Group (9988 HK)"
+    const parenthesizedMatch = raw.match(/^(.+?)\s*\(([A-Za-z0-9.&\-]+)\s+([A-Z]{1,4})\)\s*$/);
+    if (parenthesizedMatch) {
+      const companyName = parenthesizedMatch[1].trim();
+      const tickerPart = parenthesizedMatch[2].trim().toUpperCase();
+      const tok = parenthesizedMatch[3].trim();
+      const market = MARKET_TOKENS[tok];
+      if (market && /^[A-Z0-9.&\-]{1,8}$/.test(tickerPart)) {
+        out.push({ rawName: `${companyName} (${tickerPart} ${tok})`, symbol: tickerPart, market, resolved: true });
+        continue;
+      }
+    }
+
     // Format B: bare 4-digit code → Hang Seng listing
     if (looksLikeHkCode(raw)) {
       out.push({ rawName: raw, symbol: raw, market: "HK", resolved: true });
@@ -632,7 +648,7 @@ export function parseTrancheText(input: string): ParseResult {
 
   // Coupon synonyms: "Coupon", "Yield", "Interest" — all commonly used by
   // distributors and bank sales notes for the same field.
-  const couponMatch = text.match(/(?:Coupon|Yield|Interest)\s*:?\s+(\d+(?:\.\d+)?)\s*%(?:\s*p\.?a\.?)?/i);
+  const couponMatch = text.match(/(?:Coupon|Yield|Interest)\s*:?\s+[*_]*(\d+(?:\.\d+)?)\s*%(?:\s*p\.?a\.?)?[*_]*/i);
   const couponPa = couponMatch ? parseFloat(couponMatch[1]) / 100 : 0;
   if (!couponMatch) warnings.push({ field: "coupon", message: "Coupon not found — defaulted to 0%." });
 
