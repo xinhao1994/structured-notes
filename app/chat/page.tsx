@@ -10,6 +10,7 @@
 // Voice messages removed by user request.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   MessageCircle, Send, AlertTriangle, Pencil, Image as ImageIcon,
   Trash2, Briefcase, BookmarkPlus, Check,
@@ -138,7 +139,7 @@ export default function ChatPage() {
       if (error) { setError(error.message); setLoading(false); return; }
       setMessages(((data || []) as ChatMessage[]).slice().reverse());
       setLoading(false);
-      setTimeout(() => listEndRef.current?.scrollIntoView({ behavior: "auto" }), 50);
+      setTimeout(() => { const el = listEndRef.current?.parentElement; if (el) el.scrollTop = el.scrollHeight; }, 50);
     })();
     return () => { cancelled = true; };
   }, [supa]);
@@ -150,7 +151,7 @@ export default function ChatPage() {
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "chat_messages" }, (payload) => {
         const m = payload.new as ChatMessage;
         setMessages((prev) => prev.some((p) => p.id === m.id) ? prev : [...prev, m]);
-        setTimeout(() => listEndRef.current?.scrollIntoView({ behavior: "smooth" }), 30);
+        setTimeout(() => { const el = listEndRef.current?.parentElement; if (el) el.scrollTop = el.scrollHeight; }, 30);
       })
       .on("postgres_changes", { event: "DELETE", schema: "public", table: "chat_messages" }, () => {
         setMessages([]);
@@ -443,6 +444,7 @@ export default function ChatPage() {
         <div className="flex items-end gap-1.5">
           <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={pickImage} />
           <button
+            onMouseDown={(e) => { e.preventDefault(); }}
             onClick={() => fileInputRef.current?.click()}
             disabled={!name.trim() || sending}
             className="btn h-10 px-2.5"
@@ -464,6 +466,7 @@ export default function ChatPage() {
           />
 
           <button
+            onMouseDown={(e) => { e.preventDefault(); }}
             onClick={() => sendWithFly()}
             disabled={!input.trim() || !name.trim() || sending}
             className="btn btn-primary h-10 px-3 text-[12px] active:scale-90 transition-transform"
@@ -476,26 +479,32 @@ export default function ChatPage() {
 
       {error && <p className="mt-1 flex-shrink-0 text-center text-[11px] text-danger">{error}</p>}
 
-      {/* Flying ghost bubbles — iMessage-style "bubble takes off from the
-          textarea and lands in the chat list". Lives in a fixed layer so
-          coordinates are screen-relative. */}
-      {flyingBubbles.map((b) => (
-        <div
-          key={b.id}
-          className="fly-bubble pointer-events-none fixed z-50 rounded-2xl rounded-br-md px-3 py-2 text-[13px] leading-relaxed shadow-md"
-          style={{
-            left: `${b.startX}px`,
-            top: `${b.startY}px`,
-            width: `${b.startW}px`,
-            background: "rgba(124, 167, 224, 0.55)",
-            color: "var(--text)",
-            ["--fly-dx" as any]: `${b.endX - b.startX}px`,
-            ["--fly-dy" as any]: `${b.endY - b.startY}px`,
-          }}
-        >
-          <span className="whitespace-pre-wrap break-words">{b.text}</span>
-        </div>
-      ))}
+      {/* Flying ghost bubbles — rendered through a portal into document.body
+          so they live OUTSIDE this fixed chat container. On iOS, mutating
+          DOM inside the chat's fixed flex layout was causing the visual
+          viewport to recalculate and shift the bottom nav up briefly. */}
+      {typeof window !== "undefined" && createPortal(
+        <>
+          {flyingBubbles.map((b) => (
+            <div
+              key={b.id}
+              className="fly-bubble pointer-events-none fixed z-50 rounded-2xl rounded-br-md px-3 py-2 text-[13px] leading-relaxed shadow-md"
+              style={{
+                left: `${b.startX}px`,
+                top: `${b.startY}px`,
+                width: `${b.startW}px`,
+                background: "rgba(124, 167, 224, 0.55)",
+                color: "var(--text)",
+                ["--fly-dx" as any]: `${b.endX - b.startX}px`,
+                ["--fly-dy" as any]: `${b.endY - b.startY}px`,
+              }}
+            >
+              <span className="whitespace-pre-wrap break-words">{b.text}</span>
+            </div>
+          ))}
+        </>,
+        document.body
+      )}
     </div>
   );
 }
