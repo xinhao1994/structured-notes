@@ -153,9 +153,15 @@ const MODE_DURATIONS: Record<Exclude<Mode, "walking">, () => number> = {
 interface Props {
   trackWidth?: number;
   size?: number;
+  /** Optional CSS filter string applied to the whole sprite — used to tint
+      each Tim a slightly different brown when multiple users are online. */
+  tintFilter?: string;
+  /** Optional CSS animation-delay so multiple Tims can share a track but
+      pace at different phases (negative values pre-shift the animation). */
+  animationDelay?: string;
 }
 
-export function PixelTim({ trackWidth = 300, size = 38 }: Props) {
+export function PixelTim({ trackWidth = 300, size = 38, tintFilter, animationDelay }: Props) {
   const [mode, setMode] = useState<Mode>("walking");
   const [eating, setEating] = useState(false);
   const [chompFrame, setChompFrame] = useState(0);
@@ -496,8 +502,11 @@ export function PixelTim({ trackWidth = 300, size = 38 }: Props) {
     }
   `;
 
+  const wrapStyle: React.CSSProperties | undefined = tintFilter ? { filter: tintFilter } : undefined;
+  const delayStyle: React.CSSProperties | undefined = animationDelay ? { animationDelay } : undefined;
+
   return (
-    <div className="tim-wrap">
+    <div className="tim-wrap" style={wrapStyle}>
       <style dangerouslySetInnerHTML={{ __html: styles }} />
       <div
         className="tim-track"
@@ -508,7 +517,7 @@ export function PixelTim({ trackWidth = 300, size = 38 }: Props) {
         title={eating ? "Yum!" : "Tap to feed Tim"}
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") handleTap(); }}
       >
-        <div className={`tim-walker ${horizontalPaused ? "paused" : ""}`}>
+        <div className={`tim-walker ${horizontalPaused ? "paused" : ""}`} style={delayStyle}>
           <div className={`tim-bouncer ${eating ? "eating" : (mode !== "walking" && mode !== "sitting") ? mode : ""}`}>
             {eating ? (
               <TimEatingSprite size={size} chompFrame={chompFrame} />
@@ -530,7 +539,7 @@ export function PixelTim({ trackWidth = 300, size = 38 }: Props) {
             )}
           </div>
         </div>
-        <div className={`tim-fx-tracker ${horizontalPaused ? "paused" : ""}`}>
+        <div className={`tim-fx-tracker ${horizontalPaused ? "paused" : ""}`} style={delayStyle}>
           {eating && <BananaSprite />}
           {eating && <span className="tim-heart h1">♥</span>}
           {eating && <span className="tim-heart h2">♥</span>}
@@ -543,7 +552,7 @@ export function PixelTim({ trackWidth = 300, size = 38 }: Props) {
       </div>
 
       {/* Bubble tracker — moves in lockstep with Tim above his head */}
-      <div className={`tim-bubble-tracker ${horizontalPaused ? "paused" : ""}`}>
+      <div className={`tim-bubble-tracker ${horizontalPaused ? "paused" : ""}`} style={delayStyle}>
         {bubbleText && <div className="tim-bubble">{bubbleText}</div>}
       </div>
     </div>

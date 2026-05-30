@@ -41,14 +41,25 @@ function colourFor(name: string): string {
   return palette[h % palette.length];
 }
 function relativeTime(iso: string): string {
+  // Show the actual clock time on every message — "10:30", "Yesterday 14:22",
+  // "Mon 09:15", "12 May 16:48". Far more informative than "1h ago" / "5m ago"
+  // when scrolling through a long thread.
   const t = Date.parse(iso);
   if (!isFinite(t)) return "";
-  const s = (Date.now() - t) / 1000;
-  if (s < 60) return "just now";
-  if (s < 3600) return `${Math.floor(s / 60)}m`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h`;
-  if (s < 172800) return "yesterday";
-  return new Date(t).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+  const d = new Date(t);
+  const now = new Date();
+  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+  const sameDay = d.toDateString() === now.toDateString();
+  if (sameDay) return time;
+  const yesterday = new Date(now); yesterday.setDate(yesterday.getDate() - 1);
+  if (d.toDateString() === yesterday.toDateString()) return `Yesterday ${time}`;
+  const diffDays = Math.floor((now.getTime() - d.getTime()) / 86400000);
+  if (diffDays < 7) {
+    const day = d.toLocaleDateString("en-US", { weekday: "short" });
+    return `${day} ${time}`;
+  }
+  const date = d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  return `${date} ${time}`;
 }
 function initials(name: string): string {
   const parts = name.trim().split(/\s+/);
@@ -56,6 +67,24 @@ function initials(name: string): string {
     ? parts[0].slice(0, 2).toUpperCase()
     : (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
+
+// Stable string hash for deriving each Tim's tint and phase from a username.
+function hashName(name: string): number {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  return h;
+}
+
+// Different brown shades for multiple Tims. All warm — never green/blue.
+const TIM_TINTS = [
+  "",  // default brown
+  "brightness(1.15) saturate(0.9)",        // lighter, slightly desaturated
+  "brightness(0.82)",                      // darker chocolate
+  "hue-rotate(15deg) saturate(1.1)",       // warmer reddish-brown
+  "hue-rotate(-8deg) brightness(0.95)",    // cooler taupe
+  "brightness(1.1) sepia(0.25)",           // honey
+  "brightness(0.9) saturate(1.15)",        // dark cocoa
+];
 
 export default function ChatPage() {
   const supa = useMemo(() => getSupabaseBrowser(), []);
@@ -67,6 +96,11 @@ export default function ChatPage() {
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [typingUsers, setTypingUsers] = useState<Record<string, number>>({});
+  const [onlineUsers, setOnlineUsers] = useState<string[]>([]);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [flyingBubbles, setFlyingBubbles] = useState<Array<{
+    id: string; text: string; startX: number; startY: number; startW: number; endX: number; endY: number;
+  }>>([]);
   const listEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const lastTypingBroadcast = useRef<number>(0);
@@ -151,6 +185,22 @@ export default function ChatPage() {
     return () => clearInterval(id);
   }, []);
 
+  // ─── Presence: who's currently on this page right now ───
+  useEffect(() => {
+    if (!supa || !name.trim()) return;
+    const ch = supa.channel("chat_presence", { config: { presence: { key: name.trim() } } });
+    ch.on("presence", { event: "sync" }, () => {
+      const state = ch.presenceState() as Record<string, unknown>;
+      setOnlineUsers(Object.keys(state));
+    });
+    ch.subscribe(async (status) => {
+      if (status === "SUBSCRIBED") {
+        await ch.track({ at: Date.now() });
+      }
+    });
+    return () => { supa.removeChannel(ch); };
+  }, [supa, name]);
+
   const broadcastTyping = useCallback(() => {
     const ch = typingChannelRef.current;
     if (!ch || !name) return;
@@ -178,6 +228,36 @@ export default function ChatPage() {
     if (error) { setError(error.message); return null; }
     const { data } = supa.storage.from("chat-attachments").getPublicUrl(path);
     return data.publicUrl;
+  }
+
+  // Wraps send() with an iMessage-style "bubble flies from textarea to chat
+  // list" animation. The real send still happens via send() — this is purely
+  // visual: a ghost bubble is positioned at the textarea, then animated up
+  // to where the new message will land.
+  function sendWithFly() {
+    const text = input.trim();
+    if (!text || !name.trim()) return;
+    const ta = textareaRef.current;
+    const end = listEndRef.current;
+    if (ta && end) {
+      const ar = ta.getBoundingClientRect();
+      const er = end.getBoundingClientRect();
+      // Land near the right edge (sender's own bubbles align right)
+      const fly = {
+        id: String(Date.now()) + Math.random().toString(36).slice(2, 6),
+        text,
+        startX: ar.left + 12,
+        startY: ar.top + 4,
+        startW: Math.min(ar.width - 24, 240),
+        endX: er.right - 180,
+        endY: er.top - 36,
+      };
+      setFlyingBubbles((prev) => [...prev, fly]);
+      window.setTimeout(() => {
+        setFlyingBubbles((prev) => prev.filter((b) => b.id !== fly.id));
+      }, 520);
+    }
+    void send();
   }
 
   async function send(opts?: { attachmentUrl?: string; attachmentType?: "image" | "tranche"; bodyOverride?: string }) {
@@ -222,7 +302,7 @@ export default function ChatPage() {
   if (!supa) {
     return (
       <>
-        <ChatHeader />
+        <ChatHeader onlineUsers={onlineUsers} ownName={name} />
         <div className="card mb-3 border-l-4 border-l-warning p-4 text-[12.5px]">
           <div className="mb-1 flex items-center gap-2 font-semibold text-warning">
             <AlertTriangle size={14} /> Chat not yet configured
@@ -248,7 +328,7 @@ export default function ChatPage() {
         paddingRight: "max(env(safe-area-inset-right, 0px), 12px)",
       }}
     >
-      <ChatHeader />
+      <ChatHeader onlineUsers={onlineUsers} ownName={name} />
 
       {/* Name bar + clear-chat */}
       <section className="card mb-2 flex flex-shrink-0 items-center justify-between gap-2 p-3">
@@ -319,10 +399,10 @@ export default function ChatPage() {
                     </div>
                   )}
                   {trancheData ? (
-                    <TrancheCard tranche={trancheData} />
+                    <div className="msg-bubble"><TrancheCard tranche={trancheData} /></div>
                   ) : (
                     <div
-                      className={`rounded-2xl px-3 py-2 text-[13px] leading-relaxed ${isMe ? "rounded-br-md" : "bg-[var(--surface-2)] rounded-bl-md"}`}
+                      className={`msg-bubble rounded-2xl px-3 py-2 text-[13px] leading-relaxed ${isMe ? "rounded-br-md" : "bg-[var(--surface-2)] rounded-bl-md"}`}
                       style={isMe ? { background: "rgba(124, 167, 224, 0.18)" } : undefined}
                     >
                       {m.attachment_type === "image" && m.attachment_url && (
@@ -372,9 +452,10 @@ export default function ChatPage() {
           </button>
 
           <textarea
+            ref={textareaRef}
             value={input}
             onChange={(e) => { setInput(e.target.value); broadcastTyping(); }}
-            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
+            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendWithFly(); } }}
             placeholder={name ? `Message as ${name}...` : "Set your name above first"}
             maxLength={2000} rows={1}
             disabled={!name.trim()}
@@ -383,9 +464,9 @@ export default function ChatPage() {
           />
 
           <button
-            onClick={() => send()}
+            onClick={() => sendWithFly()}
             disabled={!input.trim() || !name.trim() || sending}
-            className="btn btn-primary h-10 px-3 text-[12px]"
+            className="btn btn-primary h-10 px-3 text-[12px] active:scale-90 transition-transform"
             title="Send (Enter)"
           >
             <Send size={14} />
@@ -394,22 +475,76 @@ export default function ChatPage() {
       </section>
 
       {error && <p className="mt-1 flex-shrink-0 text-center text-[11px] text-danger">{error}</p>}
+
+      {/* Flying ghost bubbles — iMessage-style "bubble takes off from the
+          textarea and lands in the chat list". Lives in a fixed layer so
+          coordinates are screen-relative. */}
+      {flyingBubbles.map((b) => (
+        <div
+          key={b.id}
+          className="fly-bubble pointer-events-none fixed z-50 rounded-2xl rounded-br-md px-3 py-2 text-[13px] leading-relaxed shadow-md"
+          style={{
+            left: `${b.startX}px`,
+            top: `${b.startY}px`,
+            width: `${b.startW}px`,
+            background: "rgba(124, 167, 224, 0.55)",
+            color: "var(--text)",
+            ["--fly-dx" as any]: `${b.endX - b.startX}px`,
+            ["--fly-dy" as any]: `${b.endY - b.startY}px`,
+          }}
+        >
+          <span className="whitespace-pre-wrap break-words">{b.text}</span>
+        </div>
+      ))}
     </div>
   );
 }
 
-function ChatHeader() {
+function ChatHeader({ onlineUsers = [], ownName = "" }: { onlineUsers?: string[]; ownName?: string } = {}) {
+  // Build the unique list of people sharing this chat right now — self + others.
+  // Multiple Tims render on top of each other in the same track, each a
+  // slightly different brown shade and walking at a different phase, so it
+  // looks like a little group of teddies sharing the room.
+  const allUsers = (() => {
+    const set = new Set<string>();
+    if (ownName.trim()) set.add(ownName.trim());
+    for (const u of onlineUsers) if (u && u.trim()) set.add(u.trim());
+    return Array.from(set);
+  })();
+
   return (
     <header className="mb-2 flex-shrink-0">
       <div className="flex items-center gap-2">
         <MessageCircle size={16} />
         <h1 className="text-base font-semibold">Team chat</h1>
+        {allUsers.length > 1 && (
+          <span className="ml-auto text-[10.5px] text-[var(--text-muted)]">
+            {allUsers.length} Tims online 🧸
+          </span>
+        )}
       </div>
-      {/* Tim gets his own full-width row below the title so he can pace
-          across almost the whole screen, with his speech bubble following
-          his head as he walks. */}
+      {/* Tim row — one Tim per person on the page. They share the track
+          (overlap visually when they bump into each other = cute). */}
       <div className="mt-5 flex justify-center">
-        <PixelTim trackWidth={320} size={40} />
+        <div className="relative" style={{ width: 320, height: 46 }}>
+          {(allUsers.length === 0 ? [""] : allUsers).map((user) => {
+            const hash = hashName(user || "default");
+            const tint = TIM_TINTS[hash % TIM_TINTS.length];
+            // Negative animation-delay shifts each Tim's phase so they're at
+            // different points in the walk cycle.
+            const delay = `-${(hash % 11000) / 1000}s`;
+            return (
+              <div key={user || "default"} className="absolute inset-0 flex justify-center">
+                <PixelTim
+                  trackWidth={320}
+                  size={40}
+                  tintFilter={tint || undefined}
+                  animationDelay={delay}
+                />
+              </div>
+            );
+          })}
+        </div>
       </div>
     </header>
   );

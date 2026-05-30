@@ -267,3 +267,27 @@ body {
   .ticker-track { animation: none; }
   .ticker-strip { overflow-x: auto; }
 }
+
+
+/* ─── iMessage-style send / message animations ───────────────────────── */
+/* New message bubbles pop in with a gentle spring rise + scale. */
+@keyframes msg-pop-in {
+  0%   { transform: translateY(12px) scale(0.92); opacity: 0; }
+  60%  { transform: translateY(-2px) scale(1.02); opacity: 1; }
+  100% { transform: translateY(0) scale(1); opacity: 1; }
+}
+.msg-bubble {
+  animation: msg-pop-in 280ms cubic-bezier(.34, 1.5, .64, 1);
+  transform-origin: 50% 100%;
+}
+/* Ghost bubble that flies from the textarea up to the chat list when you
+   hit Send. Variables --fly-dx/--fly-dy are set inline per-bubble. */
+@keyframes fly-bubble {
+  0%   { transform: translate(0, 0) scale(1);    opacity: 0.95; }
+  60%  { transform: translate(calc(var(--fly-dx) * 0.7), calc(var(--fly-dy) * 0.7)) scale(0.92); opacity: 0.85; }
+  100% { transform: translate(var(--fly-dx), var(--fly-dy)) scale(0.78); opacity: 0; }
+}
+.fly-bubble {
+  animation: fly-bubble 480ms cubic-bezier(.34, 1.1, .64, 1) forwards;
+  will-change: transform, opacity;
+}
