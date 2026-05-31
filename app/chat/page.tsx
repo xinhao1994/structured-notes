@@ -116,6 +116,33 @@ export default function ChatPage() {
     return () => { document.body.style.overflow = prev; };
   }, []);
 
+  // ─── iOS visualViewport hook ────────────────────────────────────────
+  // When the iPhone keyboard collapses (user taps "Done"), iOS Safari
+  // sometimes leaves position:fixed elements at stale positions until the
+  // next navigation. Listening to visualViewport.resize + forcing a body
+  // transform reflow kicks Safari into recalculating immediately.
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.visualViewport) return;
+    const vv = window.visualViewport;
+    let lastHeight = vv.height;
+    const onResize = () => {
+      const next = vv.height;
+      // React only to keyboard collapsing (viewport growing back). Open
+      // events shrink the viewport and don't need the fix.
+      if (next > lastHeight + 40) {
+        // Force a layout repaint by toggling a transform on body.
+        document.body.style.transform = "translate3d(0,0,0)";
+        requestAnimationFrame(() => {
+          document.body.style.transform = "";
+          window.scrollTo(0, 0);
+        });
+      }
+      lastHeight = next;
+    };
+    vv.addEventListener("resize", onResize);
+    return () => vv.removeEventListener("resize", onResize);
+  }, []);
+
   // ─── Hydrate name ───
   useEffect(() => {
     try {
@@ -525,16 +552,22 @@ function ChatHeader({ onlineUsers = [], ownName = "" }: { onlineUsers?: string[]
     <header className="mb-2 flex-shrink-0">
       <div className="flex items-center gap-2">
         <MessageCircle size={16} />
-        <h1 className="text-base font-semibold">Team chat</h1>
+        <h1 className="text-base font-semibold">A.I Chat</h1>
         {allUsers.length > 1 && (
           <span className="ml-auto text-[10.5px] text-[var(--text-muted)]">
-            {allUsers.length} Tims online 🧸
+            {allUsers.length} Tims here 🧸
           </span>
         )}
       </div>
-      {/* Tim row — one Tim per person on the page. They share the track
-          (overlap visually when they bump into each other = cute). */}
-      <div className="mt-5 flex justify-center">
+      {/* Compliance disclaimer — sits just below the title so it's always
+          visible without taking too much vertical space. */}
+      <p className="mt-1 text-[9.5px] leading-[1.4] text-[var(--text-muted)]">
+        ⚠️ AI-generated financial content is for research and educational
+        purposes only and does not constitute financial advice. Please do
+        your own research and invest at your own risk.
+      </p>
+      {/* Tim row — one Tim per person on the page. */}
+      <div className="mt-2 flex justify-center">
         <div className="relative" style={{ width: 320, height: 46 }}>
           {(allUsers.length === 0 ? [""] : allUsers).map((user) => {
             const hash = hashName(user || "default");
