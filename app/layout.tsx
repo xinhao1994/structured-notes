@@ -34,6 +34,10 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
+      {/* Apply saved theme before React hydrates — eliminates the light→dark flash */}
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: `try{var t=localStorage.getItem('snd.theme');if(t!=='light')document.documentElement.classList.add('dark')}catch(e){}` }} />
+      </head>
       <body className="min-h-dvh">
         <ThemeProvider>
           <Header />

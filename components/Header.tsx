@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Moon, Sun, Briefcase } from "lucide-react";
 import { useTheme } from "./ThemeProvider";
 import { malaysiaNowParts, marketSnapshots } from "@/lib/markets";
