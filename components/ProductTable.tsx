@@ -63,7 +63,33 @@ export const ProductTable = forwardRef<ProductTableHandle, Props>(function Produ
   async function doExportPng() {
     if (!tableRef.current) return;
     const dataUrl = await captureFullTable(tableRef.current);
-    download(dataUrl, `${tranche.trancheCode}.png`);
+    const filename = `${tranche.trancheCode}.png`;
+
+    // Prefer the Web Share API on iOS / Android — it opens the native
+    // share sheet so the user can tap "Save Image" in one go instead of
+    // being bounced to a downloads page.
+    if (typeof navigator !== "undefined" && typeof navigator.share === "function") {
+      try {
+        const blob = await (await fetch(dataUrl)).blob();
+        const file = new File([blob], filename, { type: "image/png" });
+        const canShare = typeof (navigator as any).canShare === "function"
+          ? (navigator as any).canShare({ files: [file] })
+          : true;
+        if (canShare) {
+          await navigator.share({
+            files: [file],
+            title: tranche.trancheCode,
+            text: `Underlying basket — ${tranche.trancheCode}`,
+          });
+          return;
+        }
+      } catch (err: any) {
+        // User cancelled the share sheet — that's not a failure, just stop.
+        if (err && err.name === "AbortError") return;
+        // Other errors fall through to the plain download fallback below.
+      }
+    }
+    download(dataUrl, filename);
   }
   async function doExportPdf() {
     if (!tableRef.current) return;
@@ -140,7 +166,95 @@ export const ProductTable = forwardRef<ProductTableHandle, Props>(function Produ
           screen, so the dark theme exports as-is, which actually looks more
           professional than the old white version). */}
       <div ref={tableRef} className="bg-[var(--surface)]">
-        <div className="scroll-x">
+        {/* ── Mobile card layout (visible <md) — fits in one phone screen,
+            no horizontal scroll. Each stock is a card with the same data
+            as the desktop table, organised in a 2-column grid. ─────── */}
+        <div className="md:hidden divide-y divide-[var(--line)]">
+          {rows.map((r) => {
+            const ki = r.eki;
+            const aboveKi = r.live != null && ki != null ? r.live > ki : undefined;
+            const delta = r.initial != null && r.live != null
+              ? ((r.live - r.initial) / r.initial) * 100 : undefined;
+            const isEditing = editingSym === r.underlying.symbol;
+            return (
+              <div key={r.underlying.symbol} className="px-3.5 py-3">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <Link
+                    href={`/analyze?symbol=${encodeURIComponent(r.underlying.symbol)}&market=${r.underlying.market}`}
+                    className="flex min-w-0 items-center gap-2 hover:text-accent"
+                  >
+                    <span className="truncate text-[13.5px] font-semibold">{r.underlying.rawName}</span>
+                    <span className="flex-shrink-0 rounded bg-[var(--surface-2)] border border-[var(--line)] px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+                      {r.underlying.market}
+                    </span>
+                  </Link>
+                  <span className={`tabular flex-shrink-0 text-[12.5px] font-semibold ${
+                    delta == null ? "text-[var(--text-muted)]" :
+                    delta >= 0 ? "text-success" : "text-danger"
+                  }`}>
+                    {delta == null ? "—" : `${delta >= 0 ? "+" : ""}${delta.toFixed(2)}%`}
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-x-3 gap-y-2">
+                  <div>
+                    <div className="text-[9px] uppercase tracking-wider text-[var(--text-muted)]">Initial Fix</div>
+                    {isEditing ? (
+                      <span className="inline-flex items-center gap-1">
+                        <input
+                          autoFocus type="number" step="0.01" value={editValue}
+                          onChange={(e) => setEditValue(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") commitEdit(r.underlying.symbol);
+                            if (e.key === "Escape") setEditingSym(null);
+                          }}
+                          className="w-20 rounded border border-[var(--line)] bg-[var(--surface)] px-1 py-0.5 text-right text-[12px]"
+                        />
+                        <button onClick={() => commitEdit(r.underlying.symbol)} className="text-success" title="Save"><Check size={13} /></button>
+                        <button onClick={() => setEditingSym(null)} className="text-[var(--text-muted)]" title="Cancel"><X size={13} /></button>
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() => startEdit(r.underlying.symbol, r.initial)}
+                        className="tabular flex items-center gap-1 text-[13px] font-medium hover:text-accent"
+                        title="Tap to override"
+                      >
+                        {formatPx(r.initial, r.currency)}
+                        <Pencil size={9} className="opacity-40" />
+                      </button>
+                    )}
+                  </div>
+                  <div>
+                    <div className="text-[9px] uppercase tracking-wider text-[var(--text-muted)]">Live</div>
+                    <div className="tabular text-[13px] font-semibold">
+                      <TickingPrice
+                        price={r.live}
+                        currency={r.currency}
+                        marketOpen={isMarketOpen(r.underlying.market).open}
+                        compact
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[9px] uppercase tracking-wider text-[var(--text-muted)]">Strike</div>
+                    <div className="tabular text-[12px]">{formatPx(r.strike, r.currency)}</div>
+                  </div>
+                  <div>
+                    <div className="text-[9px] uppercase tracking-wider text-[var(--text-muted)]">EKI</div>
+                    <div className={`tabular text-[12px] ${aboveKi === false ? "text-danger font-semibold" : ""}`}>
+                      {formatPx(r.eki, r.currency)}
+                    </div>
+                  </div>
+                  <div className="col-span-2 text-[10px] text-[var(--text-muted)]">
+                    52W range: {formatPx(r.low52, r.currency)} — {formatPx(r.high52, r.currency)}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* ── Desktop table (visible md+) ───────────────────────────── */}
+        <div className="hidden md:block scroll-x">
           <table className="bank-table">
             <thead>
               <tr>
@@ -233,7 +347,7 @@ export const ProductTable = forwardRef<ProductTableHandle, Props>(function Produ
             </tbody>
           </table>
         </div>
-        <div className="border-t border-[var(--line)] px-4 py-2 text-[10px] text-[var(--text-muted)]">
+        <div className="border-t border-[var(--line)] px-3.5 py-2 text-[10px] text-[var(--text-muted)] leading-relaxed">
           Initial Fixing {tranche.isIndicativeFixing ? "(indicative — latest close)" : "(actual)"}
           {" · "}Click any Initial Fixing cell to override manually.
           {" · "}Strike = Initial × {(tranche.strikePct * 100).toFixed(0)}%
