@@ -448,9 +448,9 @@ button:not(.btn):not(:disabled):active {
      Reads warm and approachable without being childish. */
   font-family: ui-rounded, "SF Pro Rounded", "Quicksand", "Comfortaa", "Nunito", system-ui, sans-serif;
   font-weight: 600;
-  font-size: 22px;
-  letter-spacing: 0.02em;
-  color: rgba(255, 255, 255, 0.98);
+  font-size: 15px;
+  letter-spacing: 0.05em;
+  color: rgba(255, 255, 255, 0.95);
   text-shadow:
     0 0 10px rgba(255, 255, 255, 0.5),
     0 0 18px rgba(180, 120, 255, 0.6),
@@ -546,8 +546,7 @@ button:not(.btn):not(:disabled):active {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .liquid-orb,
-  .liquid-orb-ripple {
+  .liquid-orb {
     animation: none;
   }
 }

@@ -3,9 +3,9 @@
 // ProductParser — Desk entry point.
 // A free-floating liquid orb in the centre. No card frame. SVG turbulence
 // distorts a multi-colour radial gradient in real time, giving a true
-// liquid surface that flows. Heartbeat pulse + water-drop ripple on tap.
+// liquid surface that flows. Heartbeat pulse.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Pencil, Sparkles, ClipboardPaste, RotateCcw, CheckCircle2, AlertCircle } from "lucide-react";
 import { parseTrancheText, type ParseResult } from "@/lib/parser";
 import { SAMPLE_TRANCHE_TEXT } from "@/lib/sample";
@@ -20,9 +20,6 @@ export function ProductParser({ onParsed, initialText }: Props) {
   const [text, setText] = useState<string>(initialText ?? SAMPLE_TRANCHE_TEXT);
   const [open, setOpen] = useState<boolean>(false);
   const [flashStatus, setFlashStatus] = useState<"none" | "ok" | "empty" | "denied">("none");
-  const [ripples, setRipples] = useState<Array<{ id: number; x: number; y: number }>>([]);
-  const rippleIdRef = useRef(0);
-
   useEffect(() => {
     const saved = getCurrentParsedText();
     if (saved && !initialText) setText(saved);
@@ -35,19 +32,7 @@ export function ProductParser({ onParsed, initialText }: Props) {
     setOpen(false);
   }
 
-  function addRipple(e: React.MouseEvent<HTMLButtonElement>) {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    const id = ++rippleIdRef.current;
-    setRipples((prev) => [...prev, { id, x, y }]);
-    window.setTimeout(() => {
-      setRipples((prev) => prev.filter((r) => r.id !== id));
-    }, 1500);
-  }
-
-  async function pasteFromClipboard(e?: React.MouseEvent<HTMLButtonElement>) {
-    if (e) addRipple(e);
+  async function pasteFromClipboard() {
     try {
       const t = await navigator.clipboard.readText();
       if (!t.trim()) {
@@ -161,19 +146,7 @@ export function ProductParser({ onParsed, initialText }: Props) {
 
           <span className="liquid-orb-label">Tap Me!</span>
 
-          {ripples.map((r) => (
-            <span
-              key={r.id}
-              className="liquid-orb-ripple"
-              style={{ left: r.x, top: r.y }}
-              aria-hidden="true"
-            >
-              <span className="ripple-ring ring-1" />
-              <span className="ripple-ring ring-2" />
-              <span className="ripple-ring ring-3" />
-              <span className="ripple-droplet" />
-            </span>
-          ))}
+
         </button>
 
         {/* Inline status pill */}
@@ -209,7 +182,7 @@ export function ProductParser({ onParsed, initialText }: Props) {
             <button onClick={() => run(text)} className="btn btn-primary">
               <Sparkles size={15} /> Parse this
             </button>
-            <button onClick={(e) => pasteFromClipboard(e)} className="btn">
+            <button onClick={() => pasteFromClipboard()} className="btn">
               <ClipboardPaste size={15} /> Paste from clipboard
             </button>
             <button onClick={() => setText(SAMPLE_TRANCHE_TEXT)} className="btn" title="Reset to sample">
