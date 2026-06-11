@@ -546,6 +546,20 @@ function extractTickers(text: string, exclude: Set<string>): Underlying[] {
       }
     }
 
+    // Format A-alt: "TICKER MARKET CompanyName" — company name trailing without parens
+    //   e.g. "CRM US Salesforce", "NOW US Servicenow"
+    const tickerFirst = raw.match(/^([A-Za-z0-9.&\-]{1,8})\s+([A-Z]{1,4})\s+([A-Za-z][A-Za-z0-9 &.\-]*)$/);
+    if (tickerFirst) {
+      const tok = tickerFirst[2];
+      const market = MARKET_TOKENS[tok];
+      const tickerPart = tickerFirst[1].toUpperCase();
+      if (market && /^[A-Z0-9.&\-]{1,8}$/.test(tickerPart)) {
+        const companyName = tickerFirst[3].trim();
+        out.push({ rawName: `${companyName} (${tickerPart})`, symbol: tickerPart, market, resolved: true });
+        continue;
+      }
+    }
+
     // Format B-alt: "Company Name (TICKER MARKET)" — parenthesized ticker after name.
     //   e.g. "Texas Instruments Inc (TXN US)", "Alibaba Group (9988 HK)"
     const parenthesizedMatch = raw.match(/^(.+?)\s*\(([A-Za-z0-9.&\-]+)\s+([A-Z]{1,4})\)\s*$/);

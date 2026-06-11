@@ -2,7 +2,7 @@
 // schedule, calculator and risk widgets. Pure functions; no side effects;
 // no I/O. Easy to unit-test.
 
-import { addMyBusinessDays, addMonthsThenSnapMy, addMonthsThenSnap } from "./markets";
+import { addMyBusinessDays, addMonthsThenSnapMy, addMonthsThenSnap, addBusinessDays } from "./markets";
 import type { MarketCode } from "./types";
 import type {
   Currency,
@@ -57,6 +57,30 @@ function koMarket(t: Tranche): MarketCode {
 }
 
 /**
+ * Initial Valuation Date — the anchor from which subsequent valuation dates
+ * are computed (Initial + N months → snap forward).
+ *
+ * MSI's term-sheet convention (verified against live tranches):
+ *   - Local-market underlyings (HK underlyings + SGD/HKD note, MY + MYR,
+ *     etc.): Initial Val Date = Trade Date.
+ *   - US underlyings priced in a non-USD currency (e.g. SGD MSI tranche on
+ *     NVDA/META/AVGO): Initial Val Date = Trade Date + 2 US business days.
+ *     The +2 offset captures the US close that follows an Asia-hours trade,
+ *     so the initial fixing reflects an actual settled close.
+ *
+ * Pure-USD US-underlying notes default to Trade Date (US trade = US close
+ * same day). Override per-tranche by setting `initialValDate` directly on
+ * the Tranche if a term sheet specifies something different.
+ */
+export function initialValuationDate(t: Tranche): string {
+  const market = koMarket(t);
+  if (market === "US" && t.currency !== "USD") {
+    return addBusinessDays(t.tradeDate, 2, "US");
+  }
+  return t.tradeDate;
+}
+
+/**
  * Generate the full KO observation schedule.
  *
  * For an N-month, monthly-observed autocallable with KO start = K0 and
@@ -71,22 +95,26 @@ function koMarket(t: Tranche): MarketCode {
  * If `koObsFreqMonths > 1` we observe less frequently.
  *
  * Valuation date formula (derived from real MSI tranche data):
- *   Valuation N = trade date + N months (same calendar day, clamped to EOM)
- *                 → snapped forward to next business day on the underlying's
- *                   exchange calendar (HK, MY, US, etc.)
+ *   Valuation N = initialValuationDate + N months (same calendar day,
+ *                 clamped to EOM) → snapped forward to next business day
+ *                 on the underlying's exchange calendar (HK, MY, US, etc.)
  *
- * Verified: MSIT250518 (SGD/HK) and MSIT260598 (MYR) match this formula.
+ * Verified:
+ *   - MSIT250518 (SGD/HK) — Initial Val = Trade Date
+ *   - MSIT260598 (MYR/MY) — Initial Val = Trade Date
+ *   - MSI SGD/US tranche (Sep 2025) — Initial Val = Trade + 2 US biz days
  */
 export function koSchedule(t: Tranche): KoObservation[] {
   const obs: KoObservation[] = [];
   const freq = Math.max(1, t.koObsFreqMonths);
   const total = Math.floor(t.tenorMonths / freq);
   const market = koMarket(t);
+  const anchor = initialValuationDate(t);
 
   for (let i = 1; i <= total; i++) {
     const koPct = Math.max(0, t.koStartPct - (i - 1) * t.koStepdownPct);
-    // Valuation N = trade date + i*freq months, snapped to next exchange business day.
-    const date = addMonthsThenSnap(t.tradeDate, i * freq, market);
+    // Valuation N = initial val date + i*freq months, snapped forward.
+    const date = addMonthsThenSnap(anchor, i * freq, market);
     const koPriceBySymbol: Record<string, number> = {};
     if (t.initialFixing) {
       for (const u of t.underlyings) {
