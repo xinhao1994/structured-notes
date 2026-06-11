@@ -1,12 +1,13 @@
 "use client";
 
-// ProductParser — the entry point on the Desk tab.
-// Polished single-button layout: tap "Paste from clipboard" → parser runs
-// instantly on whatever's in the clipboard. The Edit button reveals the
-// textarea so the user can hand-fix any field the parser got wrong.
+// ProductParser — Desk entry point.
+// A single big liquid circle button in the middle that breathes like a
+// heartbeat. Tap it → water-drop ripple expands from the touch point,
+// clipboard is read, dashboard renders. An Edit chip in the corner
+// reveals the textarea for hand-fixing fields the parser misses.
 
-import { useEffect, useState } from "react";
-import { ClipboardPaste, Sparkles, RotateCcw, Pencil, CheckCircle2, AlertCircle } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { ClipboardPaste, Pencil, Sparkles, RotateCcw, CheckCircle2, AlertCircle } from "lucide-react";
 import { parseTrancheText, type ParseResult } from "@/lib/parser";
 import { SAMPLE_TRANCHE_TEXT } from "@/lib/sample";
 import { getCurrentParsedText, setCurrentParsedText } from "@/lib/storage";
@@ -20,6 +21,8 @@ export function ProductParser({ onParsed, initialText }: Props) {
   const [text, setText] = useState<string>(initialText ?? SAMPLE_TRANCHE_TEXT);
   const [open, setOpen] = useState<boolean>(false);
   const [flashStatus, setFlashStatus] = useState<"none" | "ok" | "empty" | "denied">("none");
+  const [ripples, setRipples] = useState<Array<{ id: number; x: number; y: number }>>([]);
+  const rippleIdRef = useRef(0);
 
   useEffect(() => {
     const saved = getCurrentParsedText();
@@ -33,7 +36,19 @@ export function ProductParser({ onParsed, initialText }: Props) {
     setOpen(false);
   }
 
-  async function pasteFromClipboard() {
+  function addRipple(e: React.MouseEvent<HTMLButtonElement>) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const id = ++rippleIdRef.current;
+    setRipples((prev) => [...prev, { id, x, y }]);
+    window.setTimeout(() => {
+      setRipples((prev) => prev.filter((r) => r.id !== id));
+    }, 950);
+  }
+
+  async function pasteFromClipboard(e?: React.MouseEvent<HTMLButtonElement>) {
+    if (e) addRipple(e);
     try {
       const t = await navigator.clipboard.readText();
       if (!t.trim()) {
@@ -53,12 +68,12 @@ export function ProductParser({ onParsed, initialText }: Props) {
 
   return (
     <section className="card mb-4 overflow-hidden">
-      {/* Top label strip — sets the tone before the big CTA */}
+      {/* Top label strip with Edit button — kept tiny so the liquid circle dominates */}
       <div className="border-b border-[var(--line)] bg-[var(--surface-2)] px-4 py-2">
         <div className="flex items-center justify-between gap-3">
           <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-[var(--text-muted)]">
             <Sparkles size={11} className="mr-1 inline" />
-            New tranche · parse from clipboard
+            New tranche
           </div>
           <button
             onClick={() => setOpen((o) => !o)}
@@ -71,33 +86,36 @@ export function ProductParser({ onParsed, initialText }: Props) {
         </div>
       </div>
 
-      {/* Hero CTA section */}
-      <div className="p-4">
-        <h2 className="text-[15px] font-semibold leading-tight">
-          Paste a tranche to load the dashboard
-        </h2>
-        <p className="mt-1 text-[12px] leading-relaxed text-[var(--text-muted)]">
-          Copy a tranche message in your usual format → tap below. The parser pulls out
-          the <strong className="text-[var(--text)]">tranche code</strong>, <strong className="text-[var(--text)]">trade</strong> &amp; <strong className="text-[var(--text)]">offering dates</strong>,{" "}
-          <strong className="text-[var(--text)]">strike / KO / EKI %</strong>, <strong className="text-[var(--text)]">coupon</strong>, <strong className="text-[var(--text)]">tenor</strong>, and <strong className="text-[var(--text)]">underlying stocks</strong> automatically.
-        </p>
-
-        {/* Primary CTA — solid accent fill, bright white text for max contrast.
-            Was previously text-accent on bg-accent/10 which read as washed-out
-            on dark surfaces. White-on-blue is the highest-contrast banking
-            convention. */}
+      {/* Liquid circle button — heartbeat-pulsing, water-rippling */}
+      <div className="flex flex-col items-center justify-center py-10 px-4">
         <button
+          type="button"
           onClick={pasteFromClipboard}
-          className="group mt-3 flex w-full items-center justify-center gap-2.5 rounded-xl bg-accent px-4 py-3.5 text-[14.5px] font-semibold text-white shadow-sm transition hover:bg-accent/90 active:scale-[0.98] active:bg-accent"
+          className="liquid-paste-btn"
+          aria-label="Paste tranche from clipboard"
         >
-          <ClipboardPaste size={18} className="transition-transform group-active:scale-95" />
-          Paste from clipboard
+          <span className="liquid-paste-glow" aria-hidden="true" />
+          <span className="liquid-paste-blob blob-1" aria-hidden="true" />
+          <span className="liquid-paste-blob blob-2" aria-hidden="true" />
+          <span className="liquid-paste-highlight" aria-hidden="true" />
+          <span className="liquid-paste-inner">
+            <ClipboardPaste size={30} strokeWidth={2} />
+            <span className="liquid-paste-label">Paste</span>
+          </span>
+          {ripples.map((r) => (
+            <span
+              key={r.id}
+              className="liquid-paste-ripple"
+              style={{ left: r.x, top: r.y }}
+              aria-hidden="true"
+            />
+          ))}
         </button>
 
-        {/* Inline status pill — confirms paste worked / failed without a modal */}
+        {/* Inline status pill */}
         {flashStatus !== "none" && (
           <div
-            className={`mt-2 flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11.5px] ${
+            className={`mt-5 flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11.5px] ${
               flashStatus === "ok" ? "bg-success/10 text-success" :
               flashStatus === "empty" ? "bg-warning/10 text-warning" :
               "bg-danger/10 text-danger"
@@ -105,7 +123,7 @@ export function ProductParser({ onParsed, initialText }: Props) {
           >
             {flashStatus === "ok" && <><CheckCircle2 size={13} /> Parsed — dashboard loaded below.</>}
             {flashStatus === "empty" && <><AlertCircle size={13} /> Clipboard is empty.</>}
-            {flashStatus === "denied" && <><AlertCircle size={13} /> Clipboard access denied. Tap <strong>Edit</strong> and paste into the box instead.</>}
+            {flashStatus === "denied" && <><AlertCircle size={13} /> Clipboard denied — tap <strong>Edit</strong> to paste manually.</>}
           </div>
         )}
       </div>
@@ -127,7 +145,7 @@ export function ProductParser({ onParsed, initialText }: Props) {
             <button onClick={() => run(text)} className="btn btn-primary">
               <Sparkles size={15} /> Parse this
             </button>
-            <button onClick={pasteFromClipboard} className="btn">
+            <button onClick={(e) => pasteFromClipboard(e)} className="btn">
               <ClipboardPaste size={15} /> Paste from clipboard
             </button>
             <button onClick={() => setText(SAMPLE_TRANCHE_TEXT)} className="btn" title="Reset to sample">

@@ -1,7 +1,7 @@
 // Minimal service worker — App Shell + runtime cache for prices.
 // Bump the version string on every code change you want clients to pick
 // up immediately — old caches are purged in `activate` below.
-const CACHE = "snd-shell-v14";
+const CACHE = "snd-shell-v15";
 const SHELL = ["/manifest.webmanifest"];
 
 self.addEventListener("install", (e) => {
