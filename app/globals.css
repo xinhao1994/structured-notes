@@ -388,146 +388,80 @@ button:not(.btn):not(:disabled):active {
 }
 
 
-/* ────────────────────────────────────────────────────────────────────────
-   LIQUID PASTE BUTTON — heartbeat-pumping circle with water-drop ripple.
-   Layers (back to front):
-     1. .liquid-paste-glow      — soft outer halo, breathes with heartbeat
-     2. .liquid-paste-btn       — gradient sphere, scales lub-dub
-     3. .liquid-paste-blob *    — translucent inner blobs that drift around
-     4. .liquid-paste-highlight — top-left glossy highlight (sphere look)
-     5. .liquid-paste-inner     — icon + label
-     6. .liquid-paste-ripple    — water-drop expansion from tap point
-   ──────────────────────────────────────────────────────────────────────── */
 
-.liquid-paste-btn {
+
+
+/* ════════════════════════════════════════════════════════════════════════
+   LIQUID ORB — chromatic SVG sphere with flowing surface. No card frame.
+   The SVG itself does the liquid distortion via animated feTurbulence +
+   feDisplacementMap; everything in CSS here is breathing, glow, and the
+   "Parse" label typography.
+   ════════════════════════════════════════════════════════════════════════ */
+
+.liquid-orb {
   position: relative;
-  width: 168px;
-  height: 168px;
-  border-radius: 50%;
+  display: inline-block;
+  width: 230px;
+  height: 230px;
   border: none;
+  background: transparent;
+  padding: 0;
   cursor: pointer;
-  color: white;
-  isolation: isolate;
-  overflow: hidden;
+  border-radius: 50%;
   -webkit-tap-highlight-color: transparent;
   user-select: none;
-  background:
-    radial-gradient(circle at 35% 28%, rgba(255,255,255,0.4), transparent 35%),
-    radial-gradient(circle at 50% 60%, #4a87c5, #0a3a66 65%, #051a2e 100%);
-  box-shadow:
-    inset 0 -10px 20px rgba(0,0,0,0.35),
-    inset 0 10px 18px rgba(255,255,255,0.18),
-    inset 0 0 30px rgba(105,162,216,0.2),
-    0 14px 30px rgba(10,58,102,0.45),
-    0 4px 10px rgba(0,0,0,0.18);
-  /* The heartbeat — classic lub-dub: small thump, brief rest, big thump,
-     longer rest. 1.6s = ~37 bpm to read as a slow, deliberate pulse. */
-  animation: lub-dub 1.6s ease-in-out infinite;
-  filter: drop-shadow(0 0 0 transparent);
-  transition: transform .25s cubic-bezier(.34, 1.5, .64, 1);
+  /* Heartbeat — lub-dub */
+  animation: orb-heartbeat 1.8s ease-in-out infinite;
+  /* Multi-colour outer glow — pink on the left, cyan on the right, both
+     pulsing with the heartbeat */
+  filter:
+    drop-shadow(-8px 0 28px rgba(255, 90, 180, 0.55))
+    drop-shadow(8px 0 28px rgba(80, 170, 255, 0.55))
+    drop-shadow(0 6px 24px rgba(100, 60, 220, 0.5));
+  transition: filter 0.25s ease, transform 0.25s cubic-bezier(.34, 1.5, .64, 1);
+}
+@keyframes orb-heartbeat {
+  0%, 100% { transform: scale(1); }
+  10%      { transform: scale(1.04); }
+  22%      { transform: scale(1); }
+  32%      { transform: scale(1.075); }
+  46%      { transform: scale(1); }
 }
 
-@keyframes lub-dub {
-  0%, 100%   { transform: scale(1); }
-  8%         { transform: scale(1.045); }   /* lub */
-  18%        { transform: scale(1.0); }
-  30%        { transform: scale(1.085); }   /* DUB - the big beat */
-  44%        { transform: scale(1.0); }
-}
-
-/* Outer halo glow — pulses with the heartbeat */
-.liquid-paste-glow {
-  position: absolute;
-  inset: -25%;
-  border-radius: 50%;
-  background:
-    radial-gradient(circle, rgba(105,162,216,0.5) 0%, rgba(105,162,216,0.18) 35%, transparent 65%);
-  z-index: -1;
+.liquid-orb-svg {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: block;
+  overflow: visible;
   pointer-events: none;
-  animation: glow-pulse 1.6s ease-in-out infinite;
-  filter: blur(8px);
-}
-@keyframes glow-pulse {
-  0%, 100% { opacity: 0.45; transform: scale(1); }
-  8%       { opacity: 0.65; transform: scale(1.05); }
-  18%      { opacity: 0.45; transform: scale(1); }
-  30%      { opacity: 0.85; transform: scale(1.15); }
-  44%      { opacity: 0.45; transform: scale(1); }
 }
 
-/* Liquid blobs — two soft translucent orbs that drift INSIDE the sphere
-   on independent slow loops, giving the "liquid moving inside glass" feel. */
-.liquid-paste-blob {
-  position: absolute;
-  width: 80%;
-  height: 80%;
-  border-radius: 50%;
-  background:
-    radial-gradient(circle at 40% 40%, rgba(255,255,255,0.35), rgba(180,210,240,0.1) 60%, transparent 80%);
-  filter: blur(10px);
-  mix-blend-mode: screen;
-  pointer-events: none;
-  z-index: 1;
-}
-.liquid-paste-blob.blob-1 {
-  top: -20%; left: 10%;
-  animation: blob-drift-1 7s ease-in-out infinite;
-}
-.liquid-paste-blob.blob-2 {
-  bottom: -15%; right: 5%;
-  width: 70%; height: 70%;
-  background:
-    radial-gradient(circle at 50% 50%, rgba(160,200,240,0.4), rgba(80,140,200,0.1) 60%, transparent 80%);
-  animation: blob-drift-2 9s ease-in-out infinite;
-}
-@keyframes blob-drift-1 {
-  0%, 100% { transform: translate(0, 0) scale(1) rotate(0deg); }
-  33%      { transform: translate(-15%, 20%) scale(1.2) rotate(120deg); }
-  66%      { transform: translate(20%, -10%) scale(0.85) rotate(240deg); }
-}
-@keyframes blob-drift-2 {
-  0%, 100% { transform: translate(0, 0) scale(1) rotate(0deg); }
-  33%      { transform: translate(20%, -25%) scale(0.9) rotate(-100deg); }
-  66%      { transform: translate(-20%, 15%) scale(1.15) rotate(-200deg); }
-}
-
-/* Glossy highlight — the top-left "wet sphere" reflection */
-.liquid-paste-highlight {
-  position: absolute;
-  top: 8%;
-  left: 14%;
-  width: 50%;
-  height: 35%;
-  border-radius: 50%;
-  background: radial-gradient(ellipse, rgba(255,255,255,0.45), rgba(255,255,255,0) 70%);
-  pointer-events: none;
-  z-index: 2;
-  transform: rotate(-25deg);
-  filter: blur(2px);
-}
-
-/* Icon + label */
-.liquid-paste-inner {
+.liquid-orb-label {
   position: absolute;
   inset: 0;
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  z-index: 3;
+  /* Elegant serif italic — feels artisanal, matches the liquid aesthetic. */
+  font-family: "Cormorant Garamond", "Playfair Display", ui-serif, Georgia, "Times New Roman", serif;
+  font-style: italic;
+  font-weight: 500;
+  font-size: 42px;
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.95);
+  text-shadow:
+    0 0 12px rgba(255, 255, 255, 0.55),
+    0 0 24px rgba(180, 120, 255, 0.7),
+    0 2px 6px rgba(0, 0, 0, 0.4);
   pointer-events: none;
-  color: white;
-  text-shadow: 0 1px 3px rgba(0,0,0,0.35);
-}
-.liquid-paste-label {
-  font-size: 17px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
+  z-index: 3;
+  /* Subtle hover-lift on the label so it feels light on the surface */
+  transform: translateZ(0);
 }
 
-/* Water-drop ripple — JS adds a span at the tap point, this expands it. */
-.liquid-paste-ripple {
+/* Water-drop ripple on tap — same as before, just adapted to the orb */
+.liquid-orb-ripple {
   position: absolute;
   width: 24px;
   height: 24px;
@@ -535,52 +469,30 @@ button:not(.btn):not(:disabled):active {
   margin-top: -12px;
   border-radius: 50%;
   border: 2px solid rgba(255, 255, 255, 0.85);
-  background: radial-gradient(circle, rgba(255,255,255,0.5), rgba(255,255,255,0) 70%);
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.45), rgba(255, 255, 255, 0) 70%);
   pointer-events: none;
   z-index: 4;
-  animation: water-ripple 0.9s cubic-bezier(.22, 1, .36, 1) forwards;
+  animation: orb-ripple 0.9s cubic-bezier(.22, 1, .36, 1) forwards;
 }
-@keyframes water-ripple {
-  0% {
-    transform: scale(0.2);
-    opacity: 1;
-    border-width: 3px;
-  }
-  40% {
-    opacity: 0.6;
-    border-width: 2px;
-  }
-  100% {
-    transform: scale(11);
-    opacity: 0;
-    border-width: 0;
-  }
+@keyframes orb-ripple {
+  0%   { transform: scale(0.2); opacity: 1;   border-width: 3px; }
+  40%  { opacity: 0.6;                        border-width: 2px; }
+  100% { transform: scale(11);  opacity: 0;   border-width: 0; }
 }
 
-/* Press — when finger touches, sphere squishes inward like touching water,
-   the heartbeat pauses so the ripple is the focus, then resumes on release. */
-.liquid-paste-btn:active {
-  transform: scale(0.94);
-  animation-play-state: paused;
-  box-shadow:
-    inset 0 -6px 12px rgba(0,0,0,0.45),
-    inset 0 6px 12px rgba(255,255,255,0.1),
-    inset 0 0 24px rgba(105,162,216,0.3),
-    0 6px 14px rgba(10,58,102,0.4),
-    0 2px 5px rgba(0,0,0,0.2);
-}
-.liquid-paste-btn:active .liquid-paste-glow {
-  animation-play-state: paused;
-  opacity: 0.4;
+/* Press — sphere compresses slightly, heartbeat pauses so the ripple reads */
+.liquid-orb:active {
   transform: scale(0.95);
+  animation-play-state: paused;
+  filter:
+    drop-shadow(-6px 0 18px rgba(255, 90, 180, 0.5))
+    drop-shadow(6px 0 18px rgba(80, 170, 255, 0.5))
+    drop-shadow(0 3px 12px rgba(100, 60, 220, 0.4));
 }
 
-/* Tame everything for reduced-motion users */
 @media (prefers-reduced-motion: reduce) {
-  .liquid-paste-btn,
-  .liquid-paste-glow,
-  .liquid-paste-blob,
-  .liquid-paste-ripple {
+  .liquid-orb,
+  .liquid-orb-ripple {
     animation: none;
   }
 }
