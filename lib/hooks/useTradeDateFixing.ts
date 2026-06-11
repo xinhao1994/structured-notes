@@ -38,7 +38,10 @@ export function useTradeDateFixing(
     if (!tranche) { setOut(null); return; }
 
     const today = new Date().toISOString().slice(0, 10);
-    const isPreTrade = today < tranche.tradeDate;
+    // Treat today === tradeDate as pre-trade too — the trading day hasn't
+    // closed yet so there's no settlement close to fetch. Use the latest
+    // live price as the indicative initial fixing.
+    const isPreTrade = today <= tranche.tradeDate;
 
     if (isPreTrade) {
       // Pre-trade: indicative fixing = latest available close.
