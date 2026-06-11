@@ -443,41 +443,96 @@ button:not(.btn):not(:disabled):active {
   display: flex;
   align-items: center;
   justify-content: center;
-  /* Elegant serif italic — feels artisanal, matches the liquid aesthetic. */
-  font-family: "Cormorant Garamond", "Playfair Display", ui-serif, Georgia, "Times New Roman", serif;
-  font-style: italic;
-  font-weight: 500;
-  font-size: 42px;
+  /* Friendly rounded sans — `ui-rounded` triggers SF Pro Rounded on Apple
+     platforms (the rounded variant), Quicksand / Comfortaa as fallbacks.
+     Reads warm and approachable without being childish. */
+  font-family: ui-rounded, "SF Pro Rounded", "Quicksand", "Comfortaa", "Nunito", system-ui, sans-serif;
+  font-weight: 600;
+  font-size: 22px;
   letter-spacing: 0.02em;
-  color: rgba(255, 255, 255, 0.95);
+  color: rgba(255, 255, 255, 0.98);
   text-shadow:
-    0 0 12px rgba(255, 255, 255, 0.55),
-    0 0 24px rgba(180, 120, 255, 0.7),
-    0 2px 6px rgba(0, 0, 0, 0.4);
+    0 0 10px rgba(255, 255, 255, 0.5),
+    0 0 18px rgba(180, 120, 255, 0.6),
+    0 2px 4px rgba(0, 0, 0, 0.35);
   pointer-events: none;
   z-index: 3;
-  /* Subtle hover-lift on the label so it feels light on the surface */
   transform: translateZ(0);
 }
 
-/* Water-drop ripple on tap — same as before, just adapted to the orb */
+/* Water-drop ripple — proper concentric rings, like a real droplet hitting
+   water. Three rings expand outward with staggered timing; each slows as
+   it grows (cubic-bezier slow-out) and fades. A tiny droplet "kick"
+   springs up briefly at the tap point. Together they read as wet impact. */
 .liquid-orb-ripple {
   position: absolute;
-  width: 24px;
-  height: 24px;
-  margin-left: -12px;
-  margin-top: -12px;
-  border-radius: 50%;
-  border: 2px solid rgba(255, 255, 255, 0.85);
-  background: radial-gradient(circle, rgba(255, 255, 255, 0.45), rgba(255, 255, 255, 0) 70%);
+  width: 0;
+  height: 0;
   pointer-events: none;
   z-index: 4;
-  animation: orb-ripple 0.9s cubic-bezier(.22, 1, .36, 1) forwards;
+  transform: translate(-50%, -50%);
 }
-@keyframes orb-ripple {
-  0%   { transform: scale(0.2); opacity: 1;   border-width: 3px; }
-  40%  { opacity: 0.6;                        border-width: 2px; }
-  100% { transform: scale(11);  opacity: 0;   border-width: 0; }
+.ripple-ring {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 28px;
+  height: 28px;
+  margin: -14px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.9);
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0) 60%);
+  box-shadow:
+    0 0 8px rgba(255, 255, 255, 0.4),
+    inset 0 0 4px rgba(255, 255, 255, 0.5);
+  opacity: 0;
+  animation: water-ring 1.4s cubic-bezier(.22, 1, .36, 1) forwards;
+}
+.ripple-ring.ring-1 { animation-delay: 0s; }
+.ripple-ring.ring-2 { animation-delay: 0.18s; }
+.ripple-ring.ring-3 { animation-delay: 0.38s; }
+
+@keyframes water-ring {
+  0% {
+    transform: scale(0);
+    opacity: 0;
+    border-width: 3px;
+  }
+  8% {
+    transform: scale(0.4);
+    opacity: 1;
+    border-width: 3px;
+  }
+  50% {
+    opacity: 0.6;
+    border-width: 1.5px;
+  }
+  100% {
+    transform: scale(13);
+    opacity: 0;
+    border-width: 0;
+  }
+}
+
+/* Tiny droplet "kick" — the splash that pops up at the impact moment.
+   Bright dot that scales up and fades instantly. */
+.ripple-droplet {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 12px;
+  height: 12px;
+  margin: -6px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 255, 255, 1), rgba(255, 255, 255, 0.6) 40%, rgba(255, 255, 255, 0) 80%);
+  box-shadow: 0 0 12px rgba(255, 255, 255, 0.8);
+  opacity: 0;
+  animation: droplet-pop 0.55s cubic-bezier(.34, 1.5, .64, 1) forwards;
+}
+@keyframes droplet-pop {
+  0%   { transform: scale(0); opacity: 0; }
+  20%  { transform: scale(1.6); opacity: 1; }
+  100% { transform: scale(0.4); opacity: 0; }
 }
 
 /* Press — sphere compresses slightly, heartbeat pauses so the ripple reads */

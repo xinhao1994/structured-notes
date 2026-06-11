@@ -43,7 +43,7 @@ export function ProductParser({ onParsed, initialText }: Props) {
     setRipples((prev) => [...prev, { id, x, y }]);
     window.setTimeout(() => {
       setRipples((prev) => prev.filter((r) => r.id !== id));
-    }, 950);
+    }, 1500);
   }
 
   async function pasteFromClipboard(e?: React.MouseEvent<HTMLButtonElement>) {
@@ -94,26 +94,26 @@ export function ProductParser({ onParsed, initialText }: Props) {
             <defs>
               {/* Animated turbulence — surface "flows" by shifting baseFrequency */}
               <filter id="orb-liquid-a" x="-20%" y="-20%" width="140%" height="140%">
-                <feTurbulence type="fractalNoise" baseFrequency="0.014 0.020" numOctaves="3" seed="3" result="noise">
+                <feTurbulence type="fractalNoise" baseFrequency="0.016 0.024" numOctaves="3" seed="3" result="noise">
                   <animate
                     attributeName="baseFrequency"
-                    dur="9s"
-                    values="0.014 0.020; 0.022 0.012; 0.012 0.024; 0.014 0.020"
+                    dur="4.5s"
+                    values="0.016 0.024; 0.026 0.014; 0.012 0.028; 0.022 0.018; 0.016 0.024"
                     repeatCount="indefinite"
                   />
                 </feTurbulence>
-                <feDisplacementMap in="SourceGraphic" in2="noise" scale="22" xChannelSelector="R" yChannelSelector="G" />
+                <feDisplacementMap in="SourceGraphic" in2="noise" scale="28" xChannelSelector="R" yChannelSelector="G" />
               </filter>
               <filter id="orb-liquid-b" x="-20%" y="-20%" width="140%" height="140%">
-                <feTurbulence type="fractalNoise" baseFrequency="0.018 0.014" numOctaves="3" seed="9" result="noise">
+                <feTurbulence type="fractalNoise" baseFrequency="0.020 0.016" numOctaves="3" seed="9" result="noise">
                   <animate
                     attributeName="baseFrequency"
-                    dur="11s"
-                    values="0.018 0.014; 0.012 0.022; 0.022 0.014; 0.018 0.014"
+                    dur="5.5s"
+                    values="0.020 0.016; 0.012 0.026; 0.028 0.014; 0.014 0.022; 0.020 0.016"
                     repeatCount="indefinite"
                   />
                 </feTurbulence>
-                <feDisplacementMap in="SourceGraphic" in2="noise" scale="18" xChannelSelector="R" yChannelSelector="G" />
+                <feDisplacementMap in="SourceGraphic" in2="noise" scale="24" xChannelSelector="R" yChannelSelector="G" />
               </filter>
 
               {/* Base sphere — deep violet to magenta */}
@@ -159,7 +159,7 @@ export function ProductParser({ onParsed, initialText }: Props) {
             </g>
           </svg>
 
-          <span className="liquid-orb-label">Parse</span>
+          <span className="liquid-orb-label">Tap Me!</span>
 
           {ripples.map((r) => (
             <span
@@ -167,7 +167,12 @@ export function ProductParser({ onParsed, initialText }: Props) {
               className="liquid-orb-ripple"
               style={{ left: r.x, top: r.y }}
               aria-hidden="true"
-            />
+            >
+              <span className="ripple-ring ring-1" />
+              <span className="ripple-ring ring-2" />
+              <span className="ripple-ring ring-3" />
+              <span className="ripple-droplet" />
+            </span>
           ))}
         </button>
 
