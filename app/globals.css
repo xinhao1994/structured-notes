@@ -348,3 +348,41 @@ button:not(.btn):not(:disabled):active {
   backdrop-filter: blur(2px);
   -webkit-backdrop-filter: blur(2px);
 }
+
+
+/* ── Compact mobile mode for bank-table ────────────────────────────────
+   When the table has the `.bank-table-compact` modifier AND we're on a
+   narrow screen, shrink everything so all 8 columns fit on a phone
+   without horizontal scrolling. The desktop look is unchanged at >=md. */
+@media (max-width: 767px) {
+  .bank-table.bank-table-compact {
+    font-size: 10.5px;
+  }
+  .bank-table.bank-table-compact th,
+  .bank-table.bank-table-compact td {
+    padding: 6px 4px;
+    font-size: 10.5px;
+  }
+  .bank-table.bank-table-compact thead th {
+    font-size: 8.5px;
+    letter-spacing: 0.03em;
+    padding-top: 8px;
+    padding-bottom: 8px;
+  }
+  /* Tighter sticky first-column (Stock) so the name+badge fit */
+  .bank-table.bank-table-compact thead th:first-child,
+  .bank-table.bank-table-compact tbody td:first-child {
+    padding-left: 8px;
+    padding-right: 4px;
+  }
+  /* Hide the inline LineChart hover icon on phones — saves precious px */
+  .bank-table.bank-table-compact tbody td:first-child svg {
+    display: none;
+  }
+  /* Compact market badge inside the stock cell */
+  .bank-table.bank-table-compact tbody td:first-child .market-badge,
+  .bank-table.bank-table-compact tbody td:first-child span[class*="bg-[var(--surface-2)]"] {
+    padding: 1px 4px;
+    font-size: 8px;
+  }
+}
