@@ -588,7 +588,7 @@ export default function ChatPage() {
                             <img src={m.attachment_url} alt="" className="mb-1 max-h-[260px] rounded-lg pointer-events-none" />
                           </a>
                         )}
-                        {m.body && <span className="whitespace-pre-wrap break-words select-text">{m.body}</span>}
+                        {m.body && <span className="whitespace-pre-wrap break-words">{m.body}</span>}
                       </div>
                     )}
 
