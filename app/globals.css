@@ -306,9 +306,14 @@ button:not(.btn):not(:disabled):active {
   transform-origin: 50% 100%;
 }
 /* iOS aggressively starts a native text-selection gesture on long-press
-   even when user-select: none is on the parent. Force the rule onto every
-   descendant with !important so no <span> can be selected. Also kill the
-   long-press callout menu and drag gesture. */
+   even when user-select:none is on the parent. Belt-AND-braces approach:
+     1. Cover the entire scrollable chat list (not just individual bubbles)
+     2. Force !important on every descendant
+     3. Nuke ::selection styling too
+     4. JavaScript ALSO cancels selectstart / contextmenu (see chat/page.tsx)
+   Together these three layers reliably suppress the iOS blue highlight. */
+.chat-message-list,
+.chat-message-list *,
 .msg-bubble,
 .msg-bubble * {
   user-select: none !important;
@@ -317,11 +322,12 @@ button:not(.btn):not(:disabled):active {
   -webkit-user-drag: none !important;
   -webkit-tap-highlight-color: transparent !important;
 }
-/* Also suppress the blue selection color if it does somehow appear */
-.msg-bubble::selection,
+.chat-message-list ::selection,
+.msg-bubble ::selection,
+.chat-message-list *::selection,
 .msg-bubble *::selection {
-  background: transparent;
-  color: inherit;
+  background: transparent !important;
+  color: inherit !important;
 }
 /* Ghost bubble that flies from the textarea up to the chat list when you
    hit Send. iMessage-style: small initial pop, smooth liquid glide along

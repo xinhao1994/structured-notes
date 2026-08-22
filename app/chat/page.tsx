@@ -165,6 +165,25 @@ export default function ChatPage() {
     return () => { document.body.style.overflow = prev; };
   }, []);
 
+  // ─── Kill iOS native text selection on message bubbles ───
+  // Even with user-select:none CSS, iOS Safari sometimes fires selectstart
+  // during a long-press. Cancel it at the source. Also cancel contextmenu
+  // (the iOS long-press Copy/Look-Up native menu).
+  useEffect(() => {
+    const cancel = (e: Event) => {
+      const t = e.target as HTMLElement | null;
+      if (t?.closest?.(".msg-bubble") || t?.closest?.(".chat-message-list")) {
+        e.preventDefault();
+      }
+    };
+    document.addEventListener("selectstart", cancel);
+    document.addEventListener("contextmenu", cancel);
+    return () => {
+      document.removeEventListener("selectstart", cancel);
+      document.removeEventListener("contextmenu", cancel);
+    };
+  }, []);
+
   // ─── iOS visualViewport hook ────────────────────────────────────────
   // When the iPhone keyboard collapses (user taps "Done"), iOS Safari
   // sometimes leaves position:fixed elements at stale positions until the
@@ -521,7 +540,7 @@ export default function ChatPage() {
 
       {/* Message list — the only scrollable area */}
       <section className="card mb-2 flex min-h-0 flex-1 flex-col overflow-hidden">
-        <div className="flex-1 space-y-2 overflow-y-auto p-3">
+        <div className="chat-message-list flex-1 space-y-2 overflow-y-auto p-3">
           {loading && <p className="text-center text-[12px] text-[var(--text-muted)]">Loading messages...</p>}
           {!loading && messages.length === 0 && (
             <div className="py-8 text-center">
@@ -564,7 +583,7 @@ export default function ChatPage() {
                     )}
                     {trancheData ? (
                       <div
-                        className={`msg-bubble ${isMenuTarget ? "chat-press-target" : ""}`}
+                        className={`msg-bubble select-none ${isMenuTarget ? "chat-press-target" : ""}`}
                         onPointerDown={(e) => startLongPress(e, m.id, isMe)}
                         onPointerUp={cancelLongPress}
                         onPointerLeave={cancelLongPress}
@@ -575,7 +594,7 @@ export default function ChatPage() {
                       </div>
                     ) : (
                       <div
-                        className={`msg-bubble rounded-2xl px-3 py-2 text-[13px] leading-relaxed ${isMe ? "rounded-br-md" : "bg-[var(--surface-2)] rounded-bl-md"} ${isMenuTarget ? "chat-press-target" : ""}`}
+                        className={`msg-bubble select-none rounded-2xl px-3 py-2 text-[13px] leading-relaxed ${isMe ? "rounded-br-md" : "bg-[var(--surface-2)] rounded-bl-md"} ${isMenuTarget ? "chat-press-target" : ""}`}
                         style={isMe ? { background: "rgba(124, 167, 224, 0.18)" } : undefined}
                         onPointerDown={(e) => startLongPress(e, m.id, isMe)}
                         onPointerUp={cancelLongPress}
