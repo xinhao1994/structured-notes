@@ -863,34 +863,40 @@ function ChatContextMenu({
 }) {
   const { rect, isMe } = state;
   const QUICK = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
-  // Menu ~180px tall (reactions + copy). Prefer above; flip below if near top.
-  const preferAbove = rect.top > 200;
-  const menuTop = preferAbove ? rect.top - 100 : rect.top + rect.height + 12;
+  // Layout: default is reactions + menu BELOW the bubble, hugging it
+  // (~6px below). Flip above only if there isn't enough room below
+  // (message near bottom of screen).
+  const vh = typeof window !== "undefined" ? window.innerHeight : 800;
+  const vw = typeof window !== "undefined" ? window.innerWidth : 400;
+  const NEEDED_BELOW = 120; // reactions ~44 + gap + menu ~54 + safe area
+  const spaceBelow = vh - (rect.top + rect.height);
+  const placeBelow = spaceBelow >= NEEDED_BELOW;
+  const reactionsTop = placeBelow
+    ? rect.top + rect.height + 6
+    : rect.top - 50;
+  const actionsTop = placeBelow
+    ? rect.top + rect.height + 56
+    : rect.top - 106;
+  // Horizontal alignment — match the bubble's side, but clamp so the
+  // menu never goes past the viewport edges.
+  const horizStyle: React.CSSProperties = isMe
+    ? { right: Math.max(8, vw - (rect.left + rect.width)) }
+    : { left: Math.max(8, rect.left) };
   return (
     <div
       className="chat-menu-backdrop"
       onClick={onDismiss}
       onPointerDown={(e) => e.stopPropagation()}
     >
-      {/* Ghost bubble preview — a subtle enlarged echo of the pressed message */}
+      {/* Ghost preview of the pressed bubble — subtle enlarge in place */}
       <div
         className="chat-menu-ghost"
-        style={{
-          top: rect.top,
-          left: rect.left,
-          width: rect.width,
-          height: rect.height,
-        }}
+        style={{ top: rect.top, left: rect.left, width: rect.width, height: rect.height }}
       />
       {/* Reactions row */}
       <div
         className="chat-menu-reactions"
-        style={{
-          top: preferAbove ? rect.top - 58 : rect.top + rect.height + 8,
-          [isMe ? "right" : "left"]: isMe
-            ? window.innerWidth - (rect.left + rect.width)
-            : rect.left,
-        } as React.CSSProperties}
+        style={{ top: reactionsTop, ...horizStyle }}
         onClick={(e) => e.stopPropagation()}
       >
         {QUICK.map((emoji) => (
@@ -904,15 +910,10 @@ function ChatContextMenu({
           </button>
         ))}
       </div>
-      {/* Action menu (Copy) */}
+      {/* Copy action */}
       <div
         className="chat-menu-actions"
-        style={{
-          top: menuTop,
-          [isMe ? "right" : "left"]: isMe
-            ? window.innerWidth - (rect.left + rect.width)
-            : rect.left,
-        } as React.CSSProperties}
+        style={{ top: actionsTop, ...horizStyle }}
         onClick={(e) => e.stopPropagation()}
       >
         <button className="chat-action-btn" onClick={onCopy}>
