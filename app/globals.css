@@ -550,3 +550,131 @@ button:not(.btn):not(:disabled):active {
     animation: none;
   }
 }
+
+
+/* ════════════════════════════════════════════════════════════════════════
+   CHAT CONTEXT MENU — iMessage / WhatsApp long-press UX.
+   Layered stack:
+     1. .chat-menu-backdrop      — dim + slight blur behind everything
+     2. .chat-menu-ghost         — subtle scale-up preview of the tapped
+                                    bubble, sits at its original position
+     3. .chat-menu-reactions     — floating pill row of quick-react emojis
+     4. .chat-menu-actions       — Copy button pop-up panel
+   Pressed bubble also gets .chat-press-target which animates its scale.
+   ════════════════════════════════════════════════════════════════════════ */
+
+.chat-press-target {
+  animation: chat-press-pop 240ms cubic-bezier(.34, 1.5, .64, 1) forwards;
+  z-index: 51;
+  position: relative;
+}
+@keyframes chat-press-pop {
+  0%   { transform: scale(1); }
+  60%  { transform: scale(1.08); }
+  100% { transform: scale(1.05); }
+}
+
+.chat-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  animation: chat-backdrop-fade 200ms ease forwards;
+}
+@keyframes chat-backdrop-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.chat-menu-ghost {
+  position: fixed;
+  z-index: 51;
+  pointer-events: none;
+  border-radius: 16px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+  animation: chat-ghost-pop 260ms cubic-bezier(.34, 1.5, .64, 1) forwards;
+}
+@keyframes chat-ghost-pop {
+  0%   { transform: scale(1); opacity: 0.4; }
+  100% { transform: scale(1.05); opacity: 0; }
+}
+
+.chat-menu-reactions {
+  position: fixed;
+  z-index: 52;
+  display: flex;
+  gap: 4px;
+  padding: 6px 8px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.4), 0 2px 8px rgba(0, 0, 0, 0.2);
+  animation: chat-menu-pop 220ms cubic-bezier(.34, 1.5, .64, 1) both;
+  max-width: calc(100vw - 24px);
+}
+.chat-reaction-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  border: none;
+  background: transparent;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  transition: transform 0.15s cubic-bezier(.34, 1.5, .64, 1), background-color 0.15s;
+  -webkit-tap-highlight-color: transparent;
+}
+.chat-reaction-btn:hover { background: var(--surface-2); }
+.chat-reaction-btn:active { transform: scale(1.25); }
+
+.chat-menu-actions {
+  position: fixed;
+  z-index: 52;
+  min-width: 180px;
+  padding: 6px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.4), 0 2px 8px rgba(0, 0, 0, 0.2);
+  animation: chat-menu-pop 240ms cubic-bezier(.34, 1.5, .64, 1) both;
+  animation-delay: 40ms;
+}
+.chat-action-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s;
+  -webkit-tap-highlight-color: transparent;
+  text-align: left;
+}
+.chat-action-btn:hover { background: var(--surface-2); }
+.chat-action-btn:active { background: rgba(124, 167, 224, 0.15); }
+
+@keyframes chat-menu-pop {
+  0%   { transform: scale(0.7) translateY(-4px); opacity: 0; }
+  100% { transform: scale(1) translateY(0); opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-press-target,
+  .chat-menu-backdrop,
+  .chat-menu-ghost,
+  .chat-menu-reactions,
+  .chat-menu-actions {
+    animation: none;
+  }
+}

@@ -9,11 +9,11 @@
 //   - Clear-all-chat admin button
 // Voice messages removed by user request.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   MessageCircle, Send, AlertTriangle, Pencil, Image as ImageIcon,
-  Trash2, Briefcase, BookmarkPlus, Check,
+  Trash2, Briefcase, BookmarkPlus, Check, Copy,
 } from "lucide-react";
 import { getSupabaseBrowser } from "@/lib/supabaseClient";
 import { upsertTranche } from "@/lib/storage";
@@ -33,6 +33,39 @@ interface ChatMessage {
   attachment_url: string | null;
   attachment_type: "image" | "audio" | "tranche" | null;
   created_at: string;
+}
+
+// Emojis in the long-press quick-react row (WhatsApp-style set)
+const QUICK_REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🙏"] as const;
+
+// Formats a message time — always shows HH:MM. Combined with the date
+// separator that appears when the day changes, this gives every message
+// a fully-scoped timestamp.
+function messageTime(iso: string): string {
+  const t = Date.parse(iso);
+  if (!isFinite(t)) return "";
+  return new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+}
+
+// Big date-break label shown between messages when the day changes.
+function dateBreak(iso: string): string {
+  const t = Date.parse(iso);
+  if (!isFinite(t)) return "";
+  const d = new Date(t);
+  const now = new Date();
+  if (d.toDateString() === now.toDateString()) return "Today";
+  const y = new Date(now); y.setDate(y.getDate() - 1);
+  if (d.toDateString() === y.toDateString()) return "Yesterday";
+  const diffDays = Math.floor((now.getTime() - d.getTime()) / 86400000);
+  if (diffDays < 7) return d.toLocaleDateString("en-US", { weekday: "long" });
+  const sameYear = d.getFullYear() === now.getFullYear();
+  return d.toLocaleDateString(undefined, sameYear
+    ? { day: "numeric", month: "long" }
+    : { day: "numeric", month: "long", year: "numeric" });
+}
+
+function isSameDay(a: string, b: string): boolean {
+  return new Date(a).toDateString() === new Date(b).toDateString();
 }
 
 function colourFor(name: string): string {
@@ -98,10 +131,26 @@ export default function ChatPage() {
   const [sending, setSending] = useState(false);
   const [typingUsers, setTypingUsers] = useState<Record<string, number>>({});
   const [onlineUsers, setOnlineUsers] = useState<string[]>([]);
+  // Reactions are held purely in client memory + synced across viewers via
+  // a Supabase Realtime BROADCAST channel — no database column needed. They
+  // are ephemeral: a page refresh clears them. Trade-off for zero-SQL setup.
+  const [reactionsMap, setReactionsMap] = useState<Record<string, Record<string, string[]>>>({});
+  const reactionChannelRef = useRef<any>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [flyingBubbles, setFlyingBubbles] = useState<Array<{
     id: string; text: string; startX: number; startY: number; startW: number; endX: number; endY: number;
   }>>([]);
+  // ── Long-press context menu (iMessage-style react + copy) ──
+  const [longPressMenu, setLongPressMenu] = useState<{
+    msgId: string;
+    /** Bounding rect of the pressed bubble at the moment of long-press */
+    rect: { top: number; left: number; width: number; height: number };
+    /** True when the message is sender's own (right-aligned) */
+    isMe: boolean;
+  } | null>(null);
+  const longPressTimerRef = useRef<number | null>(null);
+  const longPressFiredRef = useRef<boolean>(false);
+  const [copyFlashId, setCopyFlashId] = useState<string | null>(null);
   const listEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const lastTypingBroadcast = useRef<number>(0);
@@ -183,7 +232,7 @@ export default function ChatPage() {
       .on("postgres_changes", { event: "DELETE", schema: "public", table: "chat_messages" }, () => {
         setMessages([]);
       })
-      .subscribe();
+.subscribe();
 
     const typeCh = supa.channel("chat_typing", { config: { broadcast: { self: false } } })
       .on("broadcast", { event: "typing" }, (payload: any) => {
@@ -194,7 +243,25 @@ export default function ChatPage() {
       .subscribe();
     typingChannelRef.current = typeCh;
 
-    return () => { supa.removeChannel(msgCh); supa.removeChannel(typeCh); };
+    // Reactions broadcast channel — self:true so the sender also sees their
+    // own reaction pop in via the same code path (avoids state divergence).
+    const rxCh = supa.channel("chat_reactions", { config: { broadcast: { self: true } } })
+      .on("broadcast", { event: "react" }, (payload: any) => {
+        const p = payload?.payload;
+        if (!p || !p.msgId || !p.emoji || !p.name || !p.action) return;
+        setReactionsMap((prev) => {
+          const forMsg = { ...(prev[p.msgId] ?? {}) };
+          const users = new Set(forMsg[p.emoji] ?? []);
+          if (p.action === "add") users.add(p.name); else users.delete(p.name);
+          if (users.size === 0) delete forMsg[p.emoji];
+          else forMsg[p.emoji] = Array.from(users);
+          return { ...prev, [p.msgId]: forMsg };
+        });
+      })
+      .subscribe();
+    reactionChannelRef.current = rxCh;
+
+    return () => { supa.removeChannel(msgCh); supa.removeChannel(typeCh); supa.removeChannel(rxCh); };
   }, [supa]);
 
   // Expire stale typing indicators
@@ -305,6 +372,63 @@ export default function ChatPage() {
     setSending(false);
   }
 
+  // ── Long-press: react + copy ──
+  function openLongPressMenu(msgId: string, el: HTMLElement, isMe: boolean) {
+    const r = el.getBoundingClientRect();
+    setLongPressMenu({
+      msgId,
+      rect: { top: r.top, left: r.left, width: r.width, height: r.height },
+      isMe,
+    });
+    // Haptic feedback if the platform supports it
+    if (typeof navigator !== "undefined" && "vibrate" in navigator) {
+      try { navigator.vibrate?.(12); } catch {}
+    }
+  }
+  function startLongPress(e: React.PointerEvent<HTMLDivElement>, msgId: string, isMe: boolean) {
+    // Ignore non-primary buttons on mouse
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    longPressFiredRef.current = false;
+    const el = e.currentTarget;
+    if (longPressTimerRef.current) window.clearTimeout(longPressTimerRef.current);
+    longPressTimerRef.current = window.setTimeout(() => {
+      longPressFiredRef.current = true;
+      openLongPressMenu(msgId, el, isMe);
+    }, 480);
+  }
+  function cancelLongPress() {
+    if (longPressTimerRef.current) {
+      window.clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  }
+  function toggleReaction(msgId: string, emoji: string) {
+    if (!name.trim()) return;
+    const my = name.trim();
+    const current = reactionsMap[msgId] ?? {};
+    const users = new Set(current[emoji] ?? []);
+    const action = users.has(my) ? "remove" : "add";
+    // Send broadcast — our own listener (self:true) will update local state
+    reactionChannelRef.current?.send({
+      type: "broadcast",
+      event: "react",
+      payload: { msgId, emoji, name: my, action },
+    });
+    setLongPressMenu(null);
+  }
+  async function copyMessage(msgId: string) {
+    const msg = messages.find((m) => m.id === msgId);
+    if (!msg) return;
+    let content = msg.body ?? "";
+    if (!content && msg.attachment_url) content = msg.attachment_url;
+    try {
+      await navigator.clipboard.writeText(content);
+      setCopyFlashId(msgId);
+      setTimeout(() => setCopyFlashId(null), 1500);
+    } catch {}
+    setLongPressMenu(null);
+  }
+
   async function pickImage(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     e.target.value = "";
@@ -410,39 +534,96 @@ export default function ChatPage() {
             const showAvatar = !prev || prev.sender_name !== m.sender_name;
             const isMe = m.sender_name === name;
             const trancheData = m.attachment_type === "tranche" ? decodeTranche(m.body) : null;
+            // New day since previous message (or first message) → show date break
+            const dayChanged = !prev || !isSameDay(prev.created_at, m.created_at);
+            const reactions = reactionsMap[m.id] ?? {};
+            const reactionEntries = Object.entries(reactions).filter(([, users]) => (users?.length ?? 0) > 0);
+            const isMenuTarget = longPressMenu?.msgId === m.id;
             return (
-              <div key={m.id} className={`flex gap-2 ${isMe ? "flex-row-reverse" : "flex-row"}`}>
-                {showAvatar ? (
-                  <div
-                    className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full text-[10px] font-semibold text-white"
-                    style={{ background: colourFor(m.sender_name) }}
-                  >{initials(m.sender_name)}</div>
-                ) : (<div className="w-7 flex-shrink-0" />)}
-
-                <div className={`max-w-[85%] flex flex-col ${isMe ? "items-end" : "items-start"}`}>
-                  {showAvatar && (
-                    <div className={`mb-0.5 flex items-baseline gap-1.5 text-[10.5px] ${isMe ? "flex-row-reverse" : "flex-row"}`}>
-                      <strong className="text-[var(--text)]">{m.sender_name}</strong>
-                      <span className="text-[var(--text-muted)]">{relativeTime(m.created_at)}</span>
-                    </div>
-                  )}
-                  {trancheData ? (
-                    <div className="msg-bubble"><TrancheCard tranche={trancheData} /></div>
-                  ) : (
+              <React.Fragment key={m.id}>
+                {dayChanged && (
+                  <div className="my-2 flex items-center justify-center">
+                    <span className="rounded-full bg-[var(--surface-2)] px-2.5 py-0.5 text-[10px] font-medium text-[var(--text-muted)]">
+                      {dateBreak(m.created_at)}
+                    </span>
+                  </div>
+                )}
+                <div className={`flex gap-2 ${isMe ? "flex-row-reverse" : "flex-row"}`}>
+                  {showAvatar ? (
                     <div
-                      className={`msg-bubble rounded-2xl px-3 py-2 text-[13px] leading-relaxed ${isMe ? "rounded-br-md" : "bg-[var(--surface-2)] rounded-bl-md"}`}
-                      style={isMe ? { background: "rgba(124, 167, 224, 0.18)" } : undefined}
-                    >
-                      {m.attachment_type === "image" && m.attachment_url && (
-                        <a href={m.attachment_url} target="_blank" rel="noreferrer">
-                          <img src={m.attachment_url} alt="" className="mb-1 max-h-[260px] rounded-lg" />
-                        </a>
-                      )}
-                      {m.body && <span className="whitespace-pre-wrap break-words">{m.body}</span>}
+                      className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full text-[10px] font-semibold text-white"
+                      style={{ background: colourFor(m.sender_name) }}
+                    >{initials(m.sender_name)}</div>
+                  ) : (<div className="w-7 flex-shrink-0" />)}
+
+                  <div className={`max-w-[85%] flex flex-col ${isMe ? "items-end" : "items-start"}`}>
+                    {showAvatar && (
+                      <div className="mb-0.5 text-[10.5px]">
+                        <strong className="text-[var(--text)]">{m.sender_name}</strong>
+                      </div>
+                    )}
+                    {trancheData ? (
+                      <div
+                        className={`msg-bubble ${isMenuTarget ? "chat-press-target" : ""}`}
+                        onPointerDown={(e) => startLongPress(e, m.id, isMe)}
+                        onPointerUp={cancelLongPress}
+                        onPointerLeave={cancelLongPress}
+                        onPointerCancel={cancelLongPress}
+                        onContextMenu={(e) => e.preventDefault()}
+                      >
+                        <TrancheCard tranche={trancheData} />
+                      </div>
+                    ) : (
+                      <div
+                        className={`msg-bubble rounded-2xl px-3 py-2 text-[13px] leading-relaxed ${isMe ? "rounded-br-md" : "bg-[var(--surface-2)] rounded-bl-md"} ${isMenuTarget ? "chat-press-target" : ""}`}
+                        style={isMe ? { background: "rgba(124, 167, 224, 0.18)" } : undefined}
+                        onPointerDown={(e) => startLongPress(e, m.id, isMe)}
+                        onPointerUp={cancelLongPress}
+                        onPointerLeave={cancelLongPress}
+                        onPointerCancel={cancelLongPress}
+                        onContextMenu={(e) => e.preventDefault()}
+                      >
+                        {m.attachment_type === "image" && m.attachment_url && (
+                          <a href={m.attachment_url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
+                            <img src={m.attachment_url} alt="" className="mb-1 max-h-[260px] rounded-lg pointer-events-none" />
+                          </a>
+                        )}
+                        {m.body && <span className="whitespace-pre-wrap break-words select-text">{m.body}</span>}
+                      </div>
+                    )}
+
+                    {/* Reactions row (WhatsApp-style pills) */}
+                    {reactionEntries.length > 0 && (
+                      <div className={`mt-1 flex flex-wrap gap-1 ${isMe ? "justify-end" : "justify-start"}`}>
+                        {reactionEntries.map(([emoji, users]) => {
+                          const mine = users.includes(name);
+                          return (
+                            <button
+                              key={emoji}
+                              onClick={() => toggleReaction(m.id, emoji)}
+                              className={`inline-flex items-center gap-0.5 rounded-full border px-1.5 py-0.5 text-[10.5px] leading-none transition ${
+                                mine
+                                  ? "border-accent/40 bg-accent/10 text-[var(--text)]"
+                                  : "border-[var(--line)] bg-[var(--surface-2)] text-[var(--text-muted)]"
+                              }`}
+                              title={users.join(", ")}
+                            >
+                              <span className="text-[12px]">{emoji}</span>
+                              {users.length > 1 && <span className="tabular font-medium">{users.length}</span>}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {/* Per-message timestamp — always visible, subtle */}
+                    <div className={`mt-0.5 flex items-center gap-1 text-[9.5px] text-[var(--text-muted)] ${isMe ? "flex-row-reverse" : "flex-row"}`}>
+                      <span className="tabular">{messageTime(m.created_at)}</span>
+                      {copyFlashId === m.id && <span className="text-success">· Copied</span>}
                     </div>
-                  )}
+                  </div>
                 </div>
-              </div>
+              </React.Fragment>
             );
           })}
           <div ref={listEndRef} />
@@ -505,6 +686,20 @@ export default function ChatPage() {
       </section>
 
       {error && <p className="mt-1 flex-shrink-0 text-center text-[11px] text-danger">{error}</p>}
+
+      {/* Long-press context menu — iMessage-style: dim backdrop, tapped
+          bubble stays at its position with a subtle scale-up, floating panel
+          shows a quick-react emoji row on top and a Copy action below.
+          Rendered via a portal so it sits above every other layer. */}
+      {longPressMenu && typeof window !== "undefined" && createPortal(
+        <ChatContextMenu
+          state={longPressMenu}
+          onDismiss={() => setLongPressMenu(null)}
+          onReact={(emoji) => toggleReaction(longPressMenu.msgId, emoji)}
+          onCopy={() => copyMessage(longPressMenu.msgId)}
+        />,
+        document.body
+      )}
 
       {/* Flying ghost bubbles — rendered through a portal into document.body
           so they live OUTSIDE this fixed chat container. On iOS, mutating
@@ -644,6 +839,87 @@ function Cell({ label, value }: { label: string; value: string }) {
     <div className="rounded bg-[var(--surface)] py-1 px-0.5">
       <div className="text-[9px] uppercase tracking-wider text-[var(--text-muted)]">{label}</div>
       <div className="tabular text-[11px] font-semibold">{value}</div>
+    </div>
+  );
+}
+
+
+/* ============================================================
+   ChatContextMenu — iMessage/WhatsApp-style long-press menu
+   Renders a dim backdrop, floating panel with reactions + copy.
+   Positions itself above (or below) the pressed bubble depending
+   on screen space. Auto-flips on small screens.
+   ============================================================ */
+function ChatContextMenu({
+  state,
+  onDismiss,
+  onReact,
+  onCopy,
+}: {
+  state: { msgId: string; rect: { top: number; left: number; width: number; height: number }; isMe: boolean };
+  onDismiss: () => void;
+  onReact: (emoji: string) => void;
+  onCopy: () => void;
+}) {
+  const { rect, isMe } = state;
+  const QUICK = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
+  // Menu ~180px tall (reactions + copy). Prefer above; flip below if near top.
+  const preferAbove = rect.top > 200;
+  const menuTop = preferAbove ? rect.top - 100 : rect.top + rect.height + 12;
+  return (
+    <div
+      className="chat-menu-backdrop"
+      onClick={onDismiss}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      {/* Ghost bubble preview — a subtle enlarged echo of the pressed message */}
+      <div
+        className="chat-menu-ghost"
+        style={{
+          top: rect.top,
+          left: rect.left,
+          width: rect.width,
+          height: rect.height,
+        }}
+      />
+      {/* Reactions row */}
+      <div
+        className="chat-menu-reactions"
+        style={{
+          top: preferAbove ? rect.top - 58 : rect.top + rect.height + 8,
+          [isMe ? "right" : "left"]: isMe
+            ? window.innerWidth - (rect.left + rect.width)
+            : rect.left,
+        } as React.CSSProperties}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {QUICK.map((emoji) => (
+          <button
+            key={emoji}
+            onClick={() => onReact(emoji)}
+            className="chat-reaction-btn"
+            aria-label={`React with ${emoji}`}
+          >
+            {emoji}
+          </button>
+        ))}
+      </div>
+      {/* Action menu (Copy) */}
+      <div
+        className="chat-menu-actions"
+        style={{
+          top: menuTop,
+          [isMe ? "right" : "left"]: isMe
+            ? window.innerWidth - (rect.left + rect.width)
+            : rect.left,
+        } as React.CSSProperties}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <button className="chat-action-btn" onClick={onCopy}>
+          <Copy size={14} />
+          <span>Copy</span>
+        </button>
+      </div>
     </div>
   );
 }
