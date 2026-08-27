@@ -73,6 +73,8 @@ const NAME_TO_TICKER: Record<string, Listing> = {
   marvell: { US: "MRVL", default: "US" },
   "marvell technology": { US: "MRVL", default: "US" },
   "marvell technologies": { US: "MRVL", default: "US" },
+  "sk hynix": { US: "HXSCL", default: "US" },
+  hynix: { US: "HXSCL", default: "US" },
   "applied materials": { US: "AMAT", default: "US" },
   "lam research": { US: "LRCX", default: "US" },
   asml: { US: "ASML", default: "US" },
@@ -551,7 +553,7 @@ const NAME_TO_TICKER: Record<string, Listing> = {
 };
 
 const MARKET_TOKENS: Record<string, MarketCode> = {
-  US: "US", NYSE: "US", NASDAQ: "US",
+  US: "US", NYSE: "US", NASDAQ: "US", ADR: "US", OTC: "US",
   HK: "HK",
   MY: "MY", KL: "MY",
   SG: "SG", SI: "SG",
@@ -811,11 +813,27 @@ function extractTickers(text: string, exclude: Set<string>): Underlying[] {
   // first so "💡 Alibaba HK ⭐" parses cleanly. The `exclude` set holds
   // strings (issuer abbreviation, tranche code) that the caller has already
   // identified — they must not be treated as underlyings.
-  const lines = text
+  const rawLines = text
     .split(/\r?\n/)
     .map((l) => stripDecor(l).trim())
     .filter(Boolean)
     .filter((l) => !exclude.has(l) && !exclude.has(l.toUpperCase()));
+
+  // Expand "Underlyings: Stock1, Stock2, ..." into individual lines so each
+  // name is parsed independently. Without this the entire labelled line would
+  // be swallowed by the field-label filter below.
+  const lines: string[] = [];
+  for (const line of rawLines) {
+    const ulMatch = line.match(/^Underlyings?\s*:\s*(.+)/i);
+    if (ulMatch) {
+      for (const part of ulMatch[1].split(/\s*,\s*/)) {
+        const p = part.trim();
+        if (p) lines.push(p);
+      }
+    } else {
+      lines.push(line);
+    }
+  }
 
   const out: Underlying[] = [];
   for (const raw of lines) {
@@ -824,12 +842,29 @@ function extractTickers(text: string, exclude: Set<string>): Underlying[] {
     // words that distributors put in product blurbs. This is the primary
     // defence against parsing things like "Currency SGD" (no colon)
     // as ticker CURRENCY listed on the SG market.
-    if (/^(Strike|KO|Autocall|Coupon|Yield|Interest|Tenor|Tenure|EKI|Offering|Offer|Trade|Settlement|Tranche|Currency|Notional|Maturity|Underlyings?|Issuer|Bank|Type|Note|Notes|Reference|Ref|Product|MYR|USD|HKD|SGD|JPY|AUD)\b/i.test(raw)) continue;
+    // "Code" is added here because "Code: MSIT26H317" is the tranche code,
+    // never an underlying.
+    if (/^(Strike|KO|Autocall|Coupon|Yield|Interest|Tenor|Tenure|EKI|Offering|Offer|Trade|Settlement|Tranche|Code|Currency|Notional|Maturity|Underlyings?|Issuer|Bank|Type|Note|Notes|Reference|Ref|Product|MYR|USD|HKD|SGD|JPY|AUD)\b/i.test(raw)) continue;
     // Multi-word "Label: value" lines (e.g. "Trade date:", "Initial
     // fixing:", "Settlement details:"). Requires AT LEAST two
     // whitespace-separated words before the colon, so plain ticker
     // forms like "AAPL:" wouldn't accidentally match.
     if (/^[A-Za-z]+\s+[A-Za-z]+\s*:/.test(raw)) continue;
+
+    // Format ADR: "Company Name MARKET ADR" — e.g. "SK Hynix US ADR".
+    // Must be handled before Format A because the trailing "ADR" token would
+    // otherwise be misread as the market code, leaving "Company Name MARKET"
+    // as an unresolvable left part.
+    const adrPattern = raw.match(/^(.+?)\s+(?:(US|HK|SG|JP|AU|MY)\s+)?ADR\s*$/i);
+    if (adrPattern) {
+      const companyName = adrPattern[1].trim();
+      const mkt: MarketCode = adrPattern[2]
+        ? (MARKET_TOKENS[adrPattern[2].toUpperCase()] ?? "US")
+        : "US";
+      const dictHit = resolveListing(companyName, mkt);
+      out.push({ rawName: companyName, symbol: dictHit.symbol, market: mkt, resolved: dictHit.resolved });
+      continue;
+    }
 
     // Format A: "TICKER MARKET" or "TICKER MARKET (Company Name)"
     //   e.g. "TSM US", "0700 HK", "ASML US (ASML Holdings)"
@@ -935,7 +970,12 @@ export function parseTrancheText(input: string): ParseResult {
 
   const trancheCode =
     parseField(text, /Tranche\s*code[:\s]+([A-Z0-9-]+)/i) ||
-    parseField(text, /\b(MSIT\d+|[A-Z]{2,4}\d{6,})\b/) ||
+    // "Code: MSIT26H317" — distributor shorthand; must not be confused with
+    // the underlying-detection path.
+    parseField(text, /^Code\s*:\s*([A-Z0-9][A-Z0-9-]*)/im) ||
+    // Bare tranche code patterns: MSIT26H317 (mixed letters+digits) or
+    // classic 2-4 letter prefix + 6+ digit suffix.
+    parseField(text, /\b(MSIT[A-Z0-9]{3,}|[A-Z]{2,4}\d{6,})\b/) ||
     `T${Date.now().toString().slice(-7)}`;
 
   // Accept "Offering", "Offer", "OFFER" — abbreviations are common in
