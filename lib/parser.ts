@@ -73,8 +73,6 @@ const NAME_TO_TICKER: Record<string, Listing> = {
   marvell: { US: "MRVL", default: "US" },
   "marvell technology": { US: "MRVL", default: "US" },
   "marvell technologies": { US: "MRVL", default: "US" },
-  "sk hynix": { US: "HXSCL", default: "US" },
-  hynix: { US: "HXSCL", default: "US" },
   "applied materials": { US: "AMAT", default: "US" },
   "lam research": { US: "LRCX", default: "US" },
   asml: { US: "ASML", default: "US" },
