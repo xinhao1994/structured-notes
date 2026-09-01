@@ -843,6 +843,10 @@ function extractTickers(text: string, exclude: Set<string>): Underlying[] {
     // "Code" is added here because "Code: MSIT26H317" is the tranche code,
     // never an underlying.
     if (/^(Strike|KO|Autocall|Coupon|Yield|Interest|Tenor|Tenure|EKI|Offering|Offer|Trade|Settlement|Tranche|Code|Currency|Notional|Maturity|Underlyings?|Issuer|Bank|Type|Note|Notes|Reference|Ref|Product|MYR|USD|HKD|SGD|JPY|AUD)\b/i.test(raw)) continue;
+    // Single-word "Label: value" — always a field, never a ticker.
+    // e.g. "Ccy: SGD 🇸🇬" strips to "Ccy: SGD" which has no space
+    // before the colon, so the multi-word guard below misses it.
+    if (/^[A-Za-z]\w*\s*:/.test(raw)) continue;
     // Multi-word "Label: value" lines (e.g. "Trade date:", "Initial
     // fixing:", "Settlement details:"). Requires AT LEAST two
     // whitespace-separated words before the colon, so plain ticker
