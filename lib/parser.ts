@@ -52,6 +52,9 @@ const NAME_TO_TICKER: Record<string, Listing> = {
   intel: { US: "INTC", default: "US" },
   amd: { US: "AMD", default: "US" },
   "advanced micro devices": { US: "AMD", default: "US" },
+  cadence: { US: "CDNS", default: "US" },
+  "cadence design": { US: "CDNS", default: "US" },
+  "cadence design systems": { US: "CDNS", default: "US" },
   coreweave: { US: "CRWV", default: "US" },
   "core weave": { US: "CRWV", default: "US" },
   ibm: { US: "IBM", default: "US" },
@@ -508,6 +511,7 @@ const NAME_TO_TICKER: Record<string, Listing> = {
   tsla: { US: "TSLA", default: "US" },
   nflx: { US: "NFLX", default: "US" },
   avgo: { US: "AVGO", default: "US" },
+  cdns: { US: "CDNS", default: "US" },
   orcl: { US: "ORCL", default: "US" },
   crm: { US: "CRM", default: "US" },
   csco: { US: "CSCO", default: "US" },
@@ -776,10 +780,15 @@ function resolveListing(name: string, marketHint?: MarketCode): {
     fuzzy = findFuzzyMatch(name);
     if (!fuzzy) {
       const firstWord = normaliseName(name).split(" ")[0];
-      if (firstWord && firstWord.length >= 4) {
-        fuzzy = NAME_TO_TICKER[firstWord]
-          ? { listing: NAME_TO_TICKER[firstWord], matchedKey: firstWord }
-          : findFuzzyMatch(firstWord);
+      if (firstWord) {
+        if (NAME_TO_TICKER[firstWord]) {
+          // Exact dict hit on first word — no length guard needed for exact lookups.
+          // This handles short tickers like "amd" (3 chars) that would be blocked
+          // by the fuzzy length guard below.
+          fuzzy = { listing: NAME_TO_TICKER[firstWord], matchedKey: firstWord };
+        } else if (firstWord.length >= 4) {
+          fuzzy = findFuzzyMatch(firstWord);
+        }
       }
     }
   }
@@ -926,6 +935,24 @@ function extractTickers(text: string, exclude: Set<string>): Underlying[] {
     if (looksLikeHkCode(raw)) {
       out.push({ rawName: raw, symbol: raw, market: "HK", resolved: true });
       continue;
+    }
+
+    // Format C-alt: "TICKER ( Company Name )" — ticker first with description in parens.
+    //   e.g. "CDNS ( Cadence Design )", "AMD ( AMD )", "AVGO ( Broadcom )"
+    //   Try resolving via the description first; fall back to using ticker directly.
+    const tickerParens = raw.match(/^([A-Za-z0-9.&\-]{1,8})\s+\(\s*([^)]+?)\s*\)\s*$/);
+    if (tickerParens) {
+      const tickerPart = tickerParens[1].trim().toUpperCase();
+      const descPart = tickerParens[2].trim();
+      if (/^[A-Z][A-Z0-9.&\-]{0,7}$/.test(tickerPart)) {
+        const descHit = resolveListing(descPart);
+        if (descHit.resolved) {
+          out.push({ rawName: `${tickerPart} (${descPart})`, symbol: descHit.symbol, market: descHit.market, resolved: true });
+        } else {
+          out.push({ rawName: `${tickerPart} (${descPart})`, symbol: tickerPart, market: "US", resolved: true });
+        }
+        continue;
+      }
     }
 
     // Format C: bare company name → look up default listing
