@@ -513,7 +513,6 @@ const NAME_TO_TICKER: Record<string, Listing> = {
   avgo: { US: "AVGO", default: "US" },
   cdns: { US: "CDNS", default: "US" },
   mu: { US: "MU", default: "US" },
-  arm: { US: "ARM", default: "US" },
   crwd: { US: "CRWD", default: "US" },
   panw: { US: "PANW", default: "US" },
   smci: { US: "SMCI", default: "US" },
