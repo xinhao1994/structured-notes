@@ -512,6 +512,17 @@ const NAME_TO_TICKER: Record<string, Listing> = {
   nflx: { US: "NFLX", default: "US" },
   avgo: { US: "AVGO", default: "US" },
   cdns: { US: "CDNS", default: "US" },
+  mu: { US: "MU", default: "US" },
+  arm: { US: "ARM", default: "US" },
+  crwd: { US: "CRWD", default: "US" },
+  panw: { US: "PANW", default: "US" },
+  smci: { US: "SMCI", default: "US" },
+  vrt: { US: "VRT", default: "US" },
+  mstr: { US: "MSTR", default: "US" },
+  app: { US: "APP", default: "US" },
+  ddog: { US: "DDOG", default: "US" },
+  net: { US: "NET", default: "US" },
+  now: { US: "NOW", default: "US" },
   orcl: { US: "ORCL", default: "US" },
   crm: { US: "CRM", default: "US" },
   csco: { US: "CSCO", default: "US" },
@@ -776,6 +787,7 @@ function resolveListing(name: string, marketHint?: MarketCode): {
   // Try the full-name fuzzy first, then fall back to the first significant
   // word — that handles "arista net" → "arista" → ANET.
   let fuzzy = undefined as ReturnType<typeof findFuzzyMatch>;
+  let fuzzyIsExact = false;
   if (!exact && !normalised) {
     fuzzy = findFuzzyMatch(name);
     if (!fuzzy) {
@@ -786,11 +798,19 @@ function resolveListing(name: string, marketHint?: MarketCode): {
           // This handles short tickers like "amd" (3 chars) that would be blocked
           // by the fuzzy length guard below.
           fuzzy = { listing: NAME_TO_TICKER[firstWord], matchedKey: firstWord };
+          fuzzyIsExact = true;
         } else if (firstWord.length >= 4) {
           fuzzy = findFuzzyMatch(firstWord);
         }
       }
     }
+  }
+  // Reject non-exact fuzzy hits whose only listings are on a different market than
+  // the hint. Prevents "advanced" → "advantest" (JP only) when marketHint="US".
+  // Exact firstWord hits are kept — they may still fall back to their default market.
+  if (fuzzy && !fuzzyIsExact && marketHint) {
+    const fl = fuzzy.listing as any;
+    if (!fl[marketHint] && fl.default !== marketHint) fuzzy = undefined;
   }
   const hit = exact || normalised || fuzzy?.listing;
 
@@ -886,6 +906,25 @@ function extractTickers(text: string, exclude: Set<string>): Underlying[] {
       const market = MARKET_TOKENS[tok];
       if (market) {
         const longName = withMarket[3]?.trim();
+
+        // "Company Name TICKER MARKET" — last word of left is an explicit ticker.
+        // e.g. "Advanced Micro Devices AMD US" → left="Advanced Micro Devices AMD", lastToken="AMD"
+        // e.g. "Marvell Technology Inc MRVL US" → left="...", lastToken="MRVL"
+        // Handle this BEFORE resolveListing so the full left string doesn't fuzzy-
+        // match an unrelated entry (e.g. "advanced" → "advantest" JP:6857).
+        if (!longName) {
+          const leftWords = left.trim().split(/\s+/);
+          const lastToken = leftWords[leftWords.length - 1].toUpperCase();
+          if (leftWords.length > 1 && /^[A-Z]{1,6}$/.test(lastToken) && !MARKET_TOKENS[lastToken]) {
+            const lastTokenHit = resolveListing(lastToken, market);
+            if (lastTokenHit.resolved) {
+              const companyPart = leftWords.slice(0, -1).join(" ");
+              out.push({ rawName: companyPart, symbol: lastTokenHit.symbol, market: lastTokenHit.market, resolved: true });
+              continue;
+            }
+          }
+        }
+
         // Try dictionary lookup first (so "Alibaba US" -> BABA, not ALIBABA).
         // If no dict match AND the left side already looks like a real ticker,
         // use it as-is.
