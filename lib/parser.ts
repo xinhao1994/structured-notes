@@ -1042,7 +1042,7 @@ export function parseTrancheText(input: string): ParseResult {
     parseField(text, /^Code\s*:\s*([A-Z0-9][A-Z0-9-]*)/im) ||
     // Bare tranche code patterns: MSIT26H317 (mixed letters+digits) or
     // classic 2-4 letter prefix + 6+ digit suffix.
-    parseField(text, /\b(MSIT[A-Z0-9]{3,}|[A-Z]{2,4}\d{6,})\b/) ||
+    parseField(text, /\b(MSIT[A-Za-z0-9]{3,}|[A-Z]{2,4}\d{6,})\b/) ||
     `T${Date.now().toString().slice(-7)}`;
 
   // Accept "Offering", "Offer", "OFFER" — abbreviations are common in
