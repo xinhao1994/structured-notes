@@ -162,15 +162,59 @@ async function fromYahooQuote(symbol: string, market: MarketCode): Promise<Price
 }
 
 /**
- * Yahoo Finance v8 chart API — used as a fallback after the quote API.
- * Can lag on recent corporate actions but provides richer 52-week hi/lo data.
+ * Yahoo Finance v10 quoteSummary — middle-ground between v7 (auth-gated) and
+ * v8 chart (stale meta after spin-offs). Uses modules=price which returns the
+ * live regularMarketPrice separate from the chart metadata.
+ */
+async function fromYahooSummary(symbol: string, market: MarketCode): Promise<PriceQuote | null> {
+  const sym = yahooSymbol(symbol, market);
+  for (const host of ["query1.finance.yahoo.com", "query2.finance.yahoo.com"]) {
+    try {
+      const r = await fetch(
+        `https://${host}/v10/finance/quoteSummary/${encodeURIComponent(sym)}?modules=price&formatted=false`,
+        { headers: { "User-Agent": YAHOO_UA, "Accept": "application/json" }, next: { revalidate: 0 } }
+      );
+      if (!r.ok) continue;
+      const j = await r.json();
+      const p = j?.quoteSummary?.result?.[0]?.price;
+      if (!p) continue;
+      const raw = (v: unknown) =>
+        v != null && typeof v === "object" && "raw" in (v as object)
+          ? (v as { raw: number }).raw
+          : (v as number);
+      const last = raw(p.regularMarketPrice);
+      if (!last || !isFinite(last)) continue;
+      const prev = raw(p.regularMarketPreviousClose);
+      const high52 = raw(p.fiftyTwoWeekHigh);
+      const low52 = raw(p.fiftyTwoWeekLow);
+      const t = raw(p.regularMarketTime);
+      return {
+        symbol, market, price: last,
+        prevClose: isFinite(prev) ? prev : undefined,
+        high52: isFinite(high52) ? high52 : undefined,
+        low52: isFinite(low52) ? low52 : undefined,
+        currency: p.currency ?? MARKETS[market].currency,
+        asOf: new Date(((t ?? 0) * 1000) || Date.now()).toISOString(),
+        marketOpen: isMarketOpen(market).open,
+        source: "yahoo",
+      };
+    } catch { continue; }
+  }
+  return null;
+}
+
+/**
+ * Yahoo Finance v8 chart API — last resort. Uses the time-series close data
+ * rather than meta.regularMarketPrice, which can be stale after corporate
+ * actions (spin-offs, reverse splits). The actual daily close series reflects
+ * real trading prices even when chart metadata lags.
  */
 async function fromYahooChart(symbol: string, market: MarketCode): Promise<PriceQuote | null> {
   const sym = yahooSymbol(symbol, market);
   for (const host of ["query1.finance.yahoo.com", "query2.finance.yahoo.com"]) {
     try {
       const r = await fetch(
-        `https://${host}/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=1y`,
+        `https://${host}/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=5d`,
         {
           headers: { "User-Agent": YAHOO_UA, "Accept": "application/json" },
           next: { revalidate: 0 },
@@ -181,7 +225,23 @@ async function fromYahooChart(symbol: string, market: MarketCode): Promise<Price
       const result = j?.chart?.result?.[0];
       if (!result) continue;
       const meta = result.meta;
-      const last = meta?.regularMarketPrice;
+
+      // Prefer the last actual close from the time-series over meta.regularMarketPrice.
+      // meta can be stale after spin-offs / reverse splits (e.g. WDC shows $93 when
+      // real price is $417 because chart metadata wasn't updated post-spin-off).
+      const closes: (number | null)[] = result?.indicators?.quote?.[0]?.close ?? [];
+      const seriesLast = closes.slice().reverse().find((c): c is number => c != null && isFinite(c));
+      const metaPrice: number | undefined = meta?.regularMarketPrice;
+
+      // If meta and series diverge >20%, the meta is almost certainly stale — use series.
+      const last = (() => {
+        if (seriesLast && metaPrice && isFinite(metaPrice)) {
+          const ratio = metaPrice / seriesLast;
+          return ratio < 0.8 || ratio > 1.25 ? seriesLast : metaPrice;
+        }
+        return seriesLast ?? metaPrice;
+      })();
+
       if (!last || !isFinite(last)) continue;
       const prev = meta?.previousClose ?? meta?.chartPreviousClose;
       const high52 = meta?.fiftyTwoWeekHigh;
@@ -202,10 +262,13 @@ async function fromYahooChart(symbol: string, market: MarketCode): Promise<Price
 }
 
 async function fromYahoo(symbol: string, market: MarketCode): Promise<PriceQuote | null> {
-  // v7 quote API first — more current after corporate actions (reverse splits etc.)
+  // v7 quote API first — live quote system, most current after corporate actions.
   const q = await fromYahooQuote(symbol, market);
   if (q) return q;
-  // v8 chart API as fallback
+  // v10 quoteSummary — separate from chart metadata, avoids stale spin-off prices.
+  const s = await fromYahooSummary(symbol, market);
+  if (s) return s;
+  // v8 chart — last resort; reads time-series close instead of stale chart meta.
   return fromYahooChart(symbol, market);
 }
 

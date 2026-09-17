@@ -37,10 +37,27 @@ async function testYahoo(symbol: string, market: MarketCode) {
       });
       if (!r.ok) { results[`${host}/v8`] = `HTTP ${r.status}`; continue; }
       const j = await r.json();
-      const meta = j?.chart?.result?.[0]?.meta;
-      results[`${host}/v8`] = { regularMarketPrice: meta?.regularMarketPrice, fiftyTwoWeekHigh: meta?.fiftyTwoWeekHigh, currency: meta?.currency };
+      const result = j?.chart?.result?.[0];
+      const meta = result?.meta;
+      const closes: (number | null)[] = result?.indicators?.quote?.[0]?.close ?? [];
+      const seriesLast = closes.slice().reverse().find((c): c is number => c != null && isFinite(c));
+      results[`${host}/v8`] = { regularMarketPrice: meta?.regularMarketPrice, fiftyTwoWeekHigh: meta?.fiftyTwoWeekHigh, currency: meta?.currency, seriesLastClose: seriesLast, closeSeries: closes.slice(-5) };
     } catch (e: unknown) {
       results[`${host}/v8`] = `error: ${e instanceof Error ? e.message : String(e)}`;
+    }
+    // v10 quoteSummary
+    try {
+      const r = await fetch(`https://${host}/v10/finance/quoteSummary/${encodeURIComponent(sym)}?modules=price&formatted=false`, {
+        headers: { "User-Agent": UA, "Accept": "application/json" },
+        next: { revalidate: 0 },
+      });
+      if (!r.ok) { results[`${host}/v10`] = `HTTP ${r.status}`; continue; }
+      const j = await r.json();
+      const p = j?.quoteSummary?.result?.[0]?.price;
+      const raw = (v: unknown) => v != null && typeof v === "object" && "raw" in (v as object) ? (v as { raw: number }).raw : (v as number);
+      results[`${host}/v10`] = { regularMarketPrice: p ? raw(p.regularMarketPrice) : undefined, fiftyTwoWeekHigh: p ? raw(p.fiftyTwoWeekHigh) : undefined };
+    } catch (e: unknown) {
+      results[`${host}/v10`] = `error: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
   return results;
