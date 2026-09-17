@@ -121,23 +121,58 @@ async function fromPolygon(symbol: string, market: MarketCode): Promise<PriceQuo
   } catch { return null; }
 }
 
+const YAHOO_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+
 /**
- * Yahoo Finance — free, no API key, reliable HK/SG/JP/AU/MY coverage.
- * Uses the unofficial /v8/finance/chart endpoint.
+ * Yahoo Finance v7 quote API — queries the live quote system directly.
+ * More reliable than the chart endpoint for recent corporate actions (reverse
+ * splits, spin-offs) because it doesn't rely on historical chart metadata
+ * which can lag by several days after an ex-date adjustment.
  */
-async function fromYahoo(symbol: string, market: MarketCode): Promise<PriceQuote | null> {
+async function fromYahooQuote(symbol: string, market: MarketCode): Promise<PriceQuote | null> {
   const sym = yahooSymbol(symbol, market);
-  // Try both Yahoo Finance hosts — query1 is often rate-limited on datacenter IPs
-  // (Vercel), query2 is a reliable fallback on the same API.
+  for (const host of ["query1.finance.yahoo.com", "query2.finance.yahoo.com"]) {
+    try {
+      const r = await fetch(
+        `https://${host}/v7/finance/quote?symbols=${encodeURIComponent(sym)}&fields=regularMarketPrice,regularMarketPreviousClose,fiftyTwoWeekHigh,fiftyTwoWeekLow,currency,regularMarketTime`,
+        {
+          headers: { "User-Agent": YAHOO_UA, "Accept": "application/json" },
+          next: { revalidate: 0 },
+        }
+      );
+      if (!r.ok) continue;
+      const j = await r.json();
+      const q = j?.quoteResponse?.result?.[0];
+      if (!q) continue;
+      const last = q.regularMarketPrice;
+      if (!last || !isFinite(last)) continue;
+      return {
+        symbol, market, price: last,
+        prevClose: isFinite(q.regularMarketPreviousClose) ? q.regularMarketPreviousClose : undefined,
+        high52: isFinite(q.fiftyTwoWeekHigh) ? q.fiftyTwoWeekHigh : undefined,
+        low52: isFinite(q.fiftyTwoWeekLow) ? q.fiftyTwoWeekLow : undefined,
+        currency: q.currency ?? MARKETS[market].currency,
+        asOf: new Date(((q.regularMarketTime ?? 0) * 1000) || Date.now()).toISOString(),
+        marketOpen: isMarketOpen(market).open,
+        source: "yahoo",
+      };
+    } catch { continue; }
+  }
+  return null;
+}
+
+/**
+ * Yahoo Finance v8 chart API — used as a fallback after the quote API.
+ * Can lag on recent corporate actions but provides richer 52-week hi/lo data.
+ */
+async function fromYahooChart(symbol: string, market: MarketCode): Promise<PriceQuote | null> {
+  const sym = yahooSymbol(symbol, market);
   for (const host of ["query1.finance.yahoo.com", "query2.finance.yahoo.com"]) {
     try {
       const r = await fetch(
         `https://${host}/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=1y`,
         {
-          headers: {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            "Accept": "application/json",
-          },
+          headers: { "User-Agent": YAHOO_UA, "Accept": "application/json" },
           next: { revalidate: 0 },
         }
       );
@@ -148,8 +183,6 @@ async function fromYahoo(symbol: string, market: MarketCode): Promise<PriceQuote
       const meta = result.meta;
       const last = meta?.regularMarketPrice;
       if (!last || !isFinite(last)) continue;
-      // previousClose is the prior-trading-day close (what we want); chartPreviousClose
-      // is the close before the chart range began (1y ago) — only useful as last resort.
       const prev = meta?.previousClose ?? meta?.chartPreviousClose;
       const high52 = meta?.fiftyTwoWeekHigh;
       const low52 = meta?.fiftyTwoWeekLow;
@@ -166,6 +199,14 @@ async function fromYahoo(symbol: string, market: MarketCode): Promise<PriceQuote
     } catch { continue; }
   }
   return null;
+}
+
+async function fromYahoo(symbol: string, market: MarketCode): Promise<PriceQuote | null> {
+  // v7 quote API first — more current after corporate actions (reverse splits etc.)
+  const q = await fromYahooQuote(symbol, market);
+  if (q) return q;
+  // v8 chart API as fallback
+  return fromYahooChart(symbol, market);
 }
 
 async function fromFinnhub(symbol: string, market: MarketCode): Promise<PriceQuote | null> {

@@ -16,17 +16,31 @@ async function testYahoo(symbol: string, market: MarketCode) {
   const sym = market === "US" ? symbol : `${symbol}${suffix[market] ?? ""}`;
   const results: Record<string, unknown> = {};
   for (const host of ["query1.finance.yahoo.com", "query2.finance.yahoo.com"]) {
+    // v7 quote (more current after splits)
+    try {
+      const r = await fetch(`https://${host}/v7/finance/quote?symbols=${encodeURIComponent(sym)}&fields=regularMarketPrice,regularMarketPreviousClose,fiftyTwoWeekHigh,fiftyTwoWeekLow`, {
+        headers: { "User-Agent": UA, "Accept": "application/json" },
+        next: { revalidate: 0 },
+      });
+      if (!r.ok) { results[`${host}/v7`] = `HTTP ${r.status}`; }
+      else {
+        const j = await r.json();
+        const q = j?.quoteResponse?.result?.[0];
+        results[`${host}/v7`] = { regularMarketPrice: q?.regularMarketPrice, fiftyTwoWeekHigh: q?.fiftyTwoWeekHigh };
+      }
+    } catch (e: unknown) { results[`${host}/v7`] = `error: ${e instanceof Error ? e.message : String(e)}`; }
+    // v8 chart
     try {
       const r = await fetch(`https://${host}/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=5d`, {
         headers: { "User-Agent": UA, "Accept": "application/json" },
         next: { revalidate: 0 },
       });
-      if (!r.ok) { results[host] = `HTTP ${r.status}`; continue; }
+      if (!r.ok) { results[`${host}/v8`] = `HTTP ${r.status}`; continue; }
       const j = await r.json();
       const meta = j?.chart?.result?.[0]?.meta;
-      results[host] = { regularMarketPrice: meta?.regularMarketPrice, previousClose: meta?.previousClose, currency: meta?.currency };
+      results[`${host}/v8`] = { regularMarketPrice: meta?.regularMarketPrice, fiftyTwoWeekHigh: meta?.fiftyTwoWeekHigh, currency: meta?.currency };
     } catch (e: unknown) {
-      results[host] = `error: ${e instanceof Error ? e.message : String(e)}`;
+      results[`${host}/v8`] = `error: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
   return results;
