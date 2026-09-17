@@ -883,6 +883,10 @@ function extractTickers(text: string, exclude: Set<string>): Underlying[] {
     // forms like "AAPL:" wouldn't accidentally match.
     if (/^[A-Za-z]+\s+[A-Za-z]+\s*:/.test(raw)) continue;
 
+    // "Close today 4pm", "Close tomorrow", "Close 17 Sep" — offering deadline
+    // line used in WhatsApp product messages. Trade date, never an underlying.
+    if (/^close\s+(today|tonight|tomorrow|tmr\w*|\d)/i.test(raw)) continue;
+
     // Format ADR: "Company Name MARKET ADR" — e.g. "SK Hynix US ADR".
     // Must be handled before Format A because the trailing "ADR" token would
     // otherwise be misread as the market code, leaving "Company Name MARKET"
@@ -1088,6 +1092,23 @@ export function parseTrancheText(input: string): ParseResult {
     const isPm = tradeCutoffMatch[3].toLowerCase() === "pm";
     const hour24 = (rawHour % 12) + (isPm ? 12 : 0);
     tradeCutoff = `${String(hour24).padStart(2, "0")}:${(tradeCutoffMatch[2] || "00").padStart(2, "0")}`;
+  }
+
+  // "Close today 4pm" / "Close today at 4pm" — distributor shorthand for
+  // "offering closes today at this time". Treat as trade date = today +
+  // optional cutoff. Appears at the top of WhatsApp product messages with
+  // no "Trade:" label, so must be detected separately from the Trade: field.
+  if (!tradeDate) {
+    const closeLine = text.match(/^close\s+(today|tonight|tomorrow|tmr\w*)\b(?:\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm))?/im);
+    if (closeLine) {
+      tradeDate = parseDate(closeLine[1]);
+      if (!tradeCutoff && closeLine[4]) {
+        const rawHour = parseInt(closeLine[2], 10);
+        const isPm = closeLine[4].toLowerCase() === "pm";
+        const hour24 = (rawHour % 12) + (isPm ? 12 : 0);
+        tradeCutoff = `${String(hour24).padStart(2, "0")}:${(closeLine[3] || "00").padStart(2, "0")}`;
+      }
+    }
   }
 
   const settleRaw = parseField(text, /Settlement[:\s]+([^\n]+)/i) || "T+7";
