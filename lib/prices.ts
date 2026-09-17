@@ -127,41 +127,45 @@ async function fromPolygon(symbol: string, market: MarketCode): Promise<PriceQuo
  */
 async function fromYahoo(symbol: string, market: MarketCode): Promise<PriceQuote | null> {
   const sym = yahooSymbol(symbol, market);
-  try {
-    const r = await fetch(
-      `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=1y`,
-      {
-        headers: {
-          // Yahoo sometimes 401s requests without a UA.
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-          "Accept": "application/json",
-        },
-        next: { revalidate: 0 },
-      }
-    );
-    if (!r.ok) return null;
-    const j = await r.json();
-    const result = j?.chart?.result?.[0];
-    if (!result) return null;
-    const meta = result.meta;
-    const last = meta?.regularMarketPrice;
-    if (!last || !isFinite(last)) return null;
-    // previousClose is the prior-trading-day close (what we want); chartPreviousClose
-    // is the close before the chart range began (1y ago) — only useful as last resort.
-    const prev = meta?.previousClose ?? meta?.chartPreviousClose;
-    const high52 = meta?.fiftyTwoWeekHigh;
-    const low52 = meta?.fiftyTwoWeekLow;
-    return {
-      symbol, market, price: last,
-      prevClose: isFinite(prev) ? prev : undefined,
-      high52: isFinite(high52) ? high52 : undefined,
-      low52: isFinite(low52) ? low52 : undefined,
-      currency: meta?.currency ?? MARKETS[market].currency,
-      asOf: new Date((meta?.regularMarketTime ?? Date.now() / 1000) * 1000).toISOString(),
-      marketOpen: isMarketOpen(market).open,
-      source: "yahoo",
-    };
-  } catch { return null; }
+  // Try both Yahoo Finance hosts — query1 is often rate-limited on datacenter IPs
+  // (Vercel), query2 is a reliable fallback on the same API.
+  for (const host of ["query1.finance.yahoo.com", "query2.finance.yahoo.com"]) {
+    try {
+      const r = await fetch(
+        `https://${host}/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=1y`,
+        {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Accept": "application/json",
+          },
+          next: { revalidate: 0 },
+        }
+      );
+      if (!r.ok) continue;
+      const j = await r.json();
+      const result = j?.chart?.result?.[0];
+      if (!result) continue;
+      const meta = result.meta;
+      const last = meta?.regularMarketPrice;
+      if (!last || !isFinite(last)) continue;
+      // previousClose is the prior-trading-day close (what we want); chartPreviousClose
+      // is the close before the chart range began (1y ago) — only useful as last resort.
+      const prev = meta?.previousClose ?? meta?.chartPreviousClose;
+      const high52 = meta?.fiftyTwoWeekHigh;
+      const low52 = meta?.fiftyTwoWeekLow;
+      return {
+        symbol, market, price: last,
+        prevClose: isFinite(prev) ? prev : undefined,
+        high52: isFinite(high52) ? high52 : undefined,
+        low52: isFinite(low52) ? low52 : undefined,
+        currency: meta?.currency ?? MARKETS[market].currency,
+        asOf: new Date((meta?.regularMarketTime ?? Date.now() / 1000) * 1000).toISOString(),
+        marketOpen: isMarketOpen(market).open,
+        source: "yahoo",
+      };
+    } catch { continue; }
+  }
+  return null;
 }
 
 async function fromFinnhub(symbol: string, market: MarketCode): Promise<PriceQuote | null> {
@@ -237,8 +241,11 @@ function chainForMarket(market: MarketCode) {
   // tiers if available). Alpha Vantage is last because of its 25/day limit.
   // Yahoo is primary (most accurate, no key). Stooq is a free independent
   // cross-check. Polygon/Finnhub/AlphaVantage layer in if keys are present.
+  // Stooq is last for US — it's free but can lag on corporate actions (splits,
+  // spin-offs) and return stale prices. Paid providers (Polygon/Finnhub) and
+  // Alpha Vantage are preferred before falling back to Stooq.
   return market === "US"
-    ? [fromYahoo, fromStooq, fromPolygon, fromFinnhub, fromAlpha]
+    ? [fromYahoo, fromPolygon, fromFinnhub, fromAlpha, fromStooq]
     : [fromYahoo, fromStooq, fromFinnhub, fromAlpha];
 }
 
