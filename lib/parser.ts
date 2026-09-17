@@ -913,10 +913,21 @@ function extractTickers(text: string, exclude: Set<string>): Underlying[] {
         // e.g. "Marvell Technology Inc MRVL US" → left="...", lastToken="MRVL"
         // Handle this BEFORE resolveListing so the full left string doesn't fuzzy-
         // match an unrelated entry (e.g. "advanced" → "advantest" JP:6857).
+        // Corporate suffixes (Corp, Inc, Ltd…) are excluded — "Western Digital Corp US"
+        // must NOT treat "CORP" as a ticker (CORP is the PIMCO Bond ETF).
+        const CORP_SUFFIX_TOKENS = new Set([
+          "CORP", "INC", "LTD", "CO", "LLC", "PLC", "SA", "AG", "NV", "GRP",
+          "HLDG", "HLDGS", "HOLDINGS", "GROUP", "GRPHOLDINGS",
+        ]);
         if (!longName) {
           const leftWords = left.trim().split(/\s+/);
           const lastToken = leftWords[leftWords.length - 1].toUpperCase();
-          if (leftWords.length > 1 && /^[A-Z]{1,6}$/.test(lastToken) && !MARKET_TOKENS[lastToken]) {
+          if (
+            leftWords.length > 1 &&
+            /^[A-Z]{1,6}$/.test(lastToken) &&
+            !MARKET_TOKENS[lastToken] &&
+            !CORP_SUFFIX_TOKENS.has(lastToken)
+          ) {
             const lastTokenHit = resolveListing(lastToken, market);
             if (lastTokenHit.resolved) {
               const companyPart = leftWords.slice(0, -1).join(" ");
