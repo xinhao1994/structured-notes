@@ -390,7 +390,7 @@ export interface HistoricalClose {
   requestedDate: string;
   effectiveDate: string;
   close: number;
-  source: "yahoo" | "stooq" | "polygon" | "alphavantage" | "investing";
+  source: "yahoo" | "alphavantage" | "investing";
 }
 
 const histCache = new Map<string, HistoricalClose>();
@@ -494,112 +494,8 @@ async function yahooHist(symbol: string, market: MarketCode, date: string): Prom
   return fallback;
 }
 
-async function polygonHist(symbol: string, market: MarketCode, date: string): Promise<HistoricalClose | null> {
-  const key = process.env.POLYGON_API_KEY;
-  if (!key || market !== "US") return null;
-  const sym = symbol.toUpperCase();
-  const target = new Date(date + "T00:00:00Z");
-  const from = new Date(target.getTime() - 7 * 86_400_000).toISOString().slice(0, 10);
-  const to = date;
-  try {
-    const r = await fetch(
-      `https://api.polygon.io/v2/aggs/ticker/${sym}/range/1/day/${from}/${to}?adjusted=true&sort=desc&limit=10&apiKey=${key}`,
-      { next: { revalidate: 0 } }
-    );
-    if (!r.ok) return null;
-    const j = await r.json();
-    const bars: { t: number; c: number }[] = j?.results ?? [];
-    for (const bar of bars) {
-      const eff = new Date(bar.t).toISOString().slice(0, 10);
-      if (eff <= date && isFinite(bar.c) && bar.c > 0) {
-        return { symbol, market, requestedDate: date, effectiveDate: eff, close: bar.c, source: "polygon" };
-      }
-    }
-    return null;
-  } catch { return null; }
-}
 
-/**
- * Stooq historical via the daily CSV with date range. Endpoint:
- *   https://stooq.com/q/d/l/?s={sym}&i=d&d1={YYYYMMDD}&d2={YYYYMMDD}
- */
-async function stooqHist(symbol: string, market: MarketCode, date: string): Promise<HistoricalClose | null> {
-  const sym = stooqSymbol(symbol, market);
-  const target = new Date(date + "T00:00:00Z");
-  const start = new Date(target.getTime() - 14 * 86_400_000);
-  // d2 is target + 1 day to ensure Stooq includes the requested date even with
-  // minor data-feed delays (Stooq sometimes updates end-of-day data overnight).
-  const d2 = new Date(target.getTime() + 86_400_000);
-  const fmt = (d: Date) => d.toISOString().slice(0, 10).replace(/-/g, "");
-  try {
-    const r = await fetch(
-      `https://stooq.com/q/d/l/?s=${encodeURIComponent(sym)}&i=d&d1=${fmt(start)}&d2=${fmt(d2)}`,
-      {
-        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36" },
-        next: { revalidate: 0 },
-      }
-    );
-    if (!r.ok) return null;
-    const text = await r.text();
-    const lines = text.trim().split(/\r?\n/);
-    if (lines.length < 2) return null;
-    // Header: Date,Open,High,Low,Close,Volume
-    // Walk newest → oldest.
-    for (let i = lines.length - 1; i >= 1; i--) {
-      const cols = lines[i].split(",");
-      if (cols.length < 5) continue;
-      const eff = cols[0];
-      const close = parseFloat(cols[4]);
-      if (eff && eff <= date && isFinite(close) && close > 0) {
-        return { symbol, market, requestedDate: date, effectiveDate: eff, close, source: "stooq" };
-      }
-    }
-    return null;
-  } catch { return null; }
-}
 
-/**
- * Alpha Vantage TIME_SERIES_DAILY — reliable free-tier daily close data.
- * Requires ALPHA_VANTAGE_API_KEY env var. Free tier: 25 req/day, 5 req/min.
- * Compact output = last 100 trading days.
- */
-async function alphaVantageHist(symbol: string, market: MarketCode, date: string): Promise<HistoricalClose | null> {
-  const key = process.env.ALPHA_VANTAGE_API_KEY;
-  if (!key) return null;
-  // Alpha Vantage supports mostly US equities out of the box. Skip other
-  // markets to avoid burning quota on requests that will 404.
-  if (market !== "US") return null;
-  try {
-    const r = await fetch(
-      `https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=${encodeURIComponent(symbol)}&outputsize=compact&apikey=${key}`,
-      {
-        headers: { "User-Agent": "Mozilla/5.0", "Accept": "application/json" },
-        next: { revalidate: 0 },
-      }
-    );
-    if (!r.ok) return null;
-    const j = await r.json();
-    const series = j?.["Time Series (Daily)"] as Record<string, { "4. close": string }> | undefined;
-    if (!series) return null;
-    // Prefer exact-date match first, then fall back to newest bar <= date
-    if (series[date]?.["4. close"]) {
-      const c = parseFloat(series[date]["4. close"]);
-      if (isFinite(c) && c > 0) {
-        return { symbol, market, requestedDate: date, effectiveDate: date, close: c, source: "alphavantage" };
-      }
-    }
-    const dates = Object.keys(series).sort().reverse();
-    for (const d of dates) {
-      if (d <= date) {
-        const c = parseFloat(series[d]["4. close"]);
-        if (isFinite(c) && c > 0) {
-          return { symbol, market, requestedDate: date, effectiveDate: d, close: c, source: "alphavantage" };
-        }
-      }
-    }
-    return null;
-  } catch { return null; }
-}
 
 /**
  * Investing.com's internal financialdata API — best-effort scrape.
@@ -678,7 +574,7 @@ export async function fetchHistoricalClose(
   // Don't use server-side cache if effectiveDate < requestedDate — the real
   // close may now be available. Only cache exact-date hits permanently.
   if (hit && hit.effectiveDate >= date) return hit;
-  for (const f of [yahooHist, polygonHist, stooqHist, alphaVantageHist, investingHist]) {
+  for (const f of [yahooHist, investingHist]) {
     const r = await f(symbol, market, date);
     if (r) {
       if (r.effectiveDate >= date) histCache.set(k, r);
