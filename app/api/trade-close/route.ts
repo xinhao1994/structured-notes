@@ -27,12 +27,20 @@ export async function GET(req: NextRequest) {
       effectiveDate: null, close: null, source: null,
     };
   }));
+  // Only cache long-term when every result's effectiveDate exactly matches the
+  // requested date. If any result returned the previous business day's close
+  // (because the requested date's market hadn't closed yet when first fetched),
+  // use a very short cache so the correct close can be picked up once available.
+  const allExact = results.every(
+    (r) => r.effectiveDate != null && r.effectiveDate === r.requestedDate
+  );
   return new NextResponse(JSON.stringify({ closes: results }), {
     status: 200,
     headers: {
       "content-type": "application/json",
-      // Historical closes are immutable — long edge cache OK.
-      "cache-control": "public, s-maxage=86400, stale-while-revalidate=2592000, immutable",
+      "cache-control": allExact
+        ? "public, s-maxage=86400, stale-while-revalidate=2592000, immutable"
+        : "public, s-maxage=30, stale-while-revalidate=60",
     },
   });
 }

@@ -68,7 +68,13 @@ export function useTradeDateFixing(
     const todo: { symbol: string; market: MarketCode; date: string; key: string }[] = [];
     for (const u of targets) {
       const k = `${u.market}:${u.symbol}@${tranche.tradeDate}`;
-      if (cache[k]) cached[u.symbol] = cache[k];
+      const hit = cache[k];
+      // Stale-cache guard: if a previous fetch returned the business day BEFORE
+      // the trade date (because the trade date market hadn't closed yet), and
+      // today is now past the trade date, the real close should now be available
+      // — re-fetch instead of using the stale entry.
+      const isStale = hit != null && hit.effectiveDate < tranche.tradeDate && today > tranche.tradeDate;
+      if (hit && !isStale) cached[u.symbol] = hit;
       else todo.push({ symbol: u.symbol, market: u.market, date: tranche.tradeDate, key: k });
     }
     setPending(todo.map((t) => t.symbol));
