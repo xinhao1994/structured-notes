@@ -7,7 +7,7 @@
 import { useEffect, useState } from "react";
 import type { MarketCode, Tranche } from "../types";
 
-const LS_KEY = "snd.tradeclose.v1";
+const LS_KEY = "snd.tradeclose.v2";
 
 function loadCache(): Record<string, { close: number; effectiveDate: string; source: string }> {
   if (typeof window === "undefined") return {};
@@ -68,16 +68,14 @@ export function useTradeDateFixing(
     const todo: { symbol: string; market: MarketCode; date: string; key: string }[] = [];
     for (const u of targets) {
       const k = `${u.market}:${u.symbol}@${tranche.tradeDate}`;
-      const entry = cache[k];
-      // Only trust the cached entry if its effectiveDate >= the requested
-      // trade date. A cached "stale" close (effectiveDate < tradeDate) was
-      // written when the data source hadn't seen the trade date's close
-      // yet — refetch now that the market has (presumably) closed since.
-      if (entry && entry.effectiveDate >= tranche.tradeDate) {
-        cached[u.symbol] = entry;
-      } else {
-        todo.push({ symbol: u.symbol, market: u.market, date: tranche.tradeDate, key: k });
-      }
+      const hit = cache[k];
+      // Stale-cache guard: if a previous fetch returned the business day BEFORE
+      // the trade date (because the trade date market hadn't closed yet), and
+      // today is now past the trade date, the real close should now be available
+      // — re-fetch instead of using the stale entry.
+      const isStale = hit != null && hit.effectiveDate < tranche.tradeDate && today > tranche.tradeDate;
+      if (hit && !isStale) cached[u.symbol] = hit;
+      else todo.push({ symbol: u.symbol, market: u.market, date: tranche.tradeDate, key: k });
     }
     setPending(todo.map((t) => t.symbol));
 
@@ -87,7 +85,7 @@ export function useTradeDateFixing(
         const url = "/api/trade-close?items=" +
           encodeURIComponent(todo.map((t) => `${t.market}:${t.symbol}@${t.date}`).join(","));
         try {
-          const r = await fetch(url, { cache: "force-cache" });
+          const r = await fetch(url, { cache: "no-store" });
           const j = await r.json() as { closes: Array<{ symbol: string; market?: MarketCode; close: number | null; effectiveDate: string | null; source: string | null }> };
           for (const c of j.closes) {
             if (c.close != null && c.effectiveDate && c.source) {

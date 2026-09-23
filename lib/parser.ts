@@ -52,6 +52,9 @@ const NAME_TO_TICKER: Record<string, Listing> = {
   intel: { US: "INTC", default: "US" },
   amd: { US: "AMD", default: "US" },
   "advanced micro devices": { US: "AMD", default: "US" },
+  cadence: { US: "CDNS", default: "US" },
+  "cadence design": { US: "CDNS", default: "US" },
+  "cadence design systems": { US: "CDNS", default: "US" },
   coreweave: { US: "CRWV", default: "US" },
   "core weave": { US: "CRWV", default: "US" },
   ibm: { US: "IBM", default: "US" },
@@ -67,6 +70,8 @@ const NAME_TO_TICKER: Record<string, Listing> = {
   arista: { US: "ANET", default: "US" },
   amphenol: { US: "APH", default: "US" },
   "western digital": { US: "WDC", default: "US" },
+  "sk hynix us adr": { US: "SKHY", default: "US" },
+  "sk hynix adr": { US: "SKHY", default: "US" },
   sandisk: { US: "SNDK", default: "US" },
   seagate: { US: "STX", default: "US" },
   micron: { US: "MU", default: "US" },
@@ -508,6 +513,17 @@ const NAME_TO_TICKER: Record<string, Listing> = {
   tsla: { US: "TSLA", default: "US" },
   nflx: { US: "NFLX", default: "US" },
   avgo: { US: "AVGO", default: "US" },
+  cdns: { US: "CDNS", default: "US" },
+  mu: { US: "MU", default: "US" },
+  crwd: { US: "CRWD", default: "US" },
+  panw: { US: "PANW", default: "US" },
+  smci: { US: "SMCI", default: "US" },
+  vrt: { US: "VRT", default: "US" },
+  mstr: { US: "MSTR", default: "US" },
+  app: { US: "APP", default: "US" },
+  ddog: { US: "DDOG", default: "US" },
+  net: { US: "NET", default: "US" },
+  now: { US: "NOW", default: "US" },
   orcl: { US: "ORCL", default: "US" },
   crm: { US: "CRM", default: "US" },
   csco: { US: "CSCO", default: "US" },
@@ -551,7 +567,7 @@ const NAME_TO_TICKER: Record<string, Listing> = {
 };
 
 const MARKET_TOKENS: Record<string, MarketCode> = {
-  US: "US", NYSE: "US", NASDAQ: "US",
+  US: "US", NYSE: "US", NASDAQ: "US", ADR: "US", OTC: "US",
   HK: "HK",
   MY: "MY", KL: "MY",
   SG: "SG", SI: "SG",
@@ -772,16 +788,30 @@ function resolveListing(name: string, marketHint?: MarketCode): {
   // Try the full-name fuzzy first, then fall back to the first significant
   // word — that handles "arista net" → "arista" → ANET.
   let fuzzy = undefined as ReturnType<typeof findFuzzyMatch>;
+  let fuzzyIsExact = false;
   if (!exact && !normalised) {
     fuzzy = findFuzzyMatch(name);
     if (!fuzzy) {
       const firstWord = normaliseName(name).split(" ")[0];
-      if (firstWord && firstWord.length >= 4) {
-        fuzzy = NAME_TO_TICKER[firstWord]
-          ? { listing: NAME_TO_TICKER[firstWord], matchedKey: firstWord }
-          : findFuzzyMatch(firstWord);
+      if (firstWord) {
+        if (NAME_TO_TICKER[firstWord]) {
+          // Exact dict hit on first word — no length guard needed for exact lookups.
+          // This handles short tickers like "amd" (3 chars) that would be blocked
+          // by the fuzzy length guard below.
+          fuzzy = { listing: NAME_TO_TICKER[firstWord], matchedKey: firstWord };
+          fuzzyIsExact = true;
+        } else if (firstWord.length >= 4) {
+          fuzzy = findFuzzyMatch(firstWord);
+        }
       }
     }
+  }
+  // Reject non-exact fuzzy hits whose only listings are on a different market than
+  // the hint. Prevents "advanced" → "advantest" (JP only) when marketHint="US".
+  // Exact firstWord hits are kept — they may still fall back to their default market.
+  if (fuzzy && !fuzzyIsExact && marketHint) {
+    const fl = fuzzy.listing as any;
+    if (!fl[marketHint] && fl.default !== marketHint) fuzzy = undefined;
   }
   const hit = exact || normalised || fuzzy?.listing;
 
@@ -811,11 +841,27 @@ function extractTickers(text: string, exclude: Set<string>): Underlying[] {
   // first so "💡 Alibaba HK ⭐" parses cleanly. The `exclude` set holds
   // strings (issuer abbreviation, tranche code) that the caller has already
   // identified — they must not be treated as underlyings.
-  const lines = text
+  const rawLines = text
     .split(/\r?\n/)
     .map((l) => stripDecor(l).trim())
     .filter(Boolean)
     .filter((l) => !exclude.has(l) && !exclude.has(l.toUpperCase()));
+
+  // Expand "Underlyings: Stock1, Stock2, ..." into individual lines so each
+  // name is parsed independently. Without this the entire labelled line would
+  // be swallowed by the field-label filter below.
+  const lines: string[] = [];
+  for (const line of rawLines) {
+    const ulMatch = line.match(/^Underlyings?\s*:\s*(.+)/i);
+    if (ulMatch) {
+      for (const part of ulMatch[1].split(/\s*,\s*/)) {
+        const p = part.trim();
+        if (p) lines.push(p);
+      }
+    } else {
+      lines.push(line);
+    }
+  }
 
   const out: Underlying[] = [];
   for (const raw of lines) {
@@ -824,12 +870,37 @@ function extractTickers(text: string, exclude: Set<string>): Underlying[] {
     // words that distributors put in product blurbs. This is the primary
     // defence against parsing things like "Currency SGD" (no colon)
     // as ticker CURRENCY listed on the SG market.
-    if (/^(Strike|KO|Autocall|Coupon|Yield|Interest|Tenor|Tenure|EKI|Offering|Offer|Trade|Settlement|Tranche|Currency|Notional|Maturity|Underlyings?|Issuer|Bank|Type|Note|Notes|Reference|Ref|Product|MYR|USD|HKD|SGD|JPY|AUD)\b/i.test(raw)) continue;
+    // "Code" is added here because "Code: MSIT26H317" is the tranche code,
+    // never an underlying.
+    if (/^(Strike|KO|Autocall|Coupon|Yield|Interest|Tenor|Tenure|EKI|Offering|Offer|Trade|Settlement|Tranche|Code|Currency|Notional|Maturity|Underlyings?|Issuer|Bank|Type|Note|Notes|Reference|Ref|Product|MYR|USD|HKD|SGD|JPY|AUD)\b/i.test(raw)) continue;
+    // Single-word "Label: value" — always a field, never a ticker.
+    // e.g. "Ccy: SGD 🇸🇬" strips to "Ccy: SGD" which has no space
+    // before the colon, so the multi-word guard below misses it.
+    if (/^[A-Za-z]\w*\s*:/.test(raw)) continue;
     // Multi-word "Label: value" lines (e.g. "Trade date:", "Initial
     // fixing:", "Settlement details:"). Requires AT LEAST two
     // whitespace-separated words before the colon, so plain ticker
     // forms like "AAPL:" wouldn't accidentally match.
     if (/^[A-Za-z]+\s+[A-Za-z]+\s*:/.test(raw)) continue;
+
+    // "Close today 4pm", "Close tomorrow", "Close 17 Sep" — offering deadline
+    // line used in WhatsApp product messages. Trade date, never an underlying.
+    if (/^close\s+(today|tonight|tomorrow|tmr\w*|\d)/i.test(raw)) continue;
+
+    // Format ADR: "Company Name MARKET ADR" — e.g. "SK Hynix US ADR".
+    // Must be handled before Format A because the trailing "ADR" token would
+    // otherwise be misread as the market code, leaving "Company Name MARKET"
+    // as an unresolvable left part.
+    const adrPattern = raw.match(/^(.+?)\s+(?:(US|HK|SG|JP|AU|MY)\s+)?ADR\s*$/i);
+    if (adrPattern) {
+      const companyName = adrPattern[1].trim();
+      const mkt: MarketCode = adrPattern[2]
+        ? (MARKET_TOKENS[adrPattern[2].toUpperCase()] ?? "US")
+        : "US";
+      const dictHit = resolveListing(companyName, mkt);
+      out.push({ rawName: companyName, symbol: dictHit.symbol, market: mkt, resolved: dictHit.resolved });
+      continue;
+    }
 
     // Format A: "TICKER MARKET" or "TICKER MARKET (Company Name)"
     //   e.g. "TSM US", "0700 HK", "ASML US (ASML Holdings)"
@@ -840,6 +911,36 @@ function extractTickers(text: string, exclude: Set<string>): Underlying[] {
       const market = MARKET_TOKENS[tok];
       if (market) {
         const longName = withMarket[3]?.trim();
+
+        // "Company Name TICKER MARKET" — last word of left is an explicit ticker.
+        // e.g. "Advanced Micro Devices AMD US" → left="Advanced Micro Devices AMD", lastToken="AMD"
+        // e.g. "Marvell Technology Inc MRVL US" → left="...", lastToken="MRVL"
+        // Handle this BEFORE resolveListing so the full left string doesn't fuzzy-
+        // match an unrelated entry (e.g. "advanced" → "advantest" JP:6857).
+        // Corporate suffixes (Corp, Inc, Ltd…) are excluded — "Western Digital Corp US"
+        // must NOT treat "CORP" as a ticker (CORP is the PIMCO Bond ETF).
+        const CORP_SUFFIX_TOKENS = new Set([
+          "CORP", "INC", "LTD", "CO", "LLC", "PLC", "SA", "AG", "NV", "GRP",
+          "HLDG", "HLDGS", "HOLDINGS", "GROUP", "GRPHOLDINGS",
+        ]);
+        if (!longName) {
+          const leftWords = left.trim().split(/\s+/);
+          const lastToken = leftWords[leftWords.length - 1].toUpperCase();
+          if (
+            leftWords.length > 1 &&
+            /^[A-Z]{1,6}$/.test(lastToken) &&
+            !MARKET_TOKENS[lastToken] &&
+            !CORP_SUFFIX_TOKENS.has(lastToken)
+          ) {
+            const lastTokenHit = resolveListing(lastToken, market);
+            if (lastTokenHit.resolved) {
+              const companyPart = leftWords.slice(0, -1).join(" ");
+              out.push({ rawName: companyPart, symbol: lastTokenHit.symbol, market: lastTokenHit.market, resolved: true });
+              continue;
+            }
+          }
+        }
+
         // Try dictionary lookup first (so "Alibaba US" -> BABA, not ALIBABA).
         // If no dict match AND the left side already looks like a real ticker,
         // use it as-is.
@@ -891,6 +992,24 @@ function extractTickers(text: string, exclude: Set<string>): Underlying[] {
       continue;
     }
 
+    // Format C-alt: "TICKER ( Company Name )" — ticker first with description in parens.
+    //   e.g. "CDNS ( Cadence Design )", "AMD ( AMD )", "AVGO ( Broadcom )"
+    //   Try resolving via the description first; fall back to using ticker directly.
+    const tickerParens = raw.match(/^([A-Za-z0-9.&\-]{1,8})\s+\(\s*([^)]+?)\s*\)\s*$/);
+    if (tickerParens) {
+      const tickerPart = tickerParens[1].trim().toUpperCase();
+      const descPart = tickerParens[2].trim();
+      if (/^[A-Z][A-Z0-9.&\-]{0,7}$/.test(tickerPart)) {
+        const descHit = resolveListing(descPart);
+        if (descHit.resolved) {
+          out.push({ rawName: `${tickerPart} (${descPart})`, symbol: descHit.symbol, market: descHit.market, resolved: true });
+        } else {
+          out.push({ rawName: `${tickerPart} (${descPart})`, symbol: tickerPart, market: "US", resolved: true });
+        }
+        continue;
+      }
+    }
+
     // Format C: bare company name → look up default listing
     //   e.g. "Applied Materials Inc", "Alibaba", "ASML Holdings"
     const looked = resolveListing(raw);
@@ -935,7 +1054,12 @@ export function parseTrancheText(input: string): ParseResult {
 
   const trancheCode =
     parseField(text, /Tranche\s*code[:\s]+([A-Z0-9-]+)/i) ||
-    parseField(text, /\b(MSIT\d+|[A-Z]{2,4}\d{6,})\b/) ||
+    // "Code: MSIT26H317" — distributor shorthand; must not be confused with
+    // the underlying-detection path.
+    parseField(text, /^Code\s*:\s*([A-Z0-9][A-Z0-9-]*)/im) ||
+    // Bare tranche code patterns: MSIT26H317 (mixed letters+digits) or
+    // classic 2-4 letter prefix + 6+ digit suffix.
+    parseField(text, /\b(MSIT[A-Za-z0-9]{3,}|[A-Z]{2,4}\d{6,})\b/) ||
     `T${Date.now().toString().slice(-7)}`;
 
   // Accept "Offering", "Offer", "OFFER" — abbreviations are common in
@@ -968,6 +1092,23 @@ export function parseTrancheText(input: string): ParseResult {
     const isPm = tradeCutoffMatch[3].toLowerCase() === "pm";
     const hour24 = (rawHour % 12) + (isPm ? 12 : 0);
     tradeCutoff = `${String(hour24).padStart(2, "0")}:${(tradeCutoffMatch[2] || "00").padStart(2, "0")}`;
+  }
+
+  // "Close today 4pm" / "Close today at 4pm" — distributor shorthand for
+  // "offering closes today at this time". Treat as trade date = today +
+  // optional cutoff. Appears at the top of WhatsApp product messages with
+  // no "Trade:" label, so must be detected separately from the Trade: field.
+  if (!tradeDate) {
+    const closeLine = text.match(/^close\s+(today|tonight|tomorrow|tmr\w*)\b(?:\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm))?/im);
+    if (closeLine) {
+      tradeDate = parseDate(closeLine[1]);
+      if (!tradeCutoff && closeLine[4]) {
+        const rawHour = parseInt(closeLine[2], 10);
+        const isPm = closeLine[4].toLowerCase() === "pm";
+        const hour24 = (rawHour % 12) + (isPm ? 12 : 0);
+        tradeCutoff = `${String(hour24).padStart(2, "0")}:${(closeLine[3] || "00").padStart(2, "0")}`;
+      }
+    }
   }
 
   const settleRaw = parseField(text, /Settlement[:\s]+([^\n]+)/i) || "T+7";

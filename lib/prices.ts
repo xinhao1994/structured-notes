@@ -121,47 +121,155 @@ async function fromPolygon(symbol: string, market: MarketCode): Promise<PriceQuo
   } catch { return null; }
 }
 
+const YAHOO_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+
 /**
- * Yahoo Finance — free, no API key, reliable HK/SG/JP/AU/MY coverage.
- * Uses the unofficial /v8/finance/chart endpoint.
+ * Yahoo Finance v7 quote API — queries the live quote system directly.
+ * More reliable than the chart endpoint for recent corporate actions (reverse
+ * splits, spin-offs) because it doesn't rely on historical chart metadata
+ * which can lag by several days after an ex-date adjustment.
  */
-async function fromYahoo(symbol: string, market: MarketCode): Promise<PriceQuote | null> {
+async function fromYahooQuote(symbol: string, market: MarketCode): Promise<PriceQuote | null> {
   const sym = yahooSymbol(symbol, market);
-  try {
-    const r = await fetch(
-      `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=1y`,
-      {
-        headers: {
-          // Yahoo sometimes 401s requests without a UA.
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-          "Accept": "application/json",
-        },
-        next: { revalidate: 0 },
-      }
-    );
-    if (!r.ok) return null;
-    const j = await r.json();
-    const result = j?.chart?.result?.[0];
-    if (!result) return null;
-    const meta = result.meta;
-    const last = meta?.regularMarketPrice;
-    if (!last || !isFinite(last)) return null;
-    // previousClose is the prior-trading-day close (what we want); chartPreviousClose
-    // is the close before the chart range began (1y ago) — only useful as last resort.
-    const prev = meta?.previousClose ?? meta?.chartPreviousClose;
-    const high52 = meta?.fiftyTwoWeekHigh;
-    const low52 = meta?.fiftyTwoWeekLow;
-    return {
-      symbol, market, price: last,
-      prevClose: isFinite(prev) ? prev : undefined,
-      high52: isFinite(high52) ? high52 : undefined,
-      low52: isFinite(low52) ? low52 : undefined,
-      currency: meta?.currency ?? MARKETS[market].currency,
-      asOf: new Date((meta?.regularMarketTime ?? Date.now() / 1000) * 1000).toISOString(),
-      marketOpen: isMarketOpen(market).open,
-      source: "yahoo",
-    };
-  } catch { return null; }
+  for (const host of ["query1.finance.yahoo.com", "query2.finance.yahoo.com"]) {
+    try {
+      const r = await fetch(
+        `https://${host}/v7/finance/quote?symbols=${encodeURIComponent(sym)}&fields=regularMarketPrice,regularMarketPreviousClose,fiftyTwoWeekHigh,fiftyTwoWeekLow,currency,regularMarketTime`,
+        {
+          headers: { "User-Agent": YAHOO_UA, "Accept": "application/json" },
+          next: { revalidate: 0 },
+        }
+      );
+      if (!r.ok) continue;
+      const j = await r.json();
+      const q = j?.quoteResponse?.result?.[0];
+      if (!q) continue;
+      const last = q.regularMarketPrice;
+      if (!last || !isFinite(last)) continue;
+      return {
+        symbol, market, price: last,
+        prevClose: isFinite(q.regularMarketPreviousClose) ? q.regularMarketPreviousClose : undefined,
+        high52: isFinite(q.fiftyTwoWeekHigh) ? q.fiftyTwoWeekHigh : undefined,
+        low52: isFinite(q.fiftyTwoWeekLow) ? q.fiftyTwoWeekLow : undefined,
+        currency: q.currency ?? MARKETS[market].currency,
+        asOf: new Date(((q.regularMarketTime ?? 0) * 1000) || Date.now()).toISOString(),
+        marketOpen: isMarketOpen(market).open,
+        source: "yahoo",
+      };
+    } catch { continue; }
+  }
+  return null;
+}
+
+/**
+ * Yahoo Finance v10 quoteSummary — middle-ground between v7 (auth-gated) and
+ * v8 chart (stale meta after spin-offs). Uses modules=price which returns the
+ * live regularMarketPrice separate from the chart metadata.
+ */
+async function fromYahooSummary(symbol: string, market: MarketCode): Promise<PriceQuote | null> {
+  const sym = yahooSymbol(symbol, market);
+  for (const host of ["query1.finance.yahoo.com", "query2.finance.yahoo.com"]) {
+    try {
+      const r = await fetch(
+        `https://${host}/v10/finance/quoteSummary/${encodeURIComponent(sym)}?modules=price&formatted=false`,
+        { headers: { "User-Agent": YAHOO_UA, "Accept": "application/json" }, next: { revalidate: 0 } }
+      );
+      if (!r.ok) continue;
+      const j = await r.json();
+      const p = j?.quoteSummary?.result?.[0]?.price;
+      if (!p) continue;
+      const raw = (v: unknown) =>
+        v != null && typeof v === "object" && "raw" in (v as object)
+          ? (v as { raw: number }).raw
+          : (v as number);
+      const last = raw(p.regularMarketPrice);
+      if (!last || !isFinite(last)) continue;
+      const prev = raw(p.regularMarketPreviousClose);
+      const high52 = raw(p.fiftyTwoWeekHigh);
+      const low52 = raw(p.fiftyTwoWeekLow);
+      const t = raw(p.regularMarketTime);
+      return {
+        symbol, market, price: last,
+        prevClose: isFinite(prev) ? prev : undefined,
+        high52: isFinite(high52) ? high52 : undefined,
+        low52: isFinite(low52) ? low52 : undefined,
+        currency: p.currency ?? MARKETS[market].currency,
+        asOf: new Date(((t ?? 0) * 1000) || Date.now()).toISOString(),
+        marketOpen: isMarketOpen(market).open,
+        source: "yahoo",
+      };
+    } catch { continue; }
+  }
+  return null;
+}
+
+/**
+ * Yahoo Finance v8 chart API — last resort. Uses the time-series close data
+ * rather than meta.regularMarketPrice, which can be stale after corporate
+ * actions (spin-offs, reverse splits). The actual daily close series reflects
+ * real trading prices even when chart metadata lags.
+ */
+async function fromYahooChart(symbol: string, market: MarketCode): Promise<PriceQuote | null> {
+  const sym = yahooSymbol(symbol, market);
+  for (const host of ["query1.finance.yahoo.com", "query2.finance.yahoo.com"]) {
+    try {
+      const r = await fetch(
+        `https://${host}/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=5d`,
+        {
+          headers: { "User-Agent": YAHOO_UA, "Accept": "application/json" },
+          next: { revalidate: 0 },
+        }
+      );
+      if (!r.ok) continue;
+      const j = await r.json();
+      const result = j?.chart?.result?.[0];
+      if (!result) continue;
+      const meta = result.meta;
+
+      // Prefer the last actual close from the time-series over meta.regularMarketPrice.
+      // meta can be stale after spin-offs / reverse splits (e.g. WDC shows $93 when
+      // real price is $417 because chart metadata wasn't updated post-spin-off).
+      const closes: (number | null)[] = result?.indicators?.quote?.[0]?.close ?? [];
+      const seriesLast = closes.slice().reverse().find((c): c is number => c != null && isFinite(c));
+      const metaPrice: number | undefined = meta?.regularMarketPrice;
+
+      // If meta and series diverge >20%, the meta is almost certainly stale — use series.
+      const last = (() => {
+        if (seriesLast && metaPrice && isFinite(metaPrice)) {
+          const ratio = metaPrice / seriesLast;
+          return ratio < 0.8 || ratio > 1.25 ? seriesLast : metaPrice;
+        }
+        return seriesLast ?? metaPrice;
+      })();
+
+      if (!last || !isFinite(last)) continue;
+      const prev = meta?.previousClose ?? meta?.chartPreviousClose;
+      const high52 = meta?.fiftyTwoWeekHigh;
+      const low52 = meta?.fiftyTwoWeekLow;
+      return {
+        symbol, market, price: last,
+        prevClose: isFinite(prev) ? prev : undefined,
+        high52: isFinite(high52) ? high52 : undefined,
+        low52: isFinite(low52) ? low52 : undefined,
+        currency: meta?.currency ?? MARKETS[market].currency,
+        asOf: new Date((meta?.regularMarketTime ?? Date.now() / 1000) * 1000).toISOString(),
+        marketOpen: isMarketOpen(market).open,
+        source: "yahoo",
+      };
+    } catch { continue; }
+  }
+  return null;
+}
+
+async function fromYahoo(symbol: string, market: MarketCode): Promise<PriceQuote | null> {
+  // v7 quote API first — live quote system, most current after corporate actions.
+  const q = await fromYahooQuote(symbol, market);
+  if (q) return q;
+  // v10 quoteSummary — separate from chart metadata, avoids stale spin-off prices.
+  const s = await fromYahooSummary(symbol, market);
+  if (s) return s;
+  // v8 chart — last resort; reads time-series close instead of stale chart meta.
+  return fromYahooChart(symbol, market);
 }
 
 async function fromFinnhub(symbol: string, market: MarketCode): Promise<PriceQuote | null> {
@@ -237,8 +345,11 @@ function chainForMarket(market: MarketCode) {
   // tiers if available). Alpha Vantage is last because of its 25/day limit.
   // Yahoo is primary (most accurate, no key). Stooq is a free independent
   // cross-check. Polygon/Finnhub/AlphaVantage layer in if keys are present.
+  // Stooq is last for US — it's free but can lag on corporate actions (splits,
+  // spin-offs) and return stale prices. Paid providers (Polygon/Finnhub) and
+  // Alpha Vantage are preferred before falling back to Stooq.
   return market === "US"
-    ? [fromYahoo, fromStooq, fromPolygon, fromFinnhub, fromAlpha]
+    ? [fromYahoo, fromPolygon, fromFinnhub, fromAlpha, fromStooq]
     : [fromYahoo, fromStooq, fromFinnhub, fromAlpha];
 }
 
@@ -292,31 +403,58 @@ function histKey(s: string, m: MarketCode, d: string) { return `${m}:${s}:${d}`;
 async function yahooHist(symbol: string, market: MarketCode, date: string): Promise<HistoricalClose | null> {
   const sym = yahooSymbol(symbol, market);
   const target = new Date(date + "T00:00:00Z").getTime();
-  // Pull 14 days before and 2 days after — covers weekend/holiday snap-back.
+  // Pull 14 days before and 3 days after — covers weekend/holiday snap-back.
   const period1 = Math.floor((target - 14 * 86_400_000) / 1000);
-  const period2 = Math.floor((target + 2 * 86_400_000) / 1000);
+  const period2 = Math.floor((target + 3 * 86_400_000) / 1000);
+  for (const host of ["query1.finance.yahoo.com", "query2.finance.yahoo.com"]) {
+    try {
+      const r = await fetch(
+        `https://${host}/v8/finance/chart/${encodeURIComponent(sym)}?period1=${period1}&period2=${period2}&interval=1d`,
+        {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Accept": "application/json",
+          },
+          next: { revalidate: 0 },
+        }
+      );
+      if (!r.ok) continue;
+      const j = await r.json();
+      const result = j?.chart?.result?.[0];
+      if (!result) continue;
+      const timestamps: number[] = result.timestamp || [];
+      const closes: (number | null)[] = result.indicators?.quote?.[0]?.close || [];
+      // Find newest bar with date <= requested date.
+      for (let i = timestamps.length - 1; i >= 0; i--) {
+        const eff = new Date(timestamps[i] * 1000).toISOString().slice(0, 10);
+        if (eff <= date && closes[i] != null && isFinite(closes[i]!)) {
+          return { symbol, market, requestedDate: date, effectiveDate: eff, close: closes[i]!, source: "yahoo" };
+        }
+      }
+    } catch { continue; }
+  }
+  return null;
+}
+
+async function polygonHist(symbol: string, market: MarketCode, date: string): Promise<HistoricalClose | null> {
+  const key = process.env.POLYGON_API_KEY;
+  if (!key || market !== "US") return null;
+  const sym = symbol.toUpperCase();
+  const target = new Date(date + "T00:00:00Z");
+  const from = new Date(target.getTime() - 7 * 86_400_000).toISOString().slice(0, 10);
+  const to = date;
   try {
     const r = await fetch(
-      `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?period1=${period1}&period2=${period2}&interval=1d`,
-      {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-          "Accept": "application/json",
-        },
-        next: { revalidate: 0 },
-      }
+      `https://api.polygon.io/v2/aggs/ticker/${sym}/range/1/day/${from}/${to}?adjusted=true&sort=desc&limit=10&apiKey=${key}`,
+      { next: { revalidate: 0 } }
     );
     if (!r.ok) return null;
     const j = await r.json();
-    const result = j?.chart?.result?.[0];
-    if (!result) return null;
-    const timestamps: number[] = result.timestamp || [];
-    const closes: (number | null)[] = result.indicators?.quote?.[0]?.close || [];
-    // Find newest bar with date <= target.
-    for (let i = timestamps.length - 1; i >= 0; i--) {
-      const eff = new Date(timestamps[i] * 1000).toISOString().slice(0, 10);
-      if (eff <= date && closes[i] != null && isFinite(closes[i]!)) {
-        return { symbol, market, requestedDate: date, effectiveDate: eff, close: closes[i]!, source: "yahoo" };
+    const bars: { t: number; c: number }[] = j?.results ?? [];
+    for (const bar of bars) {
+      const eff = new Date(bar.t).toISOString().slice(0, 10);
+      if (eff <= date && isFinite(bar.c) && bar.c > 0) {
+        return { symbol, market, requestedDate: date, effectiveDate: eff, close: bar.c, source: "yahoo" };
       }
     }
     return null;
@@ -331,10 +469,13 @@ async function stooqHist(symbol: string, market: MarketCode, date: string): Prom
   const sym = stooqSymbol(symbol, market);
   const target = new Date(date + "T00:00:00Z");
   const start = new Date(target.getTime() - 14 * 86_400_000);
+  // d2 is target + 1 day to ensure Stooq includes the requested date even with
+  // minor data-feed delays (Stooq sometimes updates end-of-day data overnight).
+  const d2 = new Date(target.getTime() + 86_400_000);
   const fmt = (d: Date) => d.toISOString().slice(0, 10).replace(/-/g, "");
   try {
     const r = await fetch(
-      `https://stooq.com/q/d/l/?s=${encodeURIComponent(sym)}&i=d&d1=${fmt(start)}&d2=${fmt(target)}`,
+      `https://stooq.com/q/d/l/?s=${encodeURIComponent(sym)}&i=d&d1=${fmt(start)}&d2=${fmt(d2)}`,
       {
         headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36" },
         next: { revalidate: 0 },
@@ -364,17 +505,12 @@ export async function fetchHistoricalClose(
 ): Promise<HistoricalClose | null> {
   const k = histKey(symbol, market, date);
   const hit = histCache.get(k);
-  // Only trust the cached entry if its effectiveDate matches (or is newer
-  // than) the requested date. Otherwise the cached value is stale — the
-  // data source hadn't seen the requested date's close yet when we cached.
+  // Don't use server-side cache if effectiveDate < requestedDate — the real
+  // close may now be available. Only cache exact-date hits permanently.
   if (hit && hit.effectiveDate >= date) return hit;
-  for (const f of [yahooHist, stooqHist]) {
+  for (const f of [polygonHist, yahooHist, stooqHist]) {
     const r = await f(symbol, market, date);
     if (r) {
-      // Only cache if the fetched close IS for the requested date (or newer).
-      // A stale close (effectiveDate < date) means the market for `date`
-      // hadn't closed at fetch time — return it as an indicative answer
-      // but don't persist it, or we'll serve stale data forever.
       if (r.effectiveDate >= date) histCache.set(k, r);
       return r;
     }

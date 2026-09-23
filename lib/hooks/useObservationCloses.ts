@@ -19,7 +19,7 @@ import { useEffect, useState } from "react";
 import type { MarketCode, Tranche } from "../types";
 import { koSchedule } from "../calc";
 
-const LS_KEY = "snd.tradeclose.v1";
+const LS_KEY = "snd.tradeclose.v2";
 
 interface CacheEntry { close: number; effectiveDate: string; source: string; }
 
