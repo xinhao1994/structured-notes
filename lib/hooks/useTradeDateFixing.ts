@@ -68,8 +68,16 @@ export function useTradeDateFixing(
     const todo: { symbol: string; market: MarketCode; date: string; key: string }[] = [];
     for (const u of targets) {
       const k = `${u.market}:${u.symbol}@${tranche.tradeDate}`;
-      if (cache[k]) cached[u.symbol] = cache[k];
-      else todo.push({ symbol: u.symbol, market: u.market, date: tranche.tradeDate, key: k });
+      const entry = cache[k];
+      // Only trust the cached entry if its effectiveDate >= the requested
+      // trade date. A cached "stale" close (effectiveDate < tradeDate) was
+      // written when the data source hadn't seen the trade date's close
+      // yet — refetch now that the market has (presumably) closed since.
+      if (entry && entry.effectiveDate >= tranche.tradeDate) {
+        cached[u.symbol] = entry;
+      } else {
+        todo.push({ symbol: u.symbol, market: u.market, date: tranche.tradeDate, key: k });
+      }
     }
     setPending(todo.map((t) => t.symbol));
 
@@ -85,7 +93,13 @@ export function useTradeDateFixing(
             if (c.close != null && c.effectiveDate && c.source) {
               fresh[c.symbol] = { close: c.close, effectiveDate: c.effectiveDate, source: c.source };
               const market = c.market || tranche!.underlyings.find((u) => u.symbol === c.symbol)?.market || "US";
-              cache[`${market}:${c.symbol}@${tranche!.tradeDate}`] = fresh[c.symbol];
+              // Only persist to localStorage if the close is AT or AFTER the
+              // trade date. A stale close (effectiveDate < tradeDate) means
+              // the market hadn't closed yet — do NOT poison the cache with
+              // it or the user will see the wrong fixing forever.
+              if (c.effectiveDate >= tranche!.tradeDate) {
+                cache[`${market}:${c.symbol}@${tranche!.tradeDate}`] = fresh[c.symbol];
+              }
             }
           }
           saveCache(cache);

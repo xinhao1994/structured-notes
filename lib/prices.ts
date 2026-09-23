@@ -364,10 +364,20 @@ export async function fetchHistoricalClose(
 ): Promise<HistoricalClose | null> {
   const k = histKey(symbol, market, date);
   const hit = histCache.get(k);
-  if (hit) return hit;
+  // Only trust the cached entry if its effectiveDate matches (or is newer
+  // than) the requested date. Otherwise the cached value is stale — the
+  // data source hadn't seen the requested date's close yet when we cached.
+  if (hit && hit.effectiveDate >= date) return hit;
   for (const f of [yahooHist, stooqHist]) {
     const r = await f(symbol, market, date);
-    if (r) { histCache.set(k, r); return r; }
+    if (r) {
+      // Only cache if the fetched close IS for the requested date (or newer).
+      // A stale close (effectiveDate < date) means the market for `date`
+      // hadn't closed at fetch time — return it as an indicative answer
+      // but don't persist it, or we'll serve stale data forever.
+      if (r.effectiveDate >= date) histCache.set(k, r);
+      return r;
+    }
   }
   return null;
 }
