@@ -440,32 +440,53 @@ async function yahooHist(symbol: string, market: MarketCode, date: string): Prom
     } catch { continue; }
   }
 
-  // Chart endpoint doesn't have the exact date (or the exact-date bar had
-  // close=null during a market-open transition). Try Yahoo v7 quote as a
-  // second source. `regularMarketPreviousClose` is the last completed trading
-  // day's close, so during the day AFTER our requested date, this IS the
-  // requested date's close. Guard: only use if Yahoo's current trading day
-  // (regularMarketTime) is strictly after the requested date.
+  // Chart endpoint didn't have the exact-date bar (or its close was null
+  // during a market-transition glitch). Try Yahoo v7 quote — two useful
+  // signals depending on where "now" sits relative to the requested date:
+  //
+  //   Scenario A (curDate === requestedDate, market currently CLOSED):
+  //     The last completed session on Yahoo's clock is the requested date
+  //     itself. regularMarketPrice is the LAST TRADED PRICE of that session,
+  //     which = the requested date's close. e.g. Malaysia afternoon Sept 23
+  //     asking for Sept 22 close → Yahoo's session is still Sept 22 (US pre-
+  //     market Sept 23 hasn't happened), regularMarketPrice = Sept 22 close.
+  //
+  //   Scenario B (curDate > requestedDate):
+  //     Yahoo has moved on to a later session. regularMarketPreviousClose is
+  //     the previous session's close, which = the requested date's close.
+  //     e.g. Malaysia evening Sept 23 during US market open → curDate =
+  //     Sept 23, requested = Sept 22, previousClose = Sept 22.
+  const marketOpenNow = isMarketOpen(market).open;
   for (const host of ["query1.finance.yahoo.com", "query2.finance.yahoo.com"]) {
     try {
       const r = await fetch(
-        `https://${host}/v7/finance/quote?symbols=${encodeURIComponent(sym)}&fields=regularMarketPreviousClose,regularMarketTime`,
+        `https://${host}/v7/finance/quote?symbols=${encodeURIComponent(sym)}&fields=regularMarketPrice,regularMarketPreviousClose,regularMarketTime`,
         { headers: { "User-Agent": UA, "Accept": "application/json" }, next: { revalidate: 0 } }
       );
       if (!r.ok) continue;
       const j = await r.json();
       const q = j?.quoteResponse?.result?.[0];
+      const price = q?.regularMarketPrice;
       const prevClose = q?.regularMarketPreviousClose;
       const curTs = q?.regularMarketTime;
-      if (prevClose != null && isFinite(prevClose) && curTs) {
-        const curDate = new Date(curTs * 1000).toISOString().slice(0, 10);
-        // curDate is the current trading day per Yahoo. If it's strictly
-        // after our requested date, previousClose is the requested date's
-        // close (or the previous trading day if the request lands on a
-        // weekend/holiday — still correct).
-        if (curDate > date) {
-          return { symbol, market, requestedDate: date, effectiveDate: date, close: prevClose, source: "yahoo" };
-        }
+      if (!curTs) continue;
+      const curDate = new Date(curTs * 1000).toISOString().slice(0, 10);
+
+      // Scenario B — session has moved past the requested date. previousClose
+      // holds the requested date's close (or the last trading day at/before
+      // the requested date if the request landed on a weekend/holiday).
+      if (curDate > date && prevClose != null && isFinite(prevClose)) {
+        return { symbol, market, requestedDate: date, effectiveDate: date, close: prevClose, source: "yahoo" };
+      }
+
+      // Scenario A — Yahoo's session is still ON the requested date. If the
+      // market has already CLOSED for that session (i.e. we're now in the
+      // post-close / next-day pre-market window), regularMarketPrice IS the
+      // finalized close for the requested date. We only accept this when the
+      // market is currently closed — during live trading regularMarketPrice
+      // is a moving intraday tick, not a close.
+      if (curDate === date && !marketOpenNow && price != null && isFinite(price)) {
+        return { symbol, market, requestedDate: date, effectiveDate: date, close: price, source: "yahoo" };
       }
     } catch { continue; }
   }
