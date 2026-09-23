@@ -108,23 +108,39 @@ export function useTradeDateFixing(
       const all = { ...cached, ...fresh };
       const fixing: Record<string, number> = {};
       const effDates: Record<string, string> = {};
-      const missing: string[] = [];
+      const missing: string[] = [];        // truly no data at all
+      const usedFallback: string[] = [];   // API returned nothing, but live-close fallback saved us
       for (const u of tranche.underlyings) {
         const hit = all[u.symbol];
-        if (hit) { fixing[u.symbol] = hit.close; effDates[u.symbol] = hit.effectiveDate; }
-        else {
+        if (hit) {
+          fixing[u.symbol] = hit.close;
+          effDates[u.symbol] = hit.effectiveDate;
+        } else {
           const fb = liveCloses[u.symbol];
-          if (fb != null) { fixing[u.symbol] = fb; effDates[u.symbol] = "latest close (fallback)"; }
-          missing.push(u.symbol);
+          if (fb != null) {
+            // Fallback succeeded — NOT an error. After US market close, the
+            // live close IS the trade-date close, so this is a correct fixing
+            // even though it came through the fallback path.
+            fixing[u.symbol] = fb;
+            effDates[u.symbol] = "latest close (fallback)";
+            usedFallback.push(u.symbol);
+          } else {
+            missing.push(u.symbol);
+          }
         }
       }
-      const allResolved = missing.length === 0;
+      // Only "not resolved" (→ isIndicativeFixing true) when we truly have
+      // no historical AND no fallback for at least one leg. Fallback alone
+      // still marks the fixing as indicative (label + tooltip) but does NOT
+      // trigger the loud "close unavailable" error banner.
+      const anyMissingOrFallback = missing.length > 0 || usedFallback.length > 0;
       setOut({
         ...tranche,
         initialFixing: fixing,
-        isIndicativeFixing: !allResolved,
+        isIndicativeFixing: anyMissingOrFallback,
       });
       setEff(effDates);
+      // Only surface an error for truly-missing symbols (no historical, no fallback)
       setPending([]); setErrors(missing);
     })();
 
