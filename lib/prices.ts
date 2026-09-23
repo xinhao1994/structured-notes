@@ -390,7 +390,7 @@ export interface HistoricalClose {
   requestedDate: string;
   effectiveDate: string;
   close: number;
-  source: "yahoo" | "alphavantage" | "investing";
+  source: "yahoo" | "alphavantage" | "investing" | "nasdaq" | "marketwatch";
 }
 
 const histCache = new Map<string, HistoricalClose>();
@@ -505,6 +505,124 @@ async function yahooHist(symbol: string, market: MarketCode, date: string): Prom
  * is intentionally a LAST-RESORT provider, run only if every other source
  * (Yahoo, Polygon, Stooq, Alpha Vantage) returns nothing.
  */
+/**
+ * Nasdaq.com internal JSON API — free, no key, no auth required.
+ * URL: https://api.nasdaq.com/api/quote/{sym}/historical
+ * Response includes tradesTable.rows with { date: "MM/DD/YYYY", close: "$X.XX" }.
+ * Works for NASDAQ-listed stocks. NYSE-listed also work via same endpoint.
+ */
+async function nasdaqHist(symbol: string, market: MarketCode, date: string): Promise<HistoricalClose | null> {
+  if (market !== "US") return null;
+  const sym = symbol.toUpperCase();
+  const target = new Date(date + "T00:00:00Z");
+  const from = new Date(target.getTime() - 14 * 86_400_000).toISOString().slice(0, 10);
+  // Extend "to" by 2 days so late-arriving data still lands in the window
+  const to = new Date(target.getTime() + 2 * 86_400_000).toISOString().slice(0, 10);
+  try {
+    const r = await fetch(
+      `https://api.nasdaq.com/api/quote/${encodeURIComponent(sym)}/historical?assetclass=stocks&fromdate=${from}&todate=${to}&limit=25&type=stocks`,
+      {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+          "Accept": "application/json, text/plain, */*",
+          "Accept-Language": "en-US,en;q=0.9",
+          "Origin": "https://www.nasdaq.com",
+          "Referer": "https://www.nasdaq.com/",
+        },
+        next: { revalidate: 0 },
+      }
+    );
+    if (!r.ok) return null;
+    const j: any = await r.json().catch(() => null);
+    const rows: any[] = j?.data?.tradesTable?.rows ?? [];
+    if (!rows.length) return null;
+    // Normalise "MM/DD/YYYY" → ISO, parse "$175.50" → 175.50
+    const parseClose = (raw: unknown): number => {
+      if (typeof raw !== "string") return NaN;
+      return parseFloat(raw.replace(/[^\d.\-]/g, ""));
+    };
+    const parseDate = (raw: unknown): string | null => {
+      if (typeof raw !== "string") return null;
+      const m = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+      if (!m) return null;
+      return `${m[3]}-${m[1]}-${m[2]}`;
+    };
+    // Prefer exact-date bar. Otherwise walk newest → oldest for a bar <= date.
+    const normalized = rows
+      .map((r: any) => ({ d: parseDate(r?.date), c: parseClose(r?.close) }))
+      .filter((x): x is { d: string; c: number } => x.d != null && isFinite(x.c) && x.c > 0)
+      .sort((a, b) => b.d.localeCompare(a.d));
+    for (const row of normalized) {
+      if (row.d === date) {
+        return { symbol, market, requestedDate: date, effectiveDate: row.d, close: row.c, source: "nasdaq" };
+      }
+    }
+    for (const row of normalized) {
+      if (row.d <= date) {
+        return { symbol, market, requestedDate: date, effectiveDate: row.d, close: row.c, source: "nasdaq" };
+      }
+    }
+    return null;
+  } catch { return null; }
+}
+
+/**
+ * MarketWatch historical CSV download — free, no key.
+ * URL: /investing/stock/{sym}/downloaddatapartial?startdate=MM/DD/YYYY&enddate=MM/DD/YYYY
+ *      &frequency=P1D&csvdownload=true&downloadtype=historical
+ * CSV columns: Date, Open, High, Low, Close, Volume
+ */
+async function marketwatchHist(symbol: string, market: MarketCode, date: string): Promise<HistoricalClose | null> {
+  if (market !== "US") return null;
+  const sym = symbol.toLowerCase();
+  const target = new Date(date + "T00:00:00Z");
+  const start = new Date(target.getTime() - 14 * 86_400_000);
+  const end = new Date(target.getTime() + 2 * 86_400_000);
+  const fmt = (d: Date) => {
+    const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+    const dd = String(d.getUTCDate()).padStart(2, "0");
+    return `${mm}/${dd}/${d.getUTCFullYear()}`;
+  };
+  const url = `https://www.marketwatch.com/investing/stock/${encodeURIComponent(sym)}/downloaddatapartial?startdate=${encodeURIComponent(fmt(start))}&enddate=${encodeURIComponent(fmt(end))}&daterange=d30&frequency=P1D&csvdownload=true&downloadtype=historical&newdates=false`;
+  try {
+    const r = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "text/csv, text/plain, */*",
+        "Referer": `https://www.marketwatch.com/investing/stock/${sym}/download-data`,
+      },
+      next: { revalidate: 0 },
+    });
+    if (!r.ok) return null;
+    const text = await r.text();
+    const lines = text.trim().split(/\r?\n/);
+    if (lines.length < 2) return null;
+    // Header: Date,Open,High,Low,Close,Volume — Date format "MM/DD/YYYY"
+    const rows: { d: string; c: number }[] = [];
+    for (let i = 1; i < lines.length; i++) {
+      const cols = lines[i].split(",");
+      if (cols.length < 5) continue;
+      const dm = cols[0].match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+      if (!dm) continue;
+      const d = `${dm[3]}-${dm[1]}-${dm[2]}`;
+      const c = parseFloat(cols[4].replace(/[^\d.\-]/g, ""));
+      if (isFinite(c) && c > 0) rows.push({ d, c });
+    }
+    rows.sort((a, b) => b.d.localeCompare(a.d));
+    for (const row of rows) {
+      if (row.d === date) {
+        return { symbol, market, requestedDate: date, effectiveDate: row.d, close: row.c, source: "marketwatch" };
+      }
+    }
+    for (const row of rows) {
+      if (row.d <= date) {
+        return { symbol, market, requestedDate: date, effectiveDate: row.d, close: row.c, source: "marketwatch" };
+      }
+    }
+    return null;
+  } catch { return null; }
+}
+
 async function investingHist(symbol: string, market: MarketCode, date: string): Promise<HistoricalClose | null> {
   // Only US equities for the initial rollout — Investing.com's search
   // returns messy multi-exchange results for HK/JP/etc, needs a mapping.
@@ -574,7 +692,7 @@ export async function fetchHistoricalClose(
   // Don't use server-side cache if effectiveDate < requestedDate — the real
   // close may now be available. Only cache exact-date hits permanently.
   if (hit && hit.effectiveDate >= date) return hit;
-  for (const f of [yahooHist, investingHist]) {
+  for (const f of [yahooHist, nasdaqHist, marketwatchHist, investingHist]) {
     const r = await f(symbol, market, date);
     if (r) {
       if (r.effectiveDate >= date) histCache.set(k, r);
