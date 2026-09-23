@@ -85,7 +85,7 @@ export function useTradeDateFixing(
         const url = "/api/trade-close?items=" +
           encodeURIComponent(todo.map((t) => `${t.market}:${t.symbol}@${t.date}`).join(","));
         try {
-          const r = await fetch(url, { cache: "force-cache" });
+          const r = await fetch(url, { cache: "no-store" });
           const j = await r.json() as { closes: Array<{ symbol: string; market?: MarketCode; close: number | null; effectiveDate: string | null; source: string | null }> };
           for (const c of j.closes) {
             if (c.close != null && c.effectiveDate && c.source) {
