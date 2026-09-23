@@ -7,7 +7,7 @@
 import { useEffect, useState } from "react";
 import type { MarketCode, Tranche } from "../types";
 
-const LS_KEY = "snd.tradeclose.v1";
+const LS_KEY = "snd.tradeclose.v2";
 
 function loadCache(): Record<string, { close: number; effectiveDate: string; source: string }> {
   if (typeof window === "undefined") return {};
