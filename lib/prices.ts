@@ -403,31 +403,58 @@ function histKey(s: string, m: MarketCode, d: string) { return `${m}:${s}:${d}`;
 async function yahooHist(symbol: string, market: MarketCode, date: string): Promise<HistoricalClose | null> {
   const sym = yahooSymbol(symbol, market);
   const target = new Date(date + "T00:00:00Z").getTime();
-  // Pull 14 days before and 2 days after — covers weekend/holiday snap-back.
+  // Pull 14 days before and 3 days after — covers weekend/holiday snap-back.
   const period1 = Math.floor((target - 14 * 86_400_000) / 1000);
-  const period2 = Math.floor((target + 2 * 86_400_000) / 1000);
+  const period2 = Math.floor((target + 3 * 86_400_000) / 1000);
+  for (const host of ["query1.finance.yahoo.com", "query2.finance.yahoo.com"]) {
+    try {
+      const r = await fetch(
+        `https://${host}/v8/finance/chart/${encodeURIComponent(sym)}?period1=${period1}&period2=${period2}&interval=1d`,
+        {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Accept": "application/json",
+          },
+          next: { revalidate: 0 },
+        }
+      );
+      if (!r.ok) continue;
+      const j = await r.json();
+      const result = j?.chart?.result?.[0];
+      if (!result) continue;
+      const timestamps: number[] = result.timestamp || [];
+      const closes: (number | null)[] = result.indicators?.quote?.[0]?.close || [];
+      // Find newest bar with date <= requested date.
+      for (let i = timestamps.length - 1; i >= 0; i--) {
+        const eff = new Date(timestamps[i] * 1000).toISOString().slice(0, 10);
+        if (eff <= date && closes[i] != null && isFinite(closes[i]!)) {
+          return { symbol, market, requestedDate: date, effectiveDate: eff, close: closes[i]!, source: "yahoo" };
+        }
+      }
+    } catch { continue; }
+  }
+  return null;
+}
+
+async function polygonHist(symbol: string, market: MarketCode, date: string): Promise<HistoricalClose | null> {
+  const key = process.env.POLYGON_API_KEY;
+  if (!key || market !== "US") return null;
+  const sym = symbol.toUpperCase();
+  const target = new Date(date + "T00:00:00Z");
+  const from = new Date(target.getTime() - 7 * 86_400_000).toISOString().slice(0, 10);
+  const to = date;
   try {
     const r = await fetch(
-      `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?period1=${period1}&period2=${period2}&interval=1d`,
-      {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-          "Accept": "application/json",
-        },
-        next: { revalidate: 0 },
-      }
+      `https://api.polygon.io/v2/aggs/ticker/${sym}/range/1/day/${from}/${to}?adjusted=true&sort=desc&limit=10&apiKey=${key}`,
+      { next: { revalidate: 0 } }
     );
     if (!r.ok) return null;
     const j = await r.json();
-    const result = j?.chart?.result?.[0];
-    if (!result) return null;
-    const timestamps: number[] = result.timestamp || [];
-    const closes: (number | null)[] = result.indicators?.quote?.[0]?.close || [];
-    // Find newest bar with date <= target.
-    for (let i = timestamps.length - 1; i >= 0; i--) {
-      const eff = new Date(timestamps[i] * 1000).toISOString().slice(0, 10);
-      if (eff <= date && closes[i] != null && isFinite(closes[i]!)) {
-        return { symbol, market, requestedDate: date, effectiveDate: eff, close: closes[i]!, source: "yahoo" };
+    const bars: { t: number; c: number }[] = j?.results ?? [];
+    for (const bar of bars) {
+      const eff = new Date(bar.t).toISOString().slice(0, 10);
+      if (eff <= date && isFinite(bar.c) && bar.c > 0) {
+        return { symbol, market, requestedDate: date, effectiveDate: eff, close: bar.c, source: "yahoo" };
       }
     }
     return null;
@@ -442,10 +469,13 @@ async function stooqHist(symbol: string, market: MarketCode, date: string): Prom
   const sym = stooqSymbol(symbol, market);
   const target = new Date(date + "T00:00:00Z");
   const start = new Date(target.getTime() - 14 * 86_400_000);
+  // d2 is target + 1 day to ensure Stooq includes the requested date even with
+  // minor data-feed delays (Stooq sometimes updates end-of-day data overnight).
+  const d2 = new Date(target.getTime() + 86_400_000);
   const fmt = (d: Date) => d.toISOString().slice(0, 10).replace(/-/g, "");
   try {
     const r = await fetch(
-      `https://stooq.com/q/d/l/?s=${encodeURIComponent(sym)}&i=d&d1=${fmt(start)}&d2=${fmt(target)}`,
+      `https://stooq.com/q/d/l/?s=${encodeURIComponent(sym)}&i=d&d1=${fmt(start)}&d2=${fmt(d2)}`,
       {
         headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36" },
         next: { revalidate: 0 },
@@ -475,10 +505,15 @@ export async function fetchHistoricalClose(
 ): Promise<HistoricalClose | null> {
   const k = histKey(symbol, market, date);
   const hit = histCache.get(k);
-  if (hit) return hit;
-  for (const f of [yahooHist, stooqHist]) {
+  // Don't use server-side cache if effectiveDate < requestedDate — the real
+  // close may now be available. Only cache exact-date hits permanently.
+  if (hit && hit.effectiveDate >= date) return hit;
+  for (const f of [polygonHist, yahooHist, stooqHist]) {
     const r = await f(symbol, market, date);
-    if (r) { histCache.set(k, r); return r; }
+    if (r) {
+      if (r.effectiveDate >= date) histCache.set(k, r);
+      return r;
+    }
   }
   return null;
 }
