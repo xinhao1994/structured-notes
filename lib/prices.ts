@@ -406,17 +406,17 @@ async function yahooHist(symbol: string, market: MarketCode, date: string): Prom
   // Pull 14 days before and 3 days after — covers weekend/holiday snap-back.
   const period1 = Math.floor((target - 14 * 86_400_000) / 1000);
   const period2 = Math.floor((target + 3 * 86_400_000) / 1000);
+  const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+
+  // Track the best fallback across hosts (older bar with valid close). Only
+  // use it if we can't find the exact-date bar via any host or via v7 quote.
+  let fallback: HistoricalClose | null = null;
+
   for (const host of ["query1.finance.yahoo.com", "query2.finance.yahoo.com"]) {
     try {
       const r = await fetch(
         `https://${host}/v8/finance/chart/${encodeURIComponent(sym)}?period1=${period1}&period2=${period2}&interval=1d`,
-        {
-          headers: {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            "Accept": "application/json",
-          },
-          next: { revalidate: 0 },
-        }
+        { headers: { "User-Agent": UA, "Accept": "application/json" }, next: { revalidate: 0 } }
       );
       if (!r.ok) continue;
       const j = await r.json();
@@ -424,16 +424,53 @@ async function yahooHist(symbol: string, market: MarketCode, date: string): Prom
       if (!result) continue;
       const timestamps: number[] = result.timestamp || [];
       const closes: (number | null)[] = result.indicators?.quote?.[0]?.close || [];
-      // Find newest bar with date <= requested date.
+      // Walk newest → oldest. Prefer the exact-date bar. Remember the newest
+      // valid older bar as fallback in case no exact match exists.
       for (let i = timestamps.length - 1; i >= 0; i--) {
         const eff = new Date(timestamps[i] * 1000).toISOString().slice(0, 10);
         if (eff <= date && closes[i] != null && isFinite(closes[i]!)) {
-          return { symbol, market, requestedDate: date, effectiveDate: eff, close: closes[i]!, source: "yahoo" };
+          if (eff === date) {
+            return { symbol, market, requestedDate: date, effectiveDate: eff, close: closes[i]!, source: "yahoo" };
+          }
+          if (!fallback) {
+            fallback = { symbol, market, requestedDate: date, effectiveDate: eff, close: closes[i]!, source: "yahoo" };
+          }
         }
       }
     } catch { continue; }
   }
-  return null;
+
+  // Chart endpoint doesn't have the exact date (or the exact-date bar had
+  // close=null during a market-open transition). Try Yahoo v7 quote as a
+  // second source. `regularMarketPreviousClose` is the last completed trading
+  // day's close, so during the day AFTER our requested date, this IS the
+  // requested date's close. Guard: only use if Yahoo's current trading day
+  // (regularMarketTime) is strictly after the requested date.
+  for (const host of ["query1.finance.yahoo.com", "query2.finance.yahoo.com"]) {
+    try {
+      const r = await fetch(
+        `https://${host}/v7/finance/quote?symbols=${encodeURIComponent(sym)}&fields=regularMarketPreviousClose,regularMarketTime`,
+        { headers: { "User-Agent": UA, "Accept": "application/json" }, next: { revalidate: 0 } }
+      );
+      if (!r.ok) continue;
+      const j = await r.json();
+      const q = j?.quoteResponse?.result?.[0];
+      const prevClose = q?.regularMarketPreviousClose;
+      const curTs = q?.regularMarketTime;
+      if (prevClose != null && isFinite(prevClose) && curTs) {
+        const curDate = new Date(curTs * 1000).toISOString().slice(0, 10);
+        // curDate is the current trading day per Yahoo. If it's strictly
+        // after our requested date, previousClose is the requested date's
+        // close (or the previous trading day if the request lands on a
+        // weekend/holiday — still correct).
+        if (curDate > date) {
+          return { symbol, market, requestedDate: date, effectiveDate: date, close: prevClose, source: "yahoo" };
+        }
+      }
+    } catch { continue; }
+  }
+
+  return fallback;
 }
 
 async function polygonHist(symbol: string, market: MarketCode, date: string): Promise<HistoricalClose | null> {
