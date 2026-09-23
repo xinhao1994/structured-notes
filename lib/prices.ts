@@ -390,7 +390,7 @@ export interface HistoricalClose {
   requestedDate: string;
   effectiveDate: string;
   close: number;
-  source: "yahoo" | "stooq" | "alphavantage";
+  source: "yahoo" | "stooq" | "polygon" | "alphavantage" | "investing";
 }
 
 const histCache = new Map<string, HistoricalClose>();
@@ -512,7 +512,7 @@ async function polygonHist(symbol: string, market: MarketCode, date: string): Pr
     for (const bar of bars) {
       const eff = new Date(bar.t).toISOString().slice(0, 10);
       if (eff <= date && isFinite(bar.c) && bar.c > 0) {
-        return { symbol, market, requestedDate: date, effectiveDate: eff, close: bar.c, source: "yahoo" };
+        return { symbol, market, requestedDate: date, effectiveDate: eff, close: bar.c, source: "polygon" };
       }
     }
     return null;
@@ -558,6 +558,118 @@ async function stooqHist(symbol: string, market: MarketCode, date: string): Prom
   } catch { return null; }
 }
 
+/**
+ * Alpha Vantage TIME_SERIES_DAILY — reliable free-tier daily close data.
+ * Requires ALPHA_VANTAGE_API_KEY env var. Free tier: 25 req/day, 5 req/min.
+ * Compact output = last 100 trading days.
+ */
+async function alphaVantageHist(symbol: string, market: MarketCode, date: string): Promise<HistoricalClose | null> {
+  const key = process.env.ALPHA_VANTAGE_API_KEY;
+  if (!key) return null;
+  // Alpha Vantage supports mostly US equities out of the box. Skip other
+  // markets to avoid burning quota on requests that will 404.
+  if (market !== "US") return null;
+  try {
+    const r = await fetch(
+      `https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=${encodeURIComponent(symbol)}&outputsize=compact&apikey=${key}`,
+      {
+        headers: { "User-Agent": "Mozilla/5.0", "Accept": "application/json" },
+        next: { revalidate: 0 },
+      }
+    );
+    if (!r.ok) return null;
+    const j = await r.json();
+    const series = j?.["Time Series (Daily)"] as Record<string, { "4. close": string }> | undefined;
+    if (!series) return null;
+    // Prefer exact-date match first, then fall back to newest bar <= date
+    if (series[date]?.["4. close"]) {
+      const c = parseFloat(series[date]["4. close"]);
+      if (isFinite(c) && c > 0) {
+        return { symbol, market, requestedDate: date, effectiveDate: date, close: c, source: "alphavantage" };
+      }
+    }
+    const dates = Object.keys(series).sort().reverse();
+    for (const d of dates) {
+      if (d <= date) {
+        const c = parseFloat(series[d]["4. close"]);
+        if (isFinite(c) && c > 0) {
+          return { symbol, market, requestedDate: date, effectiveDate: d, close: c, source: "alphavantage" };
+        }
+      }
+    }
+    return null;
+  } catch { return null; }
+}
+
+/**
+ * Investing.com's internal financialdata API — best-effort scrape.
+ * Uses their /api/search to find the pair-ID for the symbol, then
+ * pulls daily historicals for the requested date window.
+ * NOTE: Cloudflare may block server-side requests intermittently — this
+ * is intentionally a LAST-RESORT provider, run only if every other source
+ * (Yahoo, Polygon, Stooq, Alpha Vantage) returns nothing.
+ */
+async function investingHist(symbol: string, market: MarketCode, date: string): Promise<HistoricalClose | null> {
+  // Only US equities for the initial rollout — Investing.com's search
+  // returns messy multi-exchange results for HK/JP/etc, needs a mapping.
+  if (market !== "US") return null;
+  const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+  const investHeaders = {
+    "User-Agent": UA,
+    "Accept": "application/json, text/plain, */*",
+    "domain-id": "www",
+    "Referer": "https://www.investing.com/",
+  };
+  try {
+    // Step 1 — search for the symbol → get pair-ID
+    const searchRes = await fetch(
+      `https://api.investing.com/api/search/v2/search?q=${encodeURIComponent(symbol)}`,
+      { headers: investHeaders, next: { revalidate: 0 } }
+    );
+    if (!searchRes.ok) return null;
+    const searchJson: any = await searchRes.json().catch(() => null);
+    const quotes: any[] = searchJson?.quotes ?? [];
+    // Prefer NASDAQ / NYSE / NYSE Arca equity matching our symbol exactly
+    const usEquity = quotes.find((q: any) => {
+      const sym = (q?.symbol ?? "").toUpperCase();
+      const ex = (q?.exchange ?? "").toUpperCase();
+      return sym === symbol.toUpperCase() && (ex.includes("NASDAQ") || ex.includes("NYSE"));
+    });
+    const pairId = usEquity?.pair_ID ?? usEquity?.pairId;
+    if (!pairId) return null;
+
+    // Step 2 — pull historical daily bars for the requested date window
+    const startDate = new Date(new Date(date + "T00:00:00Z").getTime() - 14 * 86_400_000).toISOString().slice(0, 10);
+    const endDate = new Date(new Date(date + "T00:00:00Z").getTime() + 2 * 86_400_000).toISOString().slice(0, 10);
+    const histRes = await fetch(
+      `https://api.investing.com/api/financialdata/historical/${pairId}?start-date=${startDate}&end-date=${endDate}&time-frame=Daily&add-missing-rows=false`,
+      { headers: investHeaders, next: { revalidate: 0 } }
+    );
+    if (!histRes.ok) return null;
+    const histJson: any = await histRes.json().catch(() => null);
+    const rows: any[] = histJson?.data ?? [];
+    // Normalize dates (Investing sometimes returns "MMM DD, YYYY" or ISO)
+    const normDate = (raw: unknown): string | null => {
+      if (typeof raw !== "string") return null;
+      if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 10);
+      const t = Date.parse(raw);
+      if (!isFinite(t)) return null;
+      return new Date(t).toISOString().slice(0, 10);
+    };
+    // Sort newest → oldest
+    const parsed = rows
+      .map((r: any) => ({ d: normDate(r?.rowDate ?? r?.date), c: parseFloat(String(r?.last_close ?? r?.close ?? "")) }))
+      .filter((x): x is { d: string; c: number } => x.d != null && isFinite(x.c) && x.c > 0)
+      .sort((a, b) => b.d.localeCompare(a.d));
+    for (const row of parsed) {
+      if (row.d <= date) {
+        return { symbol, market, requestedDate: date, effectiveDate: row.d, close: row.c, source: "investing" };
+      }
+    }
+    return null;
+  } catch { return null; }
+}
+
 export async function fetchHistoricalClose(
   symbol: string, market: MarketCode, date: string
 ): Promise<HistoricalClose | null> {
@@ -566,7 +678,7 @@ export async function fetchHistoricalClose(
   // Don't use server-side cache if effectiveDate < requestedDate — the real
   // close may now be available. Only cache exact-date hits permanently.
   if (hit && hit.effectiveDate >= date) return hit;
-  for (const f of [polygonHist, yahooHist, stooqHist]) {
+  for (const f of [yahooHist, polygonHist, stooqHist, alphaVantageHist, investingHist]) {
     const r = await f(symbol, market, date);
     if (r) {
       if (r.effectiveDate >= date) histCache.set(k, r);
