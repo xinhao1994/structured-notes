@@ -5,6 +5,7 @@ import { ServiceWorkerRegister } from "@/components/ServiceWorkerRegister";
 import { Header } from "@/components/Header";
 import { BottomNav } from "@/components/BottomNav";
 import { SwipeNavigator } from "@/components/SwipeNavigator";
+import { VisitTracker } from "@/components/VisitTracker";
 
 export const metadata: Metadata = {
   title: "Structured Notes Desk",
@@ -47,6 +48,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <BottomNav />
           <ServiceWorkerRegister />
           <SwipeNavigator />
+          <VisitTracker />
         </ThemeProvider>
       </body>
     </html>
