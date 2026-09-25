@@ -43,10 +43,44 @@ function parseUA(ua: string): UAInfo {
   return { deviceType, browser, os };
 }
 
+// Skip anything that isn't a real human browser. Covers:
+//  - No user-agent (curl/wget/node without UA)
+//  - Common bot UAs (Googlebot, uptime monitors, etc.)
+//  - Vercel's own build-time prerendering worker (identifies with the
+//    x-vercel-deployment-url header or a screenshot-service UA)
+//  - Any UA without "Mozilla" — genuine browsers all send it
+function isBotOrInfra(req: NextRequest, ua: string): boolean {
+  if (!ua) return true;
+  if (!/Mozilla/i.test(ua)) return true;
+  // Known-bot substrings
+  const botPatterns = [
+    "bot", "spider", "crawler", "curl", "wget", "python-requests",
+    "node-fetch", "axios", "okhttp", "java/", "go-http-client",
+    "headless", "phantomjs", "selenium", "playwright", "puppeteer",
+    "uptimerobot", "pingdom", "statuscake", "monitor", "prerender",
+    "vercel-screenshot", "vercel-favicon", "vercel-og",
+    "facebookexternalhit", "twitterbot", "slackbot", "whatsapp",
+    "discordbot", "linkedinbot",
+  ];
+  const lower = ua.toLowerCase();
+  if (botPatterns.some((p) => lower.includes(p))) return true;
+  // Vercel's build worker sets this header
+  if (req.headers.get("x-vercel-deployment-url")) return true;
+  // Vercel edge sends x-vercel-internal for their own requests
+  if (req.headers.get("x-vercel-internal")) return true;
+  // A visit must have a path in the payload — no path suggests background ping
+  return false;
+}
+
 export async function POST(req: NextRequest) {
   const supa = getSupabaseAdmin();
   // Never fail the client if tracking is misconfigured — silent no-op.
   if (!supa) return NextResponse.json({ ok: false });
+
+  const rawUA = req.headers.get("user-agent") || "";
+  if (isBotOrInfra(req, rawUA)) {
+    return NextResponse.json({ ok: true, skipped: "bot" });
+  }
 
   let body: any = {};
   try { body = await req.json(); } catch {}
@@ -58,8 +92,7 @@ export async function POST(req: NextRequest) {
   const path      = s(body.path,      200);
   const referrer  = s(body.referrer,  500);
 
-  const ua = req.headers.get("user-agent") || "";
-  const parsed = parseUA(ua);
+  const parsed = parseUA(rawUA);
 
   // Real client IP — x-forwarded-for is a comma-separated chain, first is client
   const xff = req.headers.get("x-forwarded-for") || "";
@@ -80,7 +113,7 @@ export async function POST(req: NextRequest) {
       country,
       city,
       region,
-      user_agent: ua.slice(0, 500) || null,
+      user_agent: rawUA.slice(0, 500) || null,
       device_type: parsed.deviceType,
       browser: parsed.browser,
       os: parsed.os,
