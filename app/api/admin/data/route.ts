@@ -36,16 +36,29 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "supabase not configured" }, { status: 503 });
   }
 
-  const [visitsRes, msgsRes] = await Promise.all([
+  const [visitsRes, msgsRes, countRes] = await Promise.all([
     supa.from("page_visits").select("*").order("created_at", { ascending: false }).limit(500),
     supa.from("chat_messages").select("sender_name, created_at").order("created_at", { ascending: true }).limit(50_000),
+    supa.from("page_visits").select("id", { count: "exact", head: true }),
   ]);
+
+  // Debug: expose which Supabase this route is reading from, and the true
+  // table row count — compare against /api/track's inserted row to prove
+  // whether we're hitting the same database.
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+  const projectRef = url.match(/https:\/\/([a-z0-9]+)\.supabase\.co/)?.[1] || "unknown";
 
   return NextResponse.json(
     {
       visits: visitsRes.data ?? [],
       messages: msgsRes.data ?? [],
       generatedAt: new Date().toISOString(),
+      _debug: {
+        supabase_project: projectRef,
+        page_visits_total: countRes.count ?? null,
+        visits_error: visitsRes.error?.message ?? null,
+        count_error: countRes.error?.message ?? null,
+      },
     },
     { headers: { "cache-control": "no-store, no-cache, must-revalidate" } }
   );

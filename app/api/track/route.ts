@@ -175,5 +175,12 @@ export async function POST(req: NextRequest) {
     console.log(`[track] broadcast failed: ${String(e?.message || e).slice(0,120)}`);
   }
 
-  return NextResponse.json({ ok: true, visit: inserted }, { headers: { "cache-control": "no-store" } });
+  // Debug: expose which Supabase project this route writes to.
+  const envUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+  const projectRef = envUrl.match(/https:\/\/([a-z0-9]+)\.supabase\.co/)?.[1] || "unknown";
+
+  return NextResponse.json(
+    { ok: true, visit: inserted, _debug: { supabase_project: projectRef } },
+    { headers: { "cache-control": "no-store" } },
+  );
 }
