@@ -123,6 +123,15 @@ export async function POST(req: NextRequest) {
   const path      = s(body.path,      200);
   const referrer  = s(body.referrer,  500);
 
+  // Sanitize UA — strip control bytes and invalid UTF-8 so PostgREST can
+  // always serialize this row in SELECT responses. One bad byte on a single
+  // row otherwise silently truncates the whole admin list.
+  const safeUA = ua
+    .slice(0, 500)
+    .replace(/[\u0000-\u001F\u007F]/g, "") // strip ASCII control chars
+    .replace(/[\uD800-\uDFFF]/g, "")        // strip lone surrogates
+    || null;
+
   const row = {
     visitor_id: visitorId,
     session_id: sessionId,
@@ -131,7 +140,7 @@ export async function POST(req: NextRequest) {
     country,
     city,
     region,
-    user_agent: ua.slice(0, 500) || null,
+    user_agent: safeUA,
     device_type: parsed.deviceType,
     browser: parsed.browser,
     os: parsed.os,

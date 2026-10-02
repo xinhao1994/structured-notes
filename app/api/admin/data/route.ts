@@ -36,16 +36,22 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "supabase not configured" }, { status: 503 });
   }
 
-  const [visitsRes, msgsRes, countRes, idOnlyRes, noOrderRes, allIdsRes] = await Promise.all([
-    supa.from("page_visits").select("*").order("created_at", { ascending: false }).limit(500),
+  // Explicit column list (never "*") — a corrupt UA string in one row was
+  // silently truncating the entire SELECT response when "*" expanded to
+  // include every text column. By listing columns and omitting user_agent
+  // (not needed for the dashboard anyway), the response always returns all
+  // rows.
+  const VISIT_COLS = [
+    "id", "visitor_id", "session_id", "chat_name",
+    "ip", "country", "city", "region",
+    "device_type", "browser", "os",
+    "path", "referrer", "created_at",
+  ].join(", ");
+
+  const [visitsRes, msgsRes, countRes] = await Promise.all([
+    supa.from("page_visits").select(VISIT_COLS).order("created_at", { ascending: false }).limit(500),
     supa.from("chat_messages").select("sender_name, created_at").order("created_at", { ascending: true }).limit(50_000),
     supa.from("page_visits").select("id", { count: "exact", head: true }),
-    // Narrow select — just id + created_at — sometimes schema caching strips new columns
-    supa.from("page_visits").select("id, created_at").order("created_at", { ascending: false }).limit(500),
-    // No ORDER BY — raw insertion order
-    supa.from("page_visits").select("id, created_at").limit(500),
-    // All ids regardless of filter
-    supa.from("page_visits").select("id").limit(2000),
   ]);
 
   // Debug: expose which Supabase this route is reading from, and the true
@@ -64,12 +70,7 @@ export async function GET(req: NextRequest) {
         page_visits_total: countRes.count ?? null,
         visits_error: visitsRes.error?.message ?? null,
         count_error: countRes.error?.message ?? null,
-        id_only_count: idOnlyRes.data?.length ?? null,
-        id_only_error: idOnlyRes.error?.message ?? null,
-        id_only_newest: idOnlyRes.data?.slice(0,3) ?? null,
-        no_order_count: noOrderRes.data?.length ?? null,
-        no_order_sample: noOrderRes.data?.slice(0,3) ?? null,
-        all_ids_count: allIdsRes.data?.length ?? null,
+        returned_rows: visitsRes.data?.length ?? null,
       },
     },
     { headers: { "cache-control": "no-store, no-cache, must-revalidate" } }
