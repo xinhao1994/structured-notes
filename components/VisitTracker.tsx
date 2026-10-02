@@ -109,15 +109,16 @@ export function VisitTracker() {
     }
   }, [pathname]);
 
-  // ─── 1b) On tab close / backgrounding, log one final "left" row via
-  // sendBeacon so the admin's "Last seen" updates to the actual moment the
-  // person went offline. sendBeacon is the only API that reliably fires
-  // during an unload — fetch is cancelled by the browser.
+  // ─── 1b) On tab CLOSE, log one final "left" row via sendBeacon.
+  // Only pagehide — NOT visibilitychange. visibilitychange fires every time
+  // the user switches apps on their phone and comes back, which created
+  // phantom "left-site" rows and made the dashboard look like data was
+  // disappearing. pagehide fires only on real tab close / navigation away.
   useEffect(() => {
     if (typeof window === "undefined") return;
     if (isAdminDevice() || (pathname && pathname.startsWith("/admin"))) return;
 
-    const onLeaving = () => {
+    const onPageHide = () => {
       try {
         const visitorId = window.localStorage.getItem(VISITOR_KEY) || "";
         const sessionId = window.sessionStorage.getItem(SESSION_KEY) || "";
@@ -131,56 +132,68 @@ export function VisitTracker() {
         navigator.sendBeacon?.("/api/track", blob);
       } catch {}
     };
-    // pagehide fires on close + nav away + bfcache. visibilitychange catches
-    // tab-hide on mobile. Both are needed for full coverage.
-    const onVis = () => { if (document.visibilityState === "hidden") onLeaving(); };
-    window.addEventListener("pagehide", onLeaving);
-    document.addEventListener("visibilitychange", onVis);
-    return () => {
-      window.removeEventListener("pagehide", onLeaving);
-      document.removeEventListener("visibilitychange", onVis);
-    };
+    window.addEventListener("pagehide", onPageHide);
+    return () => window.removeEventListener("pagehide", onPageHide);
   }, [pathname]);
 
-  // ─── 2) Global presence channel — "who's on the site right now" ─────
+  // ─── 2) Global presence channel — "who's on the site right now".
+  // Robust against mobile WebSocket drops:
+  //   - Re-asserts presence every 30s so transient disconnects don't boot
+  //     the user from Live Now
+  //   - Re-asserts on visibilitychange → visible (coming back from
+  //     background) which is when mobile Safari reconnects the socket
   useEffect(() => {
     if (typeof window === "undefined") return;
-    // Admin devices don't broadcast presence either
     if (isAdminDevice()) return;
     const supa = getSupabaseBrowser();
     if (!supa) return;
 
     const visitorId = getOrCreate(window.localStorage, VISITOR_KEY);
-    let chatName = "";
-    try { chatName = window.localStorage.getItem(NAME_KEY) || ""; } catch {}
+    const getChatName = () => {
+      try { return window.localStorage.getItem(NAME_KEY) || null; } catch { return null; }
+    };
 
     const ch = supa.channel(GLOBAL_PRESENCE_CHANNEL, {
       config: { presence: { key: visitorId } },
     });
 
-    ch.subscribe(async (status) => {
-      if (status !== "SUBSCRIBED") return;
+    const trackState = async () => {
       try {
         await ch.track({
           visitor_id: visitorId,
-          chat_name: chatName || null,
+          chat_name: getChatName(),
           path: pathname || "/",
           device: detectDevice(),
           browser: detectBrowser(),
-          joined_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
         });
       } catch {}
-    });
+    };
 
+    ch.subscribe(async (status) => {
+      if (status === "SUBSCRIBED") trackState();
+    });
     channelRef.current = ch;
 
+    // Heartbeat: re-assert presence every 30s so we survive transient drops
+    const heartbeat = window.setInterval(() => {
+      if (document.visibilityState === "visible") trackState();
+    }, 30_000);
+
+    // On tab-foreground, re-assert immediately (mobile Safari drops socket
+    // when backgrounded, auto-reconnects on foreground)
+    const onVis = () => {
+      if (document.visibilityState === "visible") trackState();
+    };
+    document.addEventListener("visibilitychange", onVis);
+
     return () => {
+      window.clearInterval(heartbeat);
+      document.removeEventListener("visibilitychange", onVis);
       try { ch.untrack(); } catch {}
       try { supa.removeChannel(ch); } catch {}
       channelRef.current = null;
     };
-    // Only re-create the channel per visitor, not per path — we update
-    // path via ch.track() in the next effect.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

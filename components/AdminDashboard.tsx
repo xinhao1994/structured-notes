@@ -202,44 +202,17 @@ export function AdminDashboard({
     ch.on("presence", { event: "sync" },  refresh);
     ch.on("presence", { event: "join" },  refresh);
     ch.on("presence", { event: "leave" }, (payload: any) => {
+      // ONLY update the local "went offline X ago" display — don't insert
+      // phantom rows into the DB. Mobile browsers drop the WebSocket when
+      // backgrounded and reconnect on foreground, so we treat leaves as
+      // transient and let presence re-sync.
       try {
         const leftKey = payload?.key as string | undefined;
-        if (!leftKey || leftKey === "admin-dashboard") { refresh(); return; }
-
-        // 1) Immediate UI update + localStorage persistence
-        const nowMs = Date.now();
-        leftAtRef.current.set(leftKey, nowMs);
-        setLeftTick((t) => t + 1);
-        persistLeftAt();
-
-        // 2) Fire-and-forget: insert a leave-row into Supabase so refresh /
-        //    other admins see the offline moment too. Enrich with the
-        //    leaver's last-known info (IP, geo, device) from the visits list.
-        const leaverPresence = (payload?.leftPresences?.[0] || {}) as Partial<PresenceEntry>;
-        const lastVisit = (data.visits || []).find((v) => v.visitor_id === leftKey);
-        const bodyData = {
-          visitorId: leftKey,
-          sessionId: "left-" + nowMs,
-          chatName: leaverPresence.chat_name || lastVisit?.chat_name || null,
-          path: leaverPresence.path || lastVisit?.path || "/",
-          referrer: "left-site",
-          ip: lastVisit?.ip || null,
-          country: lastVisit?.country || null,
-          city: lastVisit?.city || null,
-          region: lastVisit?.region || null,
-          userAgent: lastVisit?.user_agent || "",
-          deviceType: leaverPresence.device || lastVisit?.device_type || null,
-          browser: leaverPresence.browser || lastVisit?.browser || null,
-          os: lastVisit?.os || null,
-        };
-        fetch("/api/track", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-admin-forwarded": "1",
-          },
-          body: JSON.stringify(bodyData),
-        }).catch(() => {});
+        if (leftKey && leftKey !== "admin-dashboard") {
+          leftAtRef.current.set(leftKey, Date.now());
+          setLeftTick((t) => t + 1);
+          persistLeftAt();
+        }
       } catch {}
       refresh();
     });
