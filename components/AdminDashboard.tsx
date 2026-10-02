@@ -15,7 +15,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getSupabaseBrowser } from "@/lib/supabaseClient";
-import { GLOBAL_PRESENCE_CHANNEL } from "@/components/VisitTracker";
+import { GLOBAL_PRESENCE_CHANNEL, ADMIN_DEVICE_KEY } from "@/components/VisitTracker";
 
 interface Visit {
   id: string;
@@ -93,6 +93,24 @@ export function AdminDashboard({
   const [newVisitorIds, setNewVisitorIds] = useState<Set<string>>(new Set());
   const [liveNow, setLiveNow] = useState<PresenceEntry[]>([]);
   const [realtimeStatus, setRealtimeStatus] = useState<"connecting" | "live" | "down">("connecting");
+  // When a visitor leaves presence, remember the moment so we can display
+  // "Last seen 15s ago" without waiting for a visit row to appear.
+  const leftAtRef = useRef<Map<string, number>>(new Map());
+  const [, setLeftTick] = useState(0); // force re-render when leftAtRef mutates
+  const [isAdminDevice, setIsAdminDevice] = useState(false);
+
+  // Read admin-device flag from localStorage on mount
+  useEffect(() => {
+    try { setIsAdminDevice(window.localStorage.getItem(ADMIN_DEVICE_KEY) === "1"); } catch {}
+  }, []);
+  const toggleAdminDevice = () => {
+    try {
+      const next = !isAdminDevice;
+      if (next) window.localStorage.setItem(ADMIN_DEVICE_KEY, "1");
+      else window.localStorage.removeItem(ADMIN_DEVICE_KEY);
+      setIsAdminDevice(next);
+    } catch {}
+  };
 
   // ─── Shared helper: merge one new visit into state with flash + dedupe ──
   const applyNewVisit = (v: Visit) => {
@@ -154,7 +172,18 @@ export function AdminDashboard({
 
     ch.on("presence", { event: "sync" },  refresh);
     ch.on("presence", { event: "join" },  refresh);
-    ch.on("presence", { event: "leave" }, refresh);
+    ch.on("presence", { event: "leave" }, (payload: any) => {
+      // Record the exact moment this visitor dropped off → used for "last
+      // seen 10s ago" in the Unique Visitors table.
+      try {
+        const leftKey = payload?.key as string | undefined;
+        if (leftKey && leftKey !== "admin-dashboard") {
+          leftAtRef.current.set(leftKey, Date.now());
+          setLeftTick((t) => t + 1);
+        }
+      } catch {}
+      refresh();
+    });
     ch.subscribe(async (status) => {
       if (status === "SUBSCRIBED") {
         // We join as "admin-dashboard" (hidden) so we can see others
@@ -372,6 +401,19 @@ export function AdminDashboard({
               <span>· polling every {POLL_MS / 1000}s</span>
             </span>
             <span>updated {relSince(new Date(lastPingAt).toISOString())}</span>
+            <button
+              onClick={toggleAdminDevice}
+              className={`rounded px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${
+                isAdminDevice
+                  ? "bg-success/20 text-success"
+                  : "bg-[var(--surface-2)] text-[var(--text-muted)] hover:text-[var(--text)]"
+              }`}
+              title={isAdminDevice
+                ? "This device is marked as admin — its visits are NOT tracked. Click to un-mark."
+                : "Mark this device as admin so its visits stop appearing in Recent Visits & Live Now."}
+            >
+              {isAdminDevice ? "✓ Admin device" : "Mark as admin device"}
+            </button>
           </div>
         </div>
         <p className="text-[10.5px] text-[var(--text-muted)]">
@@ -475,7 +517,24 @@ export function AdminDashboard({
                   <td className="px-2 py-1.5 tabular text-right">{v.visitCount}</td>
                   <td className="px-2 py-1.5 tabular">{fmtWhen(v.firstAt)}</td>
                   <td className="px-2 py-1.5 tabular">
-                    {fmtWhen(v.lastAt)} <span className="text-[9.5px] text-[var(--text-muted)]">({relSince(v.lastAt)})</span>
+                    {(() => {
+                      // Live-aware Last Seen: presence > offline-leave > last visit row
+                      const isLive = liveNow.some((p) => p.visitor_id === v.visitorId);
+                      const leftMs = leftAtRef.current.get(v.visitorId);
+                      if (isLive) {
+                        return (
+                          <span className="text-success font-medium">
+                            <span className="inline-block h-1.5 w-1.5 rounded-full bg-success admin-live-dot mr-1 align-middle" />
+                            Online now
+                          </span>
+                        );
+                      }
+                      if (leftMs && leftMs > Date.parse(v.lastAt)) {
+                        const iso = new Date(leftMs).toISOString();
+                        return <>{fmtWhen(iso)} <span className="text-[9.5px] text-[var(--text-muted)]">(went offline {relSince(iso)})</span></>;
+                      }
+                      return <>{fmtWhen(v.lastAt)} <span className="text-[9.5px] text-[var(--text-muted)]">({relSince(v.lastAt)})</span></>;
+                    })()}
                   </td>
                 </tr>
               ))}

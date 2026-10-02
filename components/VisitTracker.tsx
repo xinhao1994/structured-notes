@@ -20,9 +20,18 @@ import type { RealtimeChannel } from "@supabase/supabase-js";
 const NAME_KEY = "snd.chat.senderName.v1";
 const VISITOR_KEY = "snd.visitor_id";
 const SESSION_KEY = "snd.session_id";
+// If this flag is set in localStorage, we treat the device as the admin's
+// own and skip ALL tracking (no /api/track POSTs, no presence channel join).
+// The admin dashboard provides a one-click button to set it.
+export const ADMIN_DEVICE_KEY = "snd.admin_device";
 
 // Shared constant also referenced by AdminDashboard
 export const GLOBAL_PRESENCE_CHANNEL = "snd:presence:global";
+
+function isAdminDevice(): boolean {
+  try { return window.localStorage.getItem(ADMIN_DEVICE_KEY) === "1"; }
+  catch { return false; }
+}
 
 function safeUUID(): string {
   try {
@@ -69,6 +78,8 @@ export function VisitTracker() {
   // ─── 1) POST /api/track on every path change ─────────────────────────
   useEffect(() => {
     if (typeof window === "undefined") return;
+    // Admin device opt-out AND /admin pages never get tracked
+    if (isAdminDevice() || (pathname && pathname.startsWith("/admin"))) return;
     // Dedupe: React may double-invoke effects in strict mode
     if (trackedPathRef.current === pathname) return;
     trackedPathRef.current = pathname || "";
@@ -84,8 +95,6 @@ export function VisitTracker() {
       referrer: document.referrer || "",
     });
 
-    // Prefer fetch with keepalive — works for in-page navigations.
-    // sendBeacon fires on actual unload (closing tab).
     try {
       fetch("/api/track", {
         method: "POST",
@@ -93,7 +102,6 @@ export function VisitTracker() {
         keepalive: true,
         body: payload,
       }).catch(() => {
-        // Last-resort fallback
         try { navigator.sendBeacon?.("/api/track", payload); } catch {}
       });
     } catch {
@@ -101,9 +109,44 @@ export function VisitTracker() {
     }
   }, [pathname]);
 
+  // ─── 1b) On tab close / backgrounding, log one final "left" row via
+  // sendBeacon so the admin's "Last seen" updates to the actual moment the
+  // person went offline. sendBeacon is the only API that reliably fires
+  // during an unload — fetch is cancelled by the browser.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (isAdminDevice() || (pathname && pathname.startsWith("/admin"))) return;
+
+    const onLeaving = () => {
+      try {
+        const visitorId = window.localStorage.getItem(VISITOR_KEY) || "";
+        const sessionId = window.sessionStorage.getItem(SESSION_KEY) || "";
+        const chatName = window.localStorage.getItem(NAME_KEY) || "";
+        const payload = JSON.stringify({
+          visitorId, sessionId, chatName,
+          path: pathname || "/",
+          referrer: "left-site",
+        });
+        const blob = new Blob([payload], { type: "application/json" });
+        navigator.sendBeacon?.("/api/track", blob);
+      } catch {}
+    };
+    // pagehide fires on close + nav away + bfcache. visibilitychange catches
+    // tab-hide on mobile. Both are needed for full coverage.
+    const onVis = () => { if (document.visibilityState === "hidden") onLeaving(); };
+    window.addEventListener("pagehide", onLeaving);
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      window.removeEventListener("pagehide", onLeaving);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [pathname]);
+
   // ─── 2) Global presence channel — "who's on the site right now" ─────
   useEffect(() => {
     if (typeof window === "undefined") return;
+    // Admin devices don't broadcast presence either
+    if (isAdminDevice()) return;
     const supa = getSupabaseBrowser();
     if (!supa) return;
 
