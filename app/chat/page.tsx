@@ -215,7 +215,15 @@ export default function ChatPage() {
   useEffect(() => {
     try {
       const saved = localStorage.getItem(NAME_KEY);
-      if (saved) setName(saved); else setEditingName(true);
+      if (saved) {
+        setName(saved);
+        // Mirror the saved name into a cookie so Edge Middleware can read it
+        // for admin-dashboard visit tagging. Harmless if already set.
+        try {
+          const encoded = encodeURIComponent(saved);
+          document.cookie = `snd_name=${encoded}; path=/; max-age=${60*60*24*365}; samesite=lax`;
+        } catch {}
+      } else setEditingName(true);
     } catch {}
   }, []);
 
@@ -328,6 +336,12 @@ export default function ChatPage() {
     const v = name.trim();
     if (!v) return;
     try { localStorage.setItem(NAME_KEY, v); } catch {}
+    // Also set a cookie so Edge Middleware (middleware.ts) can tag future
+    // visits with this name in the admin dashboard. 1-year TTL.
+    try {
+      const encoded = encodeURIComponent(v);
+      document.cookie = `snd_name=${encoded}; path=/; max-age=${60*60*24*365}; samesite=lax`;
+    } catch {}
     setEditingName(false);
   }
 
