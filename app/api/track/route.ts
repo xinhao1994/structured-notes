@@ -1,5 +1,12 @@
 // POST /api/track — logs a single page visit into page_visits.
-// Fire-and-forget from the client. Silently succeeds (never breaks the page).
+// Called by Edge Middleware (middleware.ts) on every page request. The
+// middleware passes the authoritative edge-captured data in the JSON body
+// (because when middleware proxies via fetch, this route sees middleware's
+// own headers, not the original user's).
+//
+// Also accepts legacy client-side calls (older cached JS may still POST
+// here); in that case we fall back to extracting IP/UA/geo from the
+// request headers.
 
 import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
@@ -14,14 +21,15 @@ function parseUA(ua: string): UAInfo {
   const isMobile = /Mobile|iPhone|iPod|Android/.test(ua) && !isTablet;
   const deviceType = isTablet ? "tablet" : isMobile ? "mobile" : "desktop";
 
-  // Browser detection — order matters (Chrome UA also contains "Safari" etc.)
   let browser = "Unknown";
-  if (/Edg\//.test(ua)) browser = "Edge";
-  else if (/OPR\/|Opera/.test(ua)) browser = "Opera";
-  else if (/SamsungBrowser/.test(ua)) browser = "Samsung";
-  else if (/Chrome\//.test(ua)) browser = "Chrome";
-  else if (/Firefox\//.test(ua)) browser = "Firefox";
-  else if (/Safari\//.test(ua)) browser = "Safari";
+  if (/Edg\//.test(ua))                browser = "Edge";
+  else if (/OPR\/|Opera/.test(ua))     browser = "Opera";
+  else if (/SamsungBrowser/.test(ua))  browser = "Samsung";
+  else if (/CriOS\//.test(ua))         browser = "Chrome iOS";
+  else if (/FxiOS\//.test(ua))         browser = "Firefox iOS";
+  else if (/Chrome\//.test(ua))        browser = "Chrome";
+  else if (/Firefox\//.test(ua))       browser = "Firefox";
+  else if (/Safari\//.test(ua))        browser = "Safari";
 
   let os = "Unknown";
   if (/iPhone|iPad|iPod/.test(ua)) {
@@ -37,75 +45,86 @@ function parseUA(ua: string): UAInfo {
     const m = ua.match(/Windows NT ([\d.]+)/);
     const v = m?.[1];
     os = v === "10.0" ? "Windows 10/11" : v ? `Windows ${v}` : "Windows";
+  } else if (/CrOS/.test(ua)) {
+    os = "Chrome OS";
   } else if (/Linux/.test(ua)) {
-    os = /CrOS/.test(ua) ? "Chrome OS" : "Linux";
+    os = "Linux";
   }
   return { deviceType, browser, os };
 }
 
-// Skip anything that isn't a real human browser. Covers:
-//  - No user-agent (curl/wget/node without UA)
-//  - Common bot UAs (Googlebot, uptime monitors, etc.)
-//  - Vercel's own build-time prerendering worker (identifies with the
-//    x-vercel-deployment-url header or a screenshot-service UA)
-//  - Any UA without "Mozilla" — genuine browsers all send it
-function isBotOrInfra(req: NextRequest, ua: string): boolean {
+const BOT_PATTERNS = [
+  "bot", "spider", "crawler", "curl", "wget", "python-requests",
+  "node-fetch", "axios", "okhttp", "java/", "go-http-client",
+  "headless", "phantomjs", "selenium", "playwright", "puppeteer",
+  "uptimerobot", "pingdom", "statuscake", "monitor", "prerender",
+  "vercel-screenshot", "vercel-favicon", "vercel-og", "lighthouse",
+  "facebookexternalhit", "twitterbot", "slackbot", "whatsapp",
+  "discordbot", "linkedinbot",
+];
+
+function isBot(ua: string): boolean {
   if (!ua) return true;
   if (!/Mozilla/i.test(ua)) return true;
-  // Known-bot substrings
-  const botPatterns = [
-    "bot", "spider", "crawler", "curl", "wget", "python-requests",
-    "node-fetch", "axios", "okhttp", "java/", "go-http-client",
-    "headless", "phantomjs", "selenium", "playwright", "puppeteer",
-    "uptimerobot", "pingdom", "statuscake", "monitor", "prerender",
-    "vercel-screenshot", "vercel-favicon", "vercel-og",
-    "facebookexternalhit", "twitterbot", "slackbot", "whatsapp",
-    "discordbot", "linkedinbot",
-  ];
   const lower = ua.toLowerCase();
-  if (botPatterns.some((p) => lower.includes(p))) return true;
-  // Vercel's build worker sets this header
-  if (req.headers.get("x-vercel-deployment-url")) return true;
-  // Vercel edge sends x-vercel-internal for their own requests
-  if (req.headers.get("x-vercel-internal")) return true;
-  // A visit must have a path in the payload — no path suggests background ping
-  return false;
+  return BOT_PATTERNS.some((p) => lower.includes(p));
 }
 
 export async function POST(req: NextRequest) {
   const supa = getSupabaseAdmin();
-  // Never fail the client if tracking is misconfigured — silent no-op.
-  if (!supa) return NextResponse.json({ ok: false });
-
-  const rawUA = req.headers.get("user-agent") || "";
-  if (isBotOrInfra(req, rawUA)) {
-    return NextResponse.json({ ok: true, skipped: "bot" });
+  if (!supa) {
+    console.log("[track] no supabase admin client — missing env vars");
+    return NextResponse.json({ ok: false, reason: "no-supabase" });
   }
+
+  // Was this called by our Edge Middleware? If so, the body is authoritative.
+  const fromMiddleware = req.headers.get("x-mw-forwarded") === "1";
 
   let body: any = {};
   try { body = await req.json(); } catch {}
 
-  const s = (v: unknown, max = 200) => String(v ?? "").slice(0, max) || null;
+  const s = (v: unknown, max = 500) => {
+    const str = String(v ?? "").slice(0, max);
+    return str || null;
+  };
+
+  // ─── Resolve each field: middleware body first, then header fallback ───
+  const ua = fromMiddleware
+    ? (s(body.userAgent) || "")
+    : (req.headers.get("user-agent") || "");
+
+  if (!fromMiddleware && isBot(ua)) {
+    // Client-side legacy call from a bot — skip
+    return NextResponse.json({ ok: true, skipped: "bot" });
+  }
+
+  const parsed = parseUA(ua);
+
+  const ip = fromMiddleware
+    ? s(body.ip, 64)
+    : ((req.headers.get("x-forwarded-for") || "").split(",")[0] || "").trim()
+        || req.headers.get("x-real-ip") || null;
+
+  const country = fromMiddleware ? s(body.country, 8) : (req.headers.get("x-vercel-ip-country") || null);
+
+  let city: string | null = null;
+  if (fromMiddleware) {
+    city = s(body.city, 128);
+  } else {
+    const cityRaw = req.headers.get("x-vercel-ip-city");
+    if (cityRaw) { try { city = decodeURIComponent(cityRaw); } catch { city = cityRaw; } }
+  }
+
+  const region = fromMiddleware ? s(body.region, 64) : (req.headers.get("x-vercel-ip-country-region") || null);
+
   const visitorId = s(body.visitorId, 64);
   const sessionId = s(body.sessionId, 64);
   const chatName  = s(body.chatName,  64);
   const path      = s(body.path,      200);
   const referrer  = s(body.referrer,  500);
 
-  const parsed = parseUA(rawUA);
-
-  // Real client IP — x-forwarded-for is a comma-separated chain, first is client
-  const xff = req.headers.get("x-forwarded-for") || "";
-  const ip = (xff.split(",")[0] || "").trim() || req.headers.get("x-real-ip") || null;
-
-  // Geolocation from Vercel edge headers (free on every deployment)
-  const country = req.headers.get("x-vercel-ip-country") || null;
-  const cityRaw = req.headers.get("x-vercel-ip-city");
-  const city = cityRaw ? (() => { try { return decodeURIComponent(cityRaw); } catch { return cityRaw; } })() : null;
-  const region = req.headers.get("x-vercel-ip-country-region") || null;
-
   try {
-    await supa.from("page_visits").insert({
+    const { error } = await supa.from("page_visits").insert({
       visitor_id: visitorId,
       session_id: sessionId,
       chat_name: chatName,
@@ -113,16 +132,21 @@ export async function POST(req: NextRequest) {
       country,
       city,
       region,
-      user_agent: rawUA.slice(0, 500) || null,
+      user_agent: ua.slice(0, 500) || null,
       device_type: parsed.deviceType,
       browser: parsed.browser,
       os: parsed.os,
       path,
       referrer,
     });
-  } catch {}
+    if (error) {
+      console.log(`[track] supabase insert error: ${error.message}`);
+      return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
+    }
+  } catch (e: any) {
+    console.log(`[track] insert threw: ${String(e?.message || e)}`);
+    return NextResponse.json({ ok: false, error: String(e?.message || e) }, { status: 500 });
+  }
 
-  return NextResponse.json({ ok: true }, {
-    headers: { "cache-control": "no-store" },
-  });
+  return NextResponse.json({ ok: true }, { headers: { "cache-control": "no-store" } });
 }
