@@ -364,8 +364,22 @@ export function AdminDashboard({
         if (!cur.lastName && v.chat_name) cur.lastName = v.chat_name;
       }
     }
-    return Array.from(map.values()).sort((a, b) => b.lastAt.localeCompare(a.lastAt));
-  }, [visits]);
+    // Effective last-seen uses live presence + offline-leave timestamps so
+    // the row sort stays accurate even before Supabase catches up:
+    //   - Online now  → Date.now()  (always wins → top of list)
+    //   - Recently offline → the leftAt moment
+    //   - Otherwise → the database created_at of the latest visit row
+    const liveSet = new Set(liveNow.map((p) => p.visitor_id));
+    return Array.from(map.values()).sort((a, b) => {
+      const effA = liveSet.has(a.visitorId)
+        ? Number.MAX_SAFE_INTEGER
+        : Math.max(Date.parse(a.lastAt), leftAtRef.current.get(a.visitorId) ?? 0);
+      const effB = liveSet.has(b.visitorId)
+        ? Number.MAX_SAFE_INTEGER
+        : Math.max(Date.parse(b.lastAt), leftAtRef.current.get(b.visitorId) ?? 0);
+      return effB - effA;
+    });
+  }, [visits, liveNow]);
 
   return (
     <div className="mx-auto max-w-[1400px] p-4 sm:p-6">
