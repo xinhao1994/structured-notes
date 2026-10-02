@@ -1,37 +1,38 @@
 "use client";
 
-// VisitTracker — mounts once in the root layout. Does TWO things:
+// VisitTracker — the AUTHORITATIVE visit + presence logger. Replaces the
+// Supabase Realtime presence approach (which was unreliable on mobile Safari:
+// the WebSocket drops every few seconds on cellular, triggering false
+// "leave" events that made Signal keep disappearing from the dashboard).
 //
-// 1) POST /api/track on every path change (initial mount + navigations).
-//    Uses `keepalive: true` + `sendBeacon` fallback so the request survives
-//    tab-close. This is the AUTHORITATIVE visit logger — the Edge Middleware
-//    tracker is a backup.
+// New model — pure HTTP, 100% reliable:
+//   1. On every page view: POST /api/track           → creates a visit row
+//   2. Every 15s while the tab is visible: POST /api/track {mode:"heartbeat"}
+//                                                   → UPDATEs last_heartbeat_at
+//   3. On tab close (pagehide + visibilitychange→hidden):
+//                     sendBeacon /api/track {mode:"offline"}
+//                                                   → UPDATEs offline_at
 //
-// 2) Joins a global Supabase Realtime presence channel so the admin
-//    dashboard can show a green dot for every live visitor. Presence state
-//    carries visitor_id, chat_name, path, device info — the dashboard uses
-//    it to render "who's on the site right now".
+// The admin dashboard considers a visitor LIVE when their latest row has
+//   offline_at IS NULL  AND  last_heartbeat_at >= NOW() - 45 seconds
+// So a phone can miss up to 2 consecutive heartbeats before showing offline,
+// which comfortably covers cellular jitter.
 
 import { useEffect, useRef } from "react";
 import { usePathname } from "next/navigation";
-import { getSupabaseBrowser } from "@/lib/supabaseClient";
-import type { RealtimeChannel } from "@supabase/supabase-js";
 
 const NAME_KEY = "snd.chat.senderName.v1";
 const VISITOR_KEY = "snd.visitor_id";
 const SESSION_KEY = "snd.session_id";
 // If this flag is set in localStorage, we treat the device as the admin's
-// own and skip ALL tracking (no /api/track POSTs, no presence channel join).
-// The admin dashboard provides a one-click button to set it.
+// own and skip ALL tracking. The admin dashboard has a one-click toggle.
 export const ADMIN_DEVICE_KEY = "snd.admin_device";
 
-// Shared constant also referenced by AdminDashboard
+// Kept exported so existing imports in AdminDashboard don't break — but the
+// dashboard no longer uses it; we use heartbeat timestamps instead.
 export const GLOBAL_PRESENCE_CHANNEL = "snd:presence:global";
 
-function isAdminDevice(): boolean {
-  try { return window.localStorage.getItem(ADMIN_DEVICE_KEY) === "1"; }
-  catch { return false; }
-}
+const HEARTBEAT_MS = 15_000;
 
 function safeUUID(): string {
   try {
@@ -50,168 +51,96 @@ function getOrCreate(store: Storage, key: string): string {
   } catch { return ""; }
 }
 
-function detectDevice(): string {
-  const ua = navigator.userAgent;
-  if (/iPad|Android(?!.*Mobile)|Tablet/.test(ua)) return "tablet";
-  if (/Mobile|iPhone|iPod|Android/.test(ua)) return "mobile";
-  return "desktop";
+function isAdminDevice(): boolean {
+  try { return window.localStorage.getItem(ADMIN_DEVICE_KEY) === "1"; }
+  catch { return false; }
 }
 
-function detectBrowser(): string {
-  const ua = navigator.userAgent;
-  if (/Edg\//.test(ua)) return "Edge";
-  if (/OPR\/|Opera/.test(ua)) return "Opera";
-  if (/SamsungBrowser/.test(ua)) return "Samsung";
-  if (/CriOS\//.test(ua)) return "Chrome";
-  if (/FxiOS\//.test(ua)) return "Firefox";
-  if (/Chrome\//.test(ua)) return "Chrome";
-  if (/Firefox\//.test(ua)) return "Firefox";
-  if (/Safari\//.test(ua)) return "Safari";
-  return "Unknown";
+function shouldSkip(pathname: string | null): boolean {
+  if (isAdminDevice()) return true;
+  if (pathname && pathname.startsWith("/admin")) return true;
+  return false;
+}
+
+async function post(mode: "visit" | "heartbeat" | "offline", pathname: string | null) {
+  try {
+    const visitorId = window.localStorage.getItem(VISITOR_KEY) || "";
+    const sessionId = window.sessionStorage.getItem(SESSION_KEY) || "";
+    const chatName  = window.localStorage.getItem(NAME_KEY) || "";
+    const payload = JSON.stringify({
+      visitorId, sessionId, chatName,
+      path: pathname || "/",
+      referrer: mode === "visit" ? (document.referrer || "") : mode,
+      mode,
+    });
+    if (mode === "offline") {
+      // Beacon is the only API that reliably fires during unload
+      try {
+        const blob = new Blob([payload], { type: "application/json" });
+        if (navigator.sendBeacon?.("/api/track", blob)) return;
+      } catch {}
+    }
+    await fetch("/api/track", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      keepalive: true,
+      body: payload,
+    }).catch(() => {});
+  } catch {}
 }
 
 export function VisitTracker() {
   const pathname = usePathname();
-  const channelRef = useRef<RealtimeChannel | null>(null);
   const trackedPathRef = useRef<string>("");
 
-  // ─── 1) POST /api/track on every path change ─────────────────────────
+  // Ensure identifiers exist on mount so heartbeats can reference them
   useEffect(() => {
     if (typeof window === "undefined") return;
-    // Admin device opt-out AND /admin pages never get tracked
-    if (isAdminDevice() || (pathname && pathname.startsWith("/admin"))) return;
-    // Dedupe: React may double-invoke effects in strict mode
-    if (trackedPathRef.current === pathname) return;
-    trackedPathRef.current = pathname || "";
-
-    const visitorId = getOrCreate(window.localStorage, VISITOR_KEY);
-    const sessionId = getOrCreate(window.sessionStorage, SESSION_KEY);
-    let chatName = "";
-    try { chatName = window.localStorage.getItem(NAME_KEY) || ""; } catch {}
-
-    const payload = JSON.stringify({
-      visitorId, sessionId, chatName,
-      path: pathname,
-      referrer: document.referrer || "",
-    });
-
-    try {
-      fetch("/api/track", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        keepalive: true,
-        body: payload,
-      }).catch(() => {
-        try { navigator.sendBeacon?.("/api/track", payload); } catch {}
-      });
-    } catch {
-      try { navigator.sendBeacon?.("/api/track", payload); } catch {}
-    }
-  }, [pathname]);
-
-  // ─── 1b) On tab CLOSE, log one final "left" row via sendBeacon.
-  // Only pagehide — NOT visibilitychange. visibilitychange fires every time
-  // the user switches apps on their phone and comes back, which created
-  // phantom "left-site" rows and made the dashboard look like data was
-  // disappearing. pagehide fires only on real tab close / navigation away.
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    if (isAdminDevice() || (pathname && pathname.startsWith("/admin"))) return;
-
-    const onPageHide = () => {
-      try {
-        const visitorId = window.localStorage.getItem(VISITOR_KEY) || "";
-        const sessionId = window.sessionStorage.getItem(SESSION_KEY) || "";
-        const chatName = window.localStorage.getItem(NAME_KEY) || "";
-        const payload = JSON.stringify({
-          visitorId, sessionId, chatName,
-          path: pathname || "/",
-          referrer: "left-site",
-        });
-        const blob = new Blob([payload], { type: "application/json" });
-        navigator.sendBeacon?.("/api/track", blob);
-      } catch {}
-    };
-    window.addEventListener("pagehide", onPageHide);
-    return () => window.removeEventListener("pagehide", onPageHide);
-  }, [pathname]);
-
-  // ─── 2) Global presence channel — "who's on the site right now".
-  // Robust against mobile WebSocket drops:
-  //   - Re-asserts presence every 30s so transient disconnects don't boot
-  //     the user from Live Now
-  //   - Re-asserts on visibilitychange → visible (coming back from
-  //     background) which is when mobile Safari reconnects the socket
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    if (isAdminDevice()) return;
-    const supa = getSupabaseBrowser();
-    if (!supa) return;
-
-    const visitorId = getOrCreate(window.localStorage, VISITOR_KEY);
-    const getChatName = () => {
-      try { return window.localStorage.getItem(NAME_KEY) || null; } catch { return null; }
-    };
-
-    const ch = supa.channel(GLOBAL_PRESENCE_CHANNEL, {
-      config: { presence: { key: visitorId } },
-    });
-
-    const trackState = async () => {
-      try {
-        await ch.track({
-          visitor_id: visitorId,
-          chat_name: getChatName(),
-          path: pathname || "/",
-          device: detectDevice(),
-          browser: detectBrowser(),
-          updated_at: new Date().toISOString(),
-        });
-      } catch {}
-    };
-
-    ch.subscribe(async (status) => {
-      if (status === "SUBSCRIBED") trackState();
-    });
-    channelRef.current = ch;
-
-    // Heartbeat: re-assert presence every 30s so we survive transient drops
-    const heartbeat = window.setInterval(() => {
-      if (document.visibilityState === "visible") trackState();
-    }, 30_000);
-
-    // On tab-foreground, re-assert immediately (mobile Safari drops socket
-    // when backgrounded, auto-reconnects on foreground)
-    const onVis = () => {
-      if (document.visibilityState === "visible") trackState();
-    };
-    document.addEventListener("visibilitychange", onVis);
-
-    return () => {
-      window.clearInterval(heartbeat);
-      document.removeEventListener("visibilitychange", onVis);
-      try { ch.untrack(); } catch {}
-      try { supa.removeChannel(ch); } catch {}
-      channelRef.current = null;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    getOrCreate(window.localStorage, VISITOR_KEY);
+    getOrCreate(window.sessionStorage, SESSION_KEY);
   }, []);
 
-  // Update presence state when the path changes (same channel, no re-subscribe)
+  // ─── Fire a VISIT POST on every path change ──────────────────────────
   useEffect(() => {
-    const ch = channelRef.current;
-    if (!ch) return;
-    let chatName = "";
-    try { chatName = window.localStorage.getItem(NAME_KEY) || ""; } catch {}
-    const visitorId = getOrCreate(window.localStorage, VISITOR_KEY);
-    ch.track({
-      visitor_id: visitorId,
-      chat_name: chatName || null,
-      path: pathname || "/",
-      device: detectDevice(),
-      browser: detectBrowser(),
-      updated_at: new Date().toISOString(),
-    }).catch(() => {});
+    if (typeof window === "undefined") return;
+    if (shouldSkip(pathname)) return;
+    if (trackedPathRef.current === pathname) return;
+    trackedPathRef.current = pathname || "";
+    post("visit", pathname);
+  }, [pathname]);
+
+  // ─── 15-second heartbeat while the tab is visible ────────────────────
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (shouldSkip(pathname)) return;
+
+    const beat = () => {
+      if (document.visibilityState === "visible") post("heartbeat", pathname);
+    };
+    // Fire one right away so the dashboard knows the user is active without
+    // waiting the full 15 seconds
+    beat();
+    const interval = window.setInterval(beat, HEARTBEAT_MS);
+    // When the tab becomes visible again (e.g. phone unlocked), heartbeat
+    // immediately so Live Now updates fast
+    const onVis = () => { if (document.visibilityState === "visible") beat(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [pathname]);
+
+  // ─── Final OFFLINE beacon on actual tab close ────────────────────────
+  // Only pagehide — NOT visibilitychange. The heartbeat going stale (no
+  // ping in 45s) already handles backgrounded tabs, so firing offline on
+  // every background→foreground cycle would create unwanted flicker.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (shouldSkip(pathname)) return;
+    const onPageHide = () => post("offline", pathname);
+    window.addEventListener("pagehide", onPageHide);
+    return () => window.removeEventListener("pagehide", onPageHide);
   }, [pathname]);
 
   return null;

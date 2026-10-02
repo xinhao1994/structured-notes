@@ -46,6 +46,7 @@ export async function GET(req: NextRequest) {
     "ip", "country", "city", "region",
     "device_type", "browser", "os",
     "path", "referrer", "created_at",
+    "last_heartbeat_at", "offline_at",
   ].join(", ");
 
   const [visitsRes, msgsRes, countRes] = await Promise.all([

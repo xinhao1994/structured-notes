@@ -33,6 +33,8 @@ interface Visit {
   path: string | null;
   referrer: string | null;
   created_at: string;
+  last_heartbeat_at: string | null;
+  offline_at: string | null;
 }
 
 interface ChatMsg {
@@ -99,6 +101,14 @@ export function AdminDashboard({
   const LEFT_STORAGE_KEY = "snd.admin.leftAt.v1";
   const leftAtRef = useRef<Map<string, number>>(new Map());
   const [, setLeftTick] = useState(0); // force re-render when leftAtRef mutates
+  // Grace-period: mobile browsers often lose their Supabase WebSocket for a
+  // few seconds (bad cellular, screen off, app switch) and the server fires
+  // a false "leave". We hold the visitor in a quarantine for 60s before
+  // actually treating them as offline — if they rejoin in that window (they
+  // almost always do), nothing visibly changes.
+  const LEAVE_GRACE_MS = 60_000;
+  const pendingLeavesRef = useRef<Map<string, number>>(new Map()); // key → timeout id
+  const quarantineRef = useRef<Map<string, PresenceEntry>>(new Map()); // kept-visible entries
   const [isAdminDevice, setIsAdminDevice] = useState(false);
 
   // Hydrate leftAtRef from localStorage on mount
@@ -180,52 +190,46 @@ export function AdminDashboard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ─── 2) Supabase Realtime PRESENCE: who's online right now ─────────────
+  // ─── 2) Live Now — derived from the visits data itself.
+  // A visitor is LIVE if their most recent row has:
+  //    offline_at IS NULL  AND  last_heartbeat_at within the last 45s
+  // No Supabase Realtime presence — pure heartbeat polling, which proved
+  // way more reliable on mobile Safari over cellular.
+  const HEARTBEAT_FRESH_MS = 45_000;
   useEffect(() => {
-    const supa = getSupabaseBrowser();
-    if (!supa) return;
-    const ch = supa.channel(GLOBAL_PRESENCE_CHANNEL, {
-      config: { presence: { key: "admin-dashboard" } },
-    });
-
-    const refresh = () => {
-      const state = ch.presenceState() as Record<string, PresenceEntry[]>;
-      const flat: PresenceEntry[] = [];
-      for (const key of Object.keys(state)) {
-        if (key === "admin-dashboard") continue; // don't show ourselves
-        const entries = state[key];
-        if (entries && entries[0]) flat.push(entries[0]);
+    const recompute = () => {
+      const now = Date.now();
+      const byVisitor = new Map<string, Visit>();
+      for (const v of data.visits) {
+        if (!v.visitor_id) continue;
+        const cur = byVisitor.get(v.visitor_id);
+        const vMs = Date.parse(v.last_heartbeat_at || v.created_at);
+        const curMs = cur ? Date.parse(cur.last_heartbeat_at || cur.created_at) : -1;
+        if (vMs > curMs) byVisitor.set(v.visitor_id, v);
       }
-      setLiveNow(flat);
-    };
-
-    ch.on("presence", { event: "sync" },  refresh);
-    ch.on("presence", { event: "join" },  refresh);
-    ch.on("presence", { event: "leave" }, (payload: any) => {
-      // ONLY update the local "went offline X ago" display — don't insert
-      // phantom rows into the DB. Mobile browsers drop the WebSocket when
-      // backgrounded and reconnect on foreground, so we treat leaves as
-      // transient and let presence re-sync.
-      try {
-        const leftKey = payload?.key as string | undefined;
-        if (leftKey && leftKey !== "admin-dashboard") {
-          leftAtRef.current.set(leftKey, Date.now());
-          setLeftTick((t) => t + 1);
-          persistLeftAt();
+      const live: PresenceEntry[] = [];
+      for (const v of byVisitor.values()) {
+        if (!v.visitor_id) continue;
+        if (v.offline_at) continue;
+        const hb = v.last_heartbeat_at ? Date.parse(v.last_heartbeat_at) : 0;
+        if (now - hb <= HEARTBEAT_FRESH_MS) {
+          live.push({
+            visitor_id: v.visitor_id,
+            chat_name: v.chat_name,
+            path: v.path || "/",
+            device: v.device_type || "unknown",
+            browser: v.browser || "unknown",
+          });
         }
-      } catch {}
-      refresh();
-    });
-    ch.subscribe(async (status) => {
-      if (status === "SUBSCRIBED") {
-        // We join as "admin-dashboard" (hidden) so we can see others
-        try { await ch.track({ role: "admin-dashboard" }); } catch {}
-        refresh();
       }
-    });
-    return () => { try { supa.removeChannel(ch); } catch {} };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+      setLiveNow(live);
+    };
+    recompute();
+    // Re-evaluate every 2s so a visitor flips to offline the moment their
+    // heartbeat goes stale, even between the 3-second data polls.
+    const id = window.setInterval(recompute, 2000);
+    return () => window.clearInterval(id);
+  }, [data.visits]);
 
   // Polling loop
   useEffect(() => {
@@ -371,6 +375,8 @@ export function AdminDashboard({
       lastOs: string | null;
       firstAt: string;
       lastAt: string;
+      lastHeartbeatAt: string | null; // newest across all session rows
+      offlineAt: string | null;        // from the LATEST visit row that has it
       visitCount: number;
     }>();
     for (const v of visits) {
@@ -388,29 +394,37 @@ export function AdminDashboard({
           lastOs: v.os,
           firstAt: v.created_at,
           lastAt: v.created_at,
+          lastHeartbeatAt: v.last_heartbeat_at,
+          offlineAt: v.offline_at,
           visitCount: 1,
         });
       } else {
         cur.visitCount++;
         if (v.created_at < cur.firstAt) cur.firstAt = v.created_at;
         if (!cur.lastName && v.chat_name) cur.lastName = v.chat_name;
+        // Track the newest heartbeat across this visitor's rows
+        if (v.last_heartbeat_at && (!cur.lastHeartbeatAt || v.last_heartbeat_at > cur.lastHeartbeatAt)) {
+          cur.lastHeartbeatAt = v.last_heartbeat_at;
+        }
+        // Keep the offline_at only if it's newer than any heartbeat
+        if (v.offline_at && (!cur.offlineAt || v.offline_at > cur.offlineAt)) {
+          cur.offlineAt = v.offline_at;
+        }
       }
     }
-    // Effective last-seen uses live presence + offline-leave timestamps so
-    // the row sort stays accurate even before Supabase catches up:
-    //   - Online now  → Date.now()  (always wins → top of list)
-    //   - Recently offline → the leftAt moment
-    //   - Otherwise → the database created_at of the latest visit row
+    // Effective last-seen (for sort). Everything is server-backed now:
+    //   - Online now (in liveNow) → always wins
+    //   - Else → max(offlineAt, lastHeartbeatAt, lastAt)
     const liveSet = new Set(liveNow.map((p) => p.visitor_id));
-    return Array.from(map.values()).sort((a, b) => {
-      const effA = liveSet.has(a.visitorId)
-        ? Number.MAX_SAFE_INTEGER
-        : Math.max(Date.parse(a.lastAt), leftAtRef.current.get(a.visitorId) ?? 0);
-      const effB = liveSet.has(b.visitorId)
-        ? Number.MAX_SAFE_INTEGER
-        : Math.max(Date.parse(b.lastAt), leftAtRef.current.get(b.visitorId) ?? 0);
-      return effB - effA;
-    });
+    const arr = Array.from(map.values());
+    const effSeen = (x: typeof arr[number]) => {
+      if (liveSet.has(x.visitorId)) return Number.MAX_SAFE_INTEGER;
+      const candidates: number[] = [Date.parse(x.lastAt)];
+      if (x.lastHeartbeatAt) candidates.push(Date.parse(x.lastHeartbeatAt));
+      if (x.offlineAt)       candidates.push(Date.parse(x.offlineAt));
+      return Math.max(...candidates);
+    };
+    return arr.sort((a, b) => effSeen(b) - effSeen(a));
   }, [visits, liveNow]);
 
   return (
@@ -564,9 +578,11 @@ export function AdminDashboard({
                   <td className="px-2 py-1.5 tabular">{fmtWhen(v.firstAt)}</td>
                   <td className="px-2 py-1.5 tabular">
                     {(() => {
-                      // Live-aware Last Seen: presence > offline-leave > last visit row
+                      // Live-aware Last Seen, all backed by server columns:
+                      //   1) In liveNow (heartbeat < 45s and offline_at null) → Online now
+                      //   2) offline_at set              → "went offline at X"
+                      //   3) Else                        → heartbeat / created_at
                       const isLive = liveNow.some((p) => p.visitor_id === v.visitorId);
-                      const leftMs = leftAtRef.current.get(v.visitorId);
                       if (isLive) {
                         return (
                           <span className="text-success font-medium">
@@ -575,11 +591,11 @@ export function AdminDashboard({
                           </span>
                         );
                       }
-                      if (leftMs && leftMs > Date.parse(v.lastAt)) {
-                        const iso = new Date(leftMs).toISOString();
-                        return <>{fmtWhen(iso)} <span className="text-[9.5px] text-[var(--text-muted)]">(went offline {relSince(iso)})</span></>;
+                      if (v.offlineAt) {
+                        return <>{fmtWhen(v.offlineAt)} <span className="text-[9.5px] text-[var(--text-muted)]">(went offline {relSince(v.offlineAt)})</span></>;
                       }
-                      return <>{fmtWhen(v.lastAt)} <span className="text-[9.5px] text-[var(--text-muted)]">({relSince(v.lastAt)})</span></>;
+                      const seen = v.lastHeartbeatAt || v.lastAt;
+                      return <>{fmtWhen(seen)} <span className="text-[9.5px] text-[var(--text-muted)]">({relSince(seen)})</span></>;
                     })()}
                   </td>
                 </tr>

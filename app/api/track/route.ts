@@ -132,6 +132,42 @@ export async function POST(req: NextRequest) {
   const chatName  = s(body.chatName,  64);
   const path      = s(body.path,      200);
   const referrer  = s(body.referrer,  500);
+  const mode = s(body.mode, 16); // "visit" (default), "heartbeat", "offline"
+
+  // ─── HEARTBEAT mode: just UPDATE the latest row's last_heartbeat_at ───
+  // Fired every 15s by the phone while the SN Desk tab is open. If the
+  // dashboard hasn't seen a heartbeat for 45s, the person is marked offline.
+  if (mode === "heartbeat" && visitorId && sessionId) {
+    try {
+      // Update ALL rows for this session: refresh heartbeat AND clear
+      // offline_at so a brief background→foreground cycle un-offlines the
+      // visitor instantly.
+      await supa
+        .from("page_visits")
+        .update({ last_heartbeat_at: new Date().toISOString(), offline_at: null })
+        .eq("visitor_id", visitorId)
+        .eq("session_id", sessionId);
+    } catch (e: any) {
+      console.log(`[track] heartbeat update failed: ${String(e?.message || e)}`);
+    }
+    return NextResponse.json({ ok: true, mode: "heartbeat" }, { headers: { "cache-control": "no-store" } });
+  }
+
+  // ─── OFFLINE mode: mark the row as offline NOW ───
+  // Fired by sendBeacon on tab close (pagehide). The record stays forever.
+  if (mode === "offline" && visitorId && sessionId) {
+    try {
+      await supa
+        .from("page_visits")
+        .update({ offline_at: new Date().toISOString() })
+        .eq("visitor_id", visitorId)
+        .eq("session_id", sessionId)
+        .is("offline_at", null);
+    } catch (e: any) {
+      console.log(`[track] offline update failed: ${String(e?.message || e)}`);
+    }
+    return NextResponse.json({ ok: true, mode: "offline" }, { headers: { "cache-control": "no-store" } });
+  }
 
   // Sanitize UA — strip control bytes and invalid UTF-8 so PostgREST can
   // always serialize this row in SELECT responses. One bad byte on a single
@@ -156,6 +192,9 @@ export async function POST(req: NextRequest) {
     os: osOverride || parsed.os,
     path,
     referrer,
+    // Set the heartbeat so this new visit is immediately "live" for the next
+    // 45s even before the client's first heartbeat ping lands.
+    last_heartbeat_at: new Date().toISOString(),
   };
 
   let inserted: any = null;
