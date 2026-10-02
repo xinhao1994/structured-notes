@@ -123,30 +123,57 @@ export async function POST(req: NextRequest) {
   const path      = s(body.path,      200);
   const referrer  = s(body.referrer,  500);
 
+  const row = {
+    visitor_id: visitorId,
+    session_id: sessionId,
+    chat_name: chatName,
+    ip,
+    country,
+    city,
+    region,
+    user_agent: ua.slice(0, 500) || null,
+    device_type: parsed.deviceType,
+    browser: parsed.browser,
+    os: parsed.os,
+    path,
+    referrer,
+  };
+
+  let inserted: any = null;
   try {
-    const { error } = await supa.from("page_visits").insert({
-      visitor_id: visitorId,
-      session_id: sessionId,
-      chat_name: chatName,
-      ip,
-      country,
-      city,
-      region,
-      user_agent: ua.slice(0, 500) || null,
-      device_type: parsed.deviceType,
-      browser: parsed.browser,
-      os: parsed.os,
-      path,
-      referrer,
-    });
+    const { data, error } = await supa
+      .from("page_visits")
+      .insert(row)
+      .select()
+      .single();
     if (error) {
       console.log(`[track] supabase insert error: ${error.message}`);
       return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
     }
+    inserted = data;
   } catch (e: any) {
     console.log(`[track] insert threw: ${String(e?.message || e)}`);
     return NextResponse.json({ ok: false, error: String(e?.message || e) }, { status: 500 });
   }
 
-  return NextResponse.json({ ok: true }, { headers: { "cache-control": "no-store" } });
+  // ─── Broadcast the new visit so the admin dashboard sees it instantly ───
+  // Dashboard subscribes to the "snd:visits:feed" channel. This is the same
+  // mechanism the chat uses for "two Tims appear" — a Supabase Realtime
+  // broadcast, delivered within ~500 ms to every connected client.
+  try {
+    const channel = supa.channel("snd:visits:feed");
+    await channel.subscribe();
+    await channel.send({
+      type: "broadcast",
+      event: "new_visit",
+      payload: inserted,
+    });
+    await supa.removeChannel(channel);
+  } catch (e: any) {
+    // Broadcasting is best-effort — the dashboard will still catch it on
+    // the next 3-second poll even if broadcast fails.
+    console.log(`[track] broadcast failed: ${String(e?.message || e).slice(0,120)}`);
+  }
+
+  return NextResponse.json({ ok: true, visit: inserted }, { headers: { "cache-control": "no-store" } });
 }

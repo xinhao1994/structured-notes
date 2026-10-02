@@ -5,8 +5,10 @@ import { ServiceWorkerRegister } from "@/components/ServiceWorkerRegister";
 import { Header } from "@/components/Header";
 import { BottomNav } from "@/components/BottomNav";
 import { SwipeNavigator } from "@/components/SwipeNavigator";
-// Visitor tracking is now handled by Edge Middleware (middleware.ts) — runs on
-// every request, cannot be bypassed by stale service workers or disabled JS.
+// VisitTracker: client-side POSTer to /api/track on every page view + joins
+// a global presence channel so the admin dashboard can show live green dots.
+// Edge Middleware (middleware.ts) is the no-JS backup.
+import { VisitTracker } from "@/components/VisitTracker";
 
 export const metadata: Metadata = {
   title: "Structured Notes Desk",
@@ -49,6 +51,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <BottomNav />
           <ServiceWorkerRegister />
           <SwipeNavigator />
+          <VisitTracker />
         </ThemeProvider>
       </body>
     </html>

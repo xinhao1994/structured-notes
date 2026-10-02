@@ -1,10 +1,21 @@
 "use client";
 
-// Live admin dashboard — polls /api/admin/data every 3s. New visits and
-// new visitor rows flash green briefly when they first appear. A "LIVE"
-// indicator in the header pulses whenever a fresh fetch lands.
+// Live admin dashboard — three concurrent live mechanisms:
+//
+//   1) Supabase Realtime BROADCAST on "snd:visits:feed" — /api/track emits
+//      a broadcast on every insert so new visits appear here within ~500 ms.
+//   2) Supabase Realtime PRESENCE on "snd:presence:global" — every page in
+//      the app joins; this dashboard shows a live green-dot roster of
+//      currently-online visitors.
+//   3) 3-second poll of /api/admin/data as a safety-net fallback (fills
+//      anything that slipped past the broadcast — bots, no-JS, slow network).
+//
+// All three run simultaneously. First one to see a row wins; dedupe is by
+// visit id. New rows flash green for 6 seconds.
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { getSupabaseBrowser } from "@/lib/supabaseClient";
+import { GLOBAL_PRESENCE_CHANNEL } from "@/components/VisitTracker";
 
 interface Visit {
   id: string;
@@ -33,6 +44,16 @@ interface Payload {
   visits: Visit[];
   messages: ChatMsg[];
   generatedAt: string;
+}
+
+interface PresenceEntry {
+  visitor_id: string;
+  chat_name: string | null;
+  path: string;
+  device: string;
+  browser: string;
+  joined_at?: string;
+  updated_at?: string;
 }
 
 const POLL_MS = 3000;
@@ -70,6 +91,80 @@ export function AdminDashboard({
   ));
   const [newVisitIds, setNewVisitIds] = useState<Set<string>>(new Set());
   const [newVisitorIds, setNewVisitorIds] = useState<Set<string>>(new Set());
+  const [liveNow, setLiveNow] = useState<PresenceEntry[]>([]);
+  const [realtimeStatus, setRealtimeStatus] = useState<"connecting" | "live" | "down">("connecting");
+
+  // ─── Shared helper: merge one new visit into state with flash + dedupe ──
+  const applyNewVisit = (v: Visit) => {
+    if (!v || !v.id) return;
+    if (seenIdsRef.current.has(v.id)) return;
+    seenIdsRef.current.add(v.id);
+    const isNewVisitor = v.visitor_id && !seenVisitorsRef.current.has(v.visitor_id);
+    if (isNewVisitor && v.visitor_id) seenVisitorsRef.current.add(v.visitor_id);
+
+    // Prepend to the visits list (newest-first), cap at 500
+    setData((prev) => ({ ...prev, visits: [v, ...prev.visits].slice(0, 500) }));
+    setNewVisitIds((prev) => { const n = new Set(prev); n.add(v.id); return n; });
+    if (isNewVisitor && v.visitor_id) {
+      setNewVisitorIds((prev) => { const n = new Set(prev); n.add(v.visitor_id!); return n; });
+    }
+    window.setTimeout(() => {
+      setNewVisitIds((prev) => { const n = new Set(prev); n.delete(v.id); return n; });
+      if (isNewVisitor && v.visitor_id) {
+        setNewVisitorIds((prev) => { const n = new Set(prev); n.delete(v.visitor_id!); return n; });
+      }
+    }, NEW_FLASH_MS);
+  };
+
+  // ─── 1) Supabase Realtime BROADCAST: new visits appear within ~500ms ───
+  useEffect(() => {
+    const supa = getSupabaseBrowser();
+    if (!supa) { setRealtimeStatus("down"); return; }
+    const ch = supa.channel("snd:visits:feed");
+    ch.on("broadcast", { event: "new_visit" }, (msg) => {
+      const payload = msg.payload as Visit | null;
+      if (payload) applyNewVisit(payload);
+    });
+    ch.subscribe((status) => {
+      if (status === "SUBSCRIBED") setRealtimeStatus("live");
+      else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") setRealtimeStatus("down");
+    });
+    return () => { try { supa.removeChannel(ch); } catch {} };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ─── 2) Supabase Realtime PRESENCE: who's online right now ─────────────
+  useEffect(() => {
+    const supa = getSupabaseBrowser();
+    if (!supa) return;
+    const ch = supa.channel(GLOBAL_PRESENCE_CHANNEL, {
+      config: { presence: { key: "admin-dashboard" } },
+    });
+
+    const refresh = () => {
+      const state = ch.presenceState() as Record<string, PresenceEntry[]>;
+      const flat: PresenceEntry[] = [];
+      for (const key of Object.keys(state)) {
+        if (key === "admin-dashboard") continue; // don't show ourselves
+        const entries = state[key];
+        if (entries && entries[0]) flat.push(entries[0]);
+      }
+      setLiveNow(flat);
+    };
+
+    ch.on("presence", { event: "sync" },  refresh);
+    ch.on("presence", { event: "join" },  refresh);
+    ch.on("presence", { event: "leave" }, refresh);
+    ch.subscribe(async (status) => {
+      if (status === "SUBSCRIBED") {
+        // We join as "admin-dashboard" (hidden) so we can see others
+        try { await ch.track({ role: "admin-dashboard" }); } catch {}
+        refresh();
+      }
+    });
+    return () => { try { supa.removeChannel(ch); } catch {} };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Polling loop
   useEffect(() => {
@@ -281,9 +376,50 @@ export function AdminDashboard({
         </div>
         <p className="text-[10.5px] text-[var(--text-muted)]">
           Every page view logs IP, device, browser, city (via Vercel edge), path and timestamp.
-          New visits flash green. Refresh on their own — leave this tab open.
+          New visits flash green. Live via Supabase Realtime —
+          {" "}<span className={realtimeStatus === "live" ? "text-success" : realtimeStatus === "connecting" ? "text-warning" : "text-danger"}>
+            {realtimeStatus === "live" ? "connected" : realtimeStatus === "connecting" ? "connecting…" : "offline (polling fallback)"}
+          </span>.
+          Leave this tab open — your phone visits will pop up here instantly.
         </p>
       </header>
+
+      {/* ── LIVE NOW — green dots for everyone currently on the site ─────── */}
+      <section className="mb-5 rounded-xl border border-[var(--line)] bg-[var(--surface)] overflow-hidden">
+        <header className="flex items-center justify-between border-b border-[var(--line)] px-3 py-2">
+          <div className="flex items-center gap-2">
+            <span className="inline-block h-2 w-2 rounded-full bg-success admin-live-dot" />
+            <span className="text-[11px] font-semibold uppercase tracking-[0.06em] text-[var(--text-muted)]">
+              Live now
+            </span>
+            <span className="text-[11px] text-[var(--text-muted)]">({liveNow.length} online)</span>
+          </div>
+          <span className="text-[10px] text-[var(--text-muted)]">via Supabase presence</span>
+        </header>
+        {liveNow.length === 0 ? (
+          <div className="px-3 py-4 text-[11.5px] text-[var(--text-muted)]">
+            No one on the site right now.
+          </div>
+        ) : (
+          <ul className="divide-y divide-[var(--line)]">
+            {liveNow.map((p) => (
+              <li key={p.visitor_id} className="flex items-center gap-3 px-3 py-2 text-[11.5px]">
+                <span className="inline-block h-2 w-2 shrink-0 rounded-full bg-success admin-live-dot" />
+                <span className="font-medium">
+                  {p.chat_name || <span className="text-[var(--text-muted)]">(anonymous)</span>}
+                </span>
+                <span className="text-[var(--text-muted)]">·</span>
+                <span className="font-mono text-[10.5px]">{p.path}</span>
+                <span className="text-[var(--text-muted)]">·</span>
+                <span className="text-[var(--text-muted)]">{p.device} / {p.browser}</span>
+                <span className="ml-auto font-mono text-[10px] text-[var(--text-muted)]" title={p.visitor_id}>
+                  {p.visitor_id.slice(0, 8)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
 
       {/* Summary cards */}
       <section className="mb-5 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6">
