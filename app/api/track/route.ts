@@ -77,8 +77,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, reason: "no-supabase" });
   }
 
-  // Was this called by our Edge Middleware? If so, the body is authoritative.
+  // Called by Edge Middleware OR the admin dashboard (on presence leave).
+  // Both paths send the authoritative data in the body, including IP/geo
+  // of the ORIGINAL visitor — not the caller — because the caller is on
+  // our server/admin, not the person we're logging a visit for.
   const fromMiddleware = req.headers.get("x-mw-forwarded") === "1";
+  const fromAdmin = req.headers.get("x-admin-forwarded") === "1";
+  const authoritativeBody = fromMiddleware || fromAdmin;
 
   let body: any = {};
   try { body = await req.json(); } catch {}
@@ -88,34 +93,39 @@ export async function POST(req: NextRequest) {
     return str || null;
   };
 
-  // ─── Resolve each field: middleware body first, then header fallback ───
-  const ua = fromMiddleware
+  // ─── Resolve each field: authoritative body first, then header fallback ─
+  const ua = authoritativeBody
     ? (s(body.userAgent) || "")
     : (req.headers.get("user-agent") || "");
 
-  if (!fromMiddleware && isBot(ua)) {
-    // Client-side legacy call from a bot — skip
+  if (!authoritativeBody && isBot(ua)) {
     return NextResponse.json({ ok: true, skipped: "bot" });
   }
 
   const parsed = parseUA(ua);
 
-  const ip = fromMiddleware
+  const ip = authoritativeBody
     ? s(body.ip, 64)
     : ((req.headers.get("x-forwarded-for") || "").split(",")[0] || "").trim()
         || req.headers.get("x-real-ip") || null;
 
-  const country = fromMiddleware ? s(body.country, 8) : (req.headers.get("x-vercel-ip-country") || null);
+  const country = authoritativeBody ? s(body.country, 8) : (req.headers.get("x-vercel-ip-country") || null);
 
   let city: string | null = null;
-  if (fromMiddleware) {
+  if (authoritativeBody) {
     city = s(body.city, 128);
   } else {
     const cityRaw = req.headers.get("x-vercel-ip-city");
     if (cityRaw) { try { city = decodeURIComponent(cityRaw); } catch { city = cityRaw; } }
   }
 
-  const region = fromMiddleware ? s(body.region, 64) : (req.headers.get("x-vercel-ip-country-region") || null);
+  const region = authoritativeBody ? s(body.region, 64) : (req.headers.get("x-vercel-ip-country-region") || null);
+
+  // Admin-forwarded calls can also override device/browser/os so the "left"
+  // row has the leaver's actual device info (we got it from presence state).
+  const deviceOverride = fromAdmin ? s(body.deviceType, 32) : null;
+  const browserOverride = fromAdmin ? s(body.browser, 32) : null;
+  const osOverride      = fromAdmin ? s(body.os, 64)      : null;
 
   const visitorId = s(body.visitorId, 64);
   const sessionId = s(body.sessionId, 64);
@@ -141,9 +151,9 @@ export async function POST(req: NextRequest) {
     city,
     region,
     user_agent: safeUA,
-    device_type: parsed.deviceType,
-    browser: parsed.browser,
-    os: parsed.os,
+    device_type: deviceOverride || parsed.deviceType,
+    browser: browserOverride || parsed.browser,
+    os: osOverride || parsed.os,
     path,
     referrer,
   };

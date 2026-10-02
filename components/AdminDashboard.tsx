@@ -95,9 +95,30 @@ export function AdminDashboard({
   const [realtimeStatus, setRealtimeStatus] = useState<"connecting" | "live" | "down">("connecting");
   // When a visitor leaves presence, remember the moment so we can display
   // "Last seen 15s ago" without waiting for a visit row to appear.
+  // Also persist to localStorage so a dashboard refresh keeps the data.
+  const LEFT_STORAGE_KEY = "snd.admin.leftAt.v1";
   const leftAtRef = useRef<Map<string, number>>(new Map());
   const [, setLeftTick] = useState(0); // force re-render when leftAtRef mutates
   const [isAdminDevice, setIsAdminDevice] = useState(false);
+
+  // Hydrate leftAtRef from localStorage on mount
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(LEFT_STORAGE_KEY);
+      if (raw) {
+        const obj = JSON.parse(raw) as Record<string, number>;
+        for (const [k, v] of Object.entries(obj)) leftAtRef.current.set(k, v);
+        setLeftTick((t) => t + 1);
+      }
+    } catch {}
+  }, []);
+  const persistLeftAt = () => {
+    try {
+      const obj: Record<string, number> = {};
+      for (const [k, v] of leftAtRef.current) obj[k] = v;
+      window.localStorage.setItem(LEFT_STORAGE_KEY, JSON.stringify(obj));
+    } catch {}
+  };
 
   // Read admin-device flag from localStorage on mount
   useEffect(() => {
@@ -122,6 +143,14 @@ export function AdminDashboard({
 
     // Prepend to the visits list (newest-first), cap at 500
     setData((prev) => ({ ...prev, visits: [v, ...prev.visits].slice(0, 500) }));
+    // Clear a stale "left" timestamp if this new visit is newer — they're back
+    if (v.visitor_id && leftAtRef.current.has(v.visitor_id)) {
+      const prevLeft = leftAtRef.current.get(v.visitor_id)!;
+      if (Date.parse(v.created_at) > prevLeft) {
+        leftAtRef.current.delete(v.visitor_id);
+        persistLeftAt();
+      }
+    }
     setNewVisitIds((prev) => { const n = new Set(prev); n.add(v.id); return n; });
     if (isNewVisitor && v.visitor_id) {
       setNewVisitorIds((prev) => { const n = new Set(prev); n.add(v.visitor_id!); return n; });
@@ -173,14 +202,44 @@ export function AdminDashboard({
     ch.on("presence", { event: "sync" },  refresh);
     ch.on("presence", { event: "join" },  refresh);
     ch.on("presence", { event: "leave" }, (payload: any) => {
-      // Record the exact moment this visitor dropped off → used for "last
-      // seen 10s ago" in the Unique Visitors table.
       try {
         const leftKey = payload?.key as string | undefined;
-        if (leftKey && leftKey !== "admin-dashboard") {
-          leftAtRef.current.set(leftKey, Date.now());
-          setLeftTick((t) => t + 1);
-        }
+        if (!leftKey || leftKey === "admin-dashboard") { refresh(); return; }
+
+        // 1) Immediate UI update + localStorage persistence
+        const nowMs = Date.now();
+        leftAtRef.current.set(leftKey, nowMs);
+        setLeftTick((t) => t + 1);
+        persistLeftAt();
+
+        // 2) Fire-and-forget: insert a leave-row into Supabase so refresh /
+        //    other admins see the offline moment too. Enrich with the
+        //    leaver's last-known info (IP, geo, device) from the visits list.
+        const leaverPresence = (payload?.leftPresences?.[0] || {}) as Partial<PresenceEntry>;
+        const lastVisit = (data.visits || []).find((v) => v.visitor_id === leftKey);
+        const bodyData = {
+          visitorId: leftKey,
+          sessionId: "left-" + nowMs,
+          chatName: leaverPresence.chat_name || lastVisit?.chat_name || null,
+          path: leaverPresence.path || lastVisit?.path || "/",
+          referrer: "left-site",
+          ip: lastVisit?.ip || null,
+          country: lastVisit?.country || null,
+          city: lastVisit?.city || null,
+          region: lastVisit?.region || null,
+          userAgent: lastVisit?.user_agent || "",
+          deviceType: leaverPresence.device || lastVisit?.device_type || null,
+          browser: leaverPresence.browser || lastVisit?.browser || null,
+          os: lastVisit?.os || null,
+        };
+        fetch("/api/track", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-admin-forwarded": "1",
+          },
+          body: JSON.stringify(bodyData),
+        }).catch(() => {});
       } catch {}
       refresh();
     });
