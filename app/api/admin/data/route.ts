@@ -31,9 +31,10 @@ async function supaFetch(path: string): Promise<any> {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) throw new Error("missing supabase env");
-  const sep = path.includes("?") ? "&" : "?";
-  const bust = `${sep}_t=${Date.now()}`; // defeat any URL-based cache
-  const res = await fetch(`${url}/rest/v1/${path}${bust}`, {
+  // Do NOT add URL query params as cache-busters — PostgREST parses unknown
+  // query params as column filters and rejects the request with PGRST100.
+  // Node's fetch({cache:"no-store"}) is enough to bypass any Next.js caching.
+  const res = await fetch(`${url}/rest/v1/${path}`, {
     headers: {
       apikey: key,
       Authorization: `Bearer ${key}`,

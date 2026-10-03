@@ -27,10 +27,8 @@ async function supaFetch(path: string): Promise<any[]> {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) return [];
-  const sep = path.includes("?") ? "&" : "?";
-  const bust = `${sep}_t=${Date.now()}`;
   try {
-    const r = await fetch(`${url}/rest/v1/${path}${bust}`, {
+    const r = await fetch(`${url}/rest/v1/${path}`, {
       headers: {
         apikey: key,
         Authorization: `Bearer ${key}`,
