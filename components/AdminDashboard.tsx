@@ -60,7 +60,9 @@ function relSince(iso: string): string {
 }
 
 interface VisitorRow {
+  rowKey: string;        // "<visitor_id>:<session_id>" — unique per session
   visitorId: string;
+  sessionId: string | null;
   name: string | null;
   ip: string | null;
   city: string | null;
@@ -68,22 +70,28 @@ interface VisitorRow {
   device: string | null;
   browser: string | null;
   os: string | null;
-  firstAt: string;        // oldest row
-  lastActivityAt: string; // newest ANY row (visit, heartbeat, or offline)
-  offlineAt: string | null; // newest offline marker, iff newer than any activity
-  visitCount: number;     // real page views only
+  firstAt: string;        // oldest row in this session
+  lastActivityAt: string; // newest ANY row in this session
+  offlineAt: string | null; // newest offline marker in this session
+  visitCount: number;     // real page views in this session
   isOnline: boolean;
 }
 
 function buildVisitorRows(visits: Visit[]): VisitorRow[] {
   const now = Date.now();
-  const byId = new Map<string, VisitorRow>();
+  // KEY = visitor_id + session_id → each browser session is its own row.
+  // Opening a new tab (= new sessionStorage sessionId) creates a brand-new
+  // session row with its own First Seen and Last Seen.
+  const byKey = new Map<string, VisitorRow>();
   for (const v of visits) {
     if (!v.visitor_id) continue;
-    const cur = byId.get(v.visitor_id);
+    const key = `${v.visitor_id}:${v.session_id ?? "nosession"}`;
+    const cur = byKey.get(key);
     if (!cur) {
-      byId.set(v.visitor_id, {
+      byKey.set(key, {
+        rowKey: key,
         visitorId: v.visitor_id,
+        sessionId: v.session_id,
         name: v.chat_name,
         ip: v.ip,
         city: v.city,
@@ -99,11 +107,8 @@ function buildVisitorRows(visits: Visit[]): VisitorRow[] {
       });
     } else {
       if (isRealVisit(v)) cur.visitCount++;
-      // Oldest wins for firstAt
       if (v.created_at < cur.firstAt) cur.firstAt = v.created_at;
-      // Newest wins for lastActivityAt (any row type)
       if (v.created_at > cur.lastActivityAt) cur.lastActivityAt = v.created_at;
-      // Backfill identity fields from newer rows if missing
       if (!cur.name && v.chat_name) cur.name = v.chat_name;
       if (!cur.ip && v.ip) cur.ip = v.ip;
       if (!cur.city && v.city) cur.city = v.city;
@@ -111,12 +116,32 @@ function buildVisitorRows(visits: Visit[]): VisitorRow[] {
       if (!cur.device && v.device_type) cur.device = v.device_type;
       if (!cur.browser && v.browser) cur.browser = v.browser;
       if (!cur.os && v.os) cur.os = v.os;
-      // Track newest offline marker
       if (isOfflineRow(v) && (!cur.offlineAt || v.created_at > cur.offlineAt)) {
         cur.offlineAt = v.created_at;
       }
     }
   }
+  // Backfill identity across sessions: if an older session for the same
+  // visitor already has a known name/IP, propagate it to anonymous sessions.
+  const identityByVisitor = new Map<string, { name: string | null; ip: string | null; city: string | null; country: string | null; device: string | null; browser: string | null; os: string | null }>();
+  const sessionsSortedOldFirst = Array.from(byKey.values()).sort((a, b) => Date.parse(a.firstAt) - Date.parse(b.firstAt));
+  for (const row of sessionsSortedOldFirst) {
+    const prev = identityByVisitor.get(row.visitorId);
+    if (prev) {
+      row.name    = row.name    || prev.name;
+      row.ip      = row.ip      || prev.ip;
+      row.city    = row.city    || prev.city;
+      row.country = row.country || prev.country;
+      row.device  = row.device  || prev.device;
+      row.browser = row.browser || prev.browser;
+      row.os      = row.os      || prev.os;
+    }
+    identityByVisitor.set(row.visitorId, {
+      name: row.name, ip: row.ip, city: row.city, country: row.country,
+      device: row.device, browser: row.browser, os: row.os,
+    });
+  }
+  const byId = byKey; // rename so the rest of the function still compiles
   // Compute isOnline + clear stale offlineAt
   for (const row of byId.values()) {
     const activityMs = Date.parse(row.lastActivityAt);
@@ -271,7 +296,7 @@ export function AdminDashboard({
       {/* Summary line */}
       <section className="mb-4 grid grid-cols-3 gap-2">
         <SummaryCard label="Online now" value={liveNow.length} accent={liveNow.length > 0} />
-        <SummaryCard label="Total visitors" value={visitors.length} />
+        <SummaryCard label="Sessions" value={visitors.length} />
         <SummaryCard label="Chat messages" value={data.messages.length} />
       </section>
 
@@ -279,7 +304,7 @@ export function AdminDashboard({
       <section className="mb-6 rounded-xl border border-[var(--line)] bg-[var(--surface)] overflow-hidden">
         <header className="flex items-center justify-between border-b border-[var(--line)] px-3 py-2">
           <span className="text-[11px] font-semibold uppercase tracking-[0.06em] text-[var(--text-muted)]">
-            Recent Visitors ({visitors.length})
+            Recent Visitors ({visitors.length} session{visitors.length === 1 ? "" : "s"})
           </span>
           <span className="text-[10px] text-[var(--text-muted)]">
             Online = active within last {LIVE_FRESH_MS / 1000}s
@@ -302,7 +327,7 @@ export function AdminDashboard({
             </thead>
             <tbody>
               {visitors.map((v) => (
-                <tr key={v.visitorId} className="border-t border-[var(--line)] hover:bg-[var(--surface-2)]">
+                <tr key={v.rowKey} className="border-t border-[var(--line)] hover:bg-[var(--surface-2)]">
                   <td className="px-2 py-1.5 font-medium">
                     {v.isOnline && (
                       <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-success admin-live-dot align-middle" />
