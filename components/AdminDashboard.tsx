@@ -30,11 +30,19 @@ interface Visit {
   device_type: string | null;
   browser: string | null;
   os: string | null;
-  path: string | null;
-  referrer: string | null;
+  path: string | null;    // "__heartbeat" / "__offline" are internal markers
+  referrer: string | null; // "heartbeat" / "offline" tag the row type
   created_at: string;
-  last_heartbeat_at: string | null;
-  offline_at: string | null;
+}
+
+function isHeartbeatRow(v: Visit): boolean {
+  return v.path === "__heartbeat" || v.referrer === "heartbeat";
+}
+function isOfflineRow(v: Visit): boolean {
+  return v.path === "__offline" || v.referrer === "offline";
+}
+function isRealVisit(v: Visit): boolean {
+  return !isHeartbeatRow(v) && !isOfflineRow(v);
 }
 
 interface ChatMsg {
@@ -190,33 +198,36 @@ export function AdminDashboard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ─── 2) Live Now — derived from the visits data itself.
-  // A visitor is LIVE if their most recent row has:
-  //    offline_at IS NULL  AND  last_heartbeat_at within the last 45s
-  // No Supabase Realtime presence — pure heartbeat polling, which proved
-  // way more reliable on mobile Safari over cellular.
+  // ─── 2) Live Now — derived purely from visit timestamps.
+  // A visitor is LIVE if their newest row (of ANY type: visit, heartbeat,
+  // or offline) satisfies:
+  //    - Latest row is NOT an "offline" row, AND
+  //    - Latest row's created_at is within the last 45 seconds
+  // So heartbeats keep them alive; a stale heartbeat (phone locked / closed)
+  // makes them disappear after 45s. An explicit offline row makes them
+  // disappear immediately on tab close.
   const HEARTBEAT_FRESH_MS = 45_000;
   useEffect(() => {
     const recompute = () => {
       const now = Date.now();
-      const byVisitor = new Map<string, Visit>();
+      const latestByVisitor = new Map<string, Visit>();
       for (const v of data.visits) {
         if (!v.visitor_id) continue;
-        const cur = byVisitor.get(v.visitor_id);
-        const vMs = Date.parse(v.last_heartbeat_at || v.created_at);
-        const curMs = cur ? Date.parse(cur.last_heartbeat_at || cur.created_at) : -1;
-        if (vMs > curMs) byVisitor.set(v.visitor_id, v);
+        const cur = latestByVisitor.get(v.visitor_id);
+        if (!cur || Date.parse(v.created_at) > Date.parse(cur.created_at)) {
+          latestByVisitor.set(v.visitor_id, v);
+        }
       }
       const live: PresenceEntry[] = [];
-      for (const v of byVisitor.values()) {
+      for (const v of latestByVisitor.values()) {
         if (!v.visitor_id) continue;
-        if (v.offline_at) continue;
-        const hb = v.last_heartbeat_at ? Date.parse(v.last_heartbeat_at) : 0;
-        if (now - hb <= HEARTBEAT_FRESH_MS) {
+        if (isOfflineRow(v)) continue; // explicitly offline
+        const ms = Date.parse(v.created_at);
+        if (now - ms <= HEARTBEAT_FRESH_MS) {
           live.push({
             visitor_id: v.visitor_id,
             chat_name: v.chat_name,
-            path: v.path || "/",
+            path: isHeartbeatRow(v) ? "/" : (v.path || "/"),
             device: v.device_type || "unknown",
             browser: v.browser || "unknown",
           });
@@ -225,8 +236,6 @@ export function AdminDashboard({
       setLiveNow(live);
     };
     recompute();
-    // Re-evaluate every 2s so a visitor flips to offline the moment their
-    // heartbeat goes stale, even between the 3-second data polls.
     const id = window.setInterval(recompute, 2000);
     return () => window.clearInterval(id);
   }, [data.visits]);
@@ -344,16 +353,19 @@ export function AdminDashboard({
   const nameActive24h = perName.filter((u) => Date.parse(u.last) > now - 86400_000).length;
   const nameActive7d = perName.filter((u) => Date.parse(u.last) > now - 7 * 86400_000).length;
 
-  const uniqueVisitors = new Set(visits.map((v) => v.visitor_id).filter(Boolean)).size;
-  const visits24h = visits.filter((v) => Date.parse(v.created_at) > now - 86400_000).length;
-  const visits7d = visits.filter((v) => Date.parse(v.created_at) > now - 7 * 86400_000).length;
+  // Count only REAL page views in all stats — heartbeat/offline markers
+  // are infrastructure, not visits.
+  const realVisits = visits.filter(isRealVisit);
+  const uniqueVisitors = new Set(realVisits.map((v) => v.visitor_id).filter(Boolean)).size;
+  const visits24h = realVisits.filter((v) => Date.parse(v.created_at) > now - 86400_000).length;
+  const visits7d = realVisits.filter((v) => Date.parse(v.created_at) > now - 7 * 86400_000).length;
 
   const countryCount = new Map<string, number>();
   const deviceCount = new Map<string, number>();
   const browserCount = new Map<string, number>();
   const osCount = new Map<string, number>();
   const pathCount = new Map<string, number>();
-  for (const v of visits) {
+  for (const v of realVisits) {
     if (v.country) countryCount.set(v.country, (countryCount.get(v.country) ?? 0) + 1);
     if (v.device_type) deviceCount.set(v.device_type, (deviceCount.get(v.device_type) ?? 0) + 1);
     if (v.browser) browserCount.set(v.browser, (browserCount.get(v.browser) ?? 0) + 1);
@@ -375,8 +387,8 @@ export function AdminDashboard({
       lastOs: string | null;
       firstAt: string;
       lastAt: string;
-      lastHeartbeatAt: string | null; // newest across all session rows
-      offlineAt: string | null;        // from the LATEST visit row that has it
+      lastHeartbeatAt: string | null; // newest heartbeat or visit timestamp
+      offlineAt: string | null;        // newest offline-marker row timestamp
       visitCount: number;
     }>();
     for (const v of visits) {
@@ -394,22 +406,31 @@ export function AdminDashboard({
           lastOs: v.os,
           firstAt: v.created_at,
           lastAt: v.created_at,
-          lastHeartbeatAt: v.last_heartbeat_at,
-          offlineAt: v.offline_at,
-          visitCount: 1,
+          lastHeartbeatAt: isHeartbeatRow(v) || isRealVisit(v) ? v.created_at : null,
+          offlineAt: isOfflineRow(v) ? v.created_at : null,
+          visitCount: isRealVisit(v) ? 1 : 0, // only real page views count
         });
       } else {
-        cur.visitCount++;
+        if (isRealVisit(v)) cur.visitCount++;
         if (v.created_at < cur.firstAt) cur.firstAt = v.created_at;
         if (!cur.lastName && v.chat_name) cur.lastName = v.chat_name;
-        // Track the newest heartbeat across this visitor's rows
-        if (v.last_heartbeat_at && (!cur.lastHeartbeatAt || v.last_heartbeat_at > cur.lastHeartbeatAt)) {
-          cur.lastHeartbeatAt = v.last_heartbeat_at;
+        // lastAt tracks the overall latest row (any type)
+        if (v.created_at > cur.lastAt) cur.lastAt = v.created_at;
+        // Heartbeat / visit timestamps update "last activity"
+        if ((isHeartbeatRow(v) || isRealVisit(v)) && (!cur.lastHeartbeatAt || v.created_at > cur.lastHeartbeatAt)) {
+          cur.lastHeartbeatAt = v.created_at;
         }
-        // Keep the offline_at only if it's newer than any heartbeat
-        if (v.offline_at && (!cur.offlineAt || v.offline_at > cur.offlineAt)) {
-          cur.offlineAt = v.offline_at;
+        // Offline marker — keep the newest
+        if (isOfflineRow(v) && (!cur.offlineAt || v.created_at > cur.offlineAt)) {
+          cur.offlineAt = v.created_at;
         }
+      }
+    }
+    // After processing: if the newest heartbeat/visit happened AFTER the
+    // offline marker, the visitor is back online — clear offline for display
+    for (const row of map.values()) {
+      if (row.offlineAt && row.lastHeartbeatAt && row.lastHeartbeatAt > row.offlineAt) {
+        row.offlineAt = null;
       }
     }
     // Effective last-seen (for sort). Everything is server-backed now:
@@ -478,11 +499,8 @@ export function AdminDashboard({
         </div>
         <p className="text-[10.5px] text-[var(--text-muted)]">
           Every page view logs IP, device, browser, city (via Vercel edge), path and timestamp.
-          New visits flash green. Live via Supabase Realtime —
-          {" "}<span className={realtimeStatus === "live" ? "text-success" : realtimeStatus === "connecting" ? "text-warning" : "text-danger"}>
-            {realtimeStatus === "live" ? "connected" : realtimeStatus === "connecting" ? "connecting…" : "offline (polling fallback)"}
-          </span>.
-          Leave this tab open — your phone visits will pop up here instantly.
+          Phones heartbeat every 15s while open — if a heartbeat is 45s stale, that visitor flips to
+          offline. The offline moment is written to the database and stays forever.
         </p>
       </header>
 
@@ -496,7 +514,7 @@ export function AdminDashboard({
             </span>
             <span className="text-[11px] text-[var(--text-muted)]">({liveNow.length} online)</span>
           </div>
-          <span className="text-[10px] text-[var(--text-muted)]">via Supabase presence</span>
+          <span className="text-[10px] text-[var(--text-muted)]">heartbeat ≤ 45s</span>
         </header>
         {liveNow.length === 0 ? (
           <div className="px-3 py-4 text-[11.5px] text-[var(--text-muted)]">
@@ -525,7 +543,7 @@ export function AdminDashboard({
 
       {/* Summary cards */}
       <section className="mb-5 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6">
-        <StatCard label="Total visits" value={visits.length} sublabel="last 500 shown" />
+        <StatCard label="Total visits" value={realVisits.length} sublabel="last 500 shown" />
         <StatCard label="Unique visitors" value={uniqueVisitors} sublabel="by browser fingerprint" />
         <StatCard label="Visits 24h" value={visits24h} accent />
         <StatCard label="Visits 7d" value={visits7d} />
@@ -608,10 +626,10 @@ export function AdminDashboard({
         </div>
       </section>
 
-      {/* Recent visits raw feed */}
+      {/* Recent visits raw feed — heartbeat rows hidden */}
       <section className="mb-5 rounded-xl border border-[var(--line)] bg-[var(--surface)] overflow-hidden">
         <header className="border-b border-[var(--line)] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-[var(--text-muted)]">
-          Recent visits ({visits.length})
+          Recent visits ({visits.filter((v) => !isHeartbeatRow(v)).length})
         </header>
         <div className="overflow-x-auto">
           <table className="w-full text-[11px]">
@@ -629,21 +647,25 @@ export function AdminDashboard({
               </tr>
             </thead>
             <tbody>
-              {visits.map((v) => (
+              {visits.filter((v) => !isHeartbeatRow(v)).map((v) => (
                 <tr key={v.id}
                     className={`border-t border-[var(--line)] hover:bg-[var(--surface-2)] ${newVisitIds.has(v.id) ? "admin-new-row" : ""}`}
                     title={v.user_agent ?? ""}>
                   <td className="px-2 py-1.5 tabular whitespace-nowrap">
                     {newVisitIds.has(v.id) && <span className="mr-1 text-success">🟢</span>}
+                    {isOfflineRow(v) && <span className="mr-1 text-[var(--text-muted)]">⬛</span>}
                     {fmtWhen(v.created_at)}
                   </td>
-                  <td className="px-2 py-1.5 font-medium">{v.chat_name || <span className="text-[var(--text-muted)]">—</span>}</td>
+                  <td className="px-2 py-1.5 font-medium">
+                    {v.chat_name || <span className="text-[var(--text-muted)]">—</span>}
+                    {isOfflineRow(v) && <span className="ml-1 text-[9.5px] text-[var(--text-muted)]">(went offline)</span>}
+                  </td>
                   <td className="px-2 py-1.5 tabular text-[var(--text-muted)]">{v.ip || "—"}</td>
                   <td className="px-2 py-1.5">{v.city ? `${v.city}, ` : ""}{v.country || "—"}</td>
                   <td className="px-2 py-1.5">{v.device_type || "—"}</td>
                   <td className="px-2 py-1.5">{v.browser || "—"}</td>
                   <td className="px-2 py-1.5">{v.os || "—"}</td>
-                  <td className="px-2 py-1.5 font-mono text-[10.5px]">{v.path || "—"}</td>
+                  <td className="px-2 py-1.5 font-mono text-[10.5px]">{isOfflineRow(v) ? "—" : (v.path || "—")}</td>
                   <td className="px-2 py-1.5 text-[10.5px] text-[var(--text-muted)] max-w-[220px] truncate">{v.referrer || "direct"}</td>
                 </tr>
               ))}
