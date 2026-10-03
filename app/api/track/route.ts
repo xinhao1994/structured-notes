@@ -187,24 +187,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: String(e?.message || e) }, { status: 500 });
   }
 
-  // ─── Broadcast the new visit so the admin dashboard sees it instantly ───
-  // Dashboard subscribes to the "snd:visits:feed" channel. This is the same
-  // mechanism the chat uses for "two Tims appear" — a Supabase Realtime
-  // broadcast, delivered within ~500 ms to every connected client.
-  try {
-    const channel = supa.channel("snd:visits:feed");
-    await channel.subscribe();
-    await channel.send({
-      type: "broadcast",
-      event: "new_visit",
-      payload: inserted,
-    });
-    await supa.removeChannel(channel);
-  } catch (e: any) {
-    // Broadcasting is best-effort — the dashboard will still catch it on
-    // the next 3-second poll even if broadcast fails.
-    console.log(`[track] broadcast failed: ${String(e?.message || e).slice(0,120)}`);
-  }
+  // (The admin dashboard polls /api/admin/data every 2s — no broadcast needed.)
 
   // Debug: expose which Supabase project this route writes to.
   const envUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";

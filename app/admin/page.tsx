@@ -1,12 +1,12 @@
-// /admin?token=<ADMIN_TOKEN> — private live dashboard.
-// Server component does the auth + initial data fetch, then hands off to
-// the AdminDashboard client component which polls /api/admin/data every
-// 3 seconds and flashes new visits green as they arrive.
+// /admin?token=<ADMIN_TOKEN> — private dashboard. Isolated layout (no
+// SN Desk nav). Initial data fetched server-side via raw Supabase REST to
+// bypass any JS SDK caching. Client polls /api/admin/data every 2 seconds.
 
-import { getSupabaseAdmin } from "@/lib/supabase";
 import { AdminDashboard } from "@/components/AdminDashboard";
 
 export const dynamic = "force-dynamic";
+export const revalidate = 0;
+export const fetchCache = "force-no-store";
 export const runtime = "nodejs";
 
 function constantTimeEqual(a: string, b: string): boolean {
@@ -14,6 +14,35 @@ function constantTimeEqual(a: string, b: string): boolean {
   let diff = 0;
   for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return diff === 0;
+}
+
+const VISIT_COLS = [
+  "id", "visitor_id", "session_id", "chat_name",
+  "ip", "country", "city", "region",
+  "device_type", "browser", "os",
+  "path", "referrer", "created_at",
+].join(",");
+
+async function supaFetch(path: string): Promise<any[]> {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) return [];
+  const sep = path.includes("?") ? "&" : "?";
+  const bust = `${sep}_t=${Date.now()}`;
+  try {
+    const r = await fetch(`${url}/rest/v1/${path}${bust}`, {
+      headers: {
+        apikey: key,
+        Authorization: `Bearer ${key}`,
+        "Cache-Control": "no-cache, no-store",
+      },
+      cache: "no-store",
+    });
+    if (!r.ok) return [];
+    return r.json();
+  } catch {
+    return [];
+  }
 }
 
 export default async function AdminPage({
@@ -41,27 +70,16 @@ export default async function AdminPage({
     );
   }
 
-  const supa = getSupabaseAdmin();
-  if (!supa) {
-    return (
-      <div className="mx-auto max-w-lg p-8 text-center text-[13px] text-danger">
-        Supabase admin client not configured. Check SUPABASE_SERVICE_ROLE_KEY.
-      </div>
-    );
-  }
-
-  // Initial data fetch — server-side, so the page renders instantly with real
-  // data on first paint. The client then takes over with 3-second polling.
-  const [visitsRes, msgsRes] = await Promise.all([
-    supa.from("page_visits").select("*").order("created_at", { ascending: false }).limit(500),
-    supa.from("chat_messages").select("sender_name, created_at").order("created_at", { ascending: true }).limit(50_000),
+  const [visits, messages] = await Promise.all([
+    supaFetch(`page_visits?select=${encodeURIComponent(VISIT_COLS)}&order=created_at.desc&limit=5000`),
+    supaFetch(`chat_messages?select=sender_name,created_at&order=created_at.asc&limit=50000`),
   ]);
 
   return (
     <AdminDashboard
       initialData={{
-        visits: visitsRes.data ?? [],
-        messages: msgsRes.data ?? [],
+        visits,
+        messages,
         generatedAt: new Date().toISOString(),
       }}
       token={token}

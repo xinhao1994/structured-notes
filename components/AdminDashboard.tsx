@@ -1,21 +1,17 @@
 "use client";
 
-// Live admin dashboard — three concurrent live mechanisms:
+// SN Desk — Admin Dashboard
+// ─────────────────────────
+// Minimal, isolated page. Just ONE visitor table + a toggle to opt this
+// device out of tracking + a chat-activity summary.
 //
-//   1) Supabase Realtime BROADCAST on "snd:visits:feed" — /api/track emits
-//      a broadcast on every insert so new visits appear here within ~500 ms.
-//   2) Supabase Realtime PRESENCE on "snd:presence:global" — every page in
-//      the app joins; this dashboard shows a live green-dot roster of
-//      currently-online visitors.
-//   3) 3-second poll of /api/admin/data as a safety-net fallback (fills
-//      anything that slipped past the broadcast — bots, no-JS, slow network).
-//
-// All three run simultaneously. First one to see a row wins; dedupe is by
-// visit id. New rows flash green for 6 seconds.
+// Live detection is pure polling: /api/admin/data every 2 seconds. A visitor
+// is ONLINE if their most recent row (any type: visit, heartbeat, offline)
+// is not an "offline" marker AND created_at is within 45 seconds. The 45s
+// window tolerates mobile phones missing one or two heartbeat pings.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { getSupabaseBrowser } from "@/lib/supabaseClient";
-import { GLOBAL_PRESENCE_CHANNEL, ADMIN_DEVICE_KEY } from "@/components/VisitTracker";
+import { ADMIN_DEVICE_KEY } from "@/components/VisitTracker";
 
 interface Visit {
   id: string;
@@ -26,14 +22,18 @@ interface Visit {
   country: string | null;
   city: string | null;
   region: string | null;
-  user_agent: string | null;
   device_type: string | null;
   browser: string | null;
   os: string | null;
-  path: string | null;    // "__heartbeat" / "__offline" are internal markers
-  referrer: string | null; // "heartbeat" / "offline" tag the row type
+  path: string | null;
+  referrer: string | null;
   created_at: string;
 }
+interface ChatMsg { sender_name: string; created_at: string; }
+interface Payload { visits: Visit[]; messages: ChatMsg[]; generatedAt: string; }
+
+const POLL_MS = 2000;
+const LIVE_FRESH_MS = 45_000;
 
 function isHeartbeatRow(v: Visit): boolean {
   return v.path === "__heartbeat" || v.referrer === "heartbeat";
@@ -45,36 +45,11 @@ function isRealVisit(v: Visit): boolean {
   return !isHeartbeatRow(v) && !isOfflineRow(v);
 }
 
-interface ChatMsg {
-  sender_name: string;
-  created_at: string;
-}
-
-interface Payload {
-  visits: Visit[];
-  messages: ChatMsg[];
-  generatedAt: string;
-}
-
-interface PresenceEntry {
-  visitor_id: string;
-  chat_name: string | null;
-  path: string;
-  device: string;
-  browser: string;
-  joined_at?: string;
-  updated_at?: string;
-}
-
-const POLL_MS = 3000;
-const NEW_FLASH_MS = 6000;
-
 function fmtWhen(iso: string): string {
   const d = new Date(iso);
   const p = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
-
 function relSince(iso: string): string {
   const s = (Date.now() - Date.parse(iso)) / 1000;
   if (s < 5) return "just now";
@@ -82,6 +57,82 @@ function relSince(iso: string): string {
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
   return `${Math.floor(s / 86400)}d ago`;
+}
+
+interface VisitorRow {
+  visitorId: string;
+  name: string | null;
+  ip: string | null;
+  city: string | null;
+  country: string | null;
+  device: string | null;
+  browser: string | null;
+  os: string | null;
+  firstAt: string;        // oldest row
+  lastActivityAt: string; // newest ANY row (visit, heartbeat, or offline)
+  offlineAt: string | null; // newest offline marker, iff newer than any activity
+  visitCount: number;     // real page views only
+  isOnline: boolean;
+}
+
+function buildVisitorRows(visits: Visit[]): VisitorRow[] {
+  const now = Date.now();
+  const byId = new Map<string, VisitorRow>();
+  for (const v of visits) {
+    if (!v.visitor_id) continue;
+    const cur = byId.get(v.visitor_id);
+    if (!cur) {
+      byId.set(v.visitor_id, {
+        visitorId: v.visitor_id,
+        name: v.chat_name,
+        ip: v.ip,
+        city: v.city,
+        country: v.country,
+        device: v.device_type,
+        browser: v.browser,
+        os: v.os,
+        firstAt: v.created_at,
+        lastActivityAt: v.created_at,
+        offlineAt: isOfflineRow(v) ? v.created_at : null,
+        visitCount: isRealVisit(v) ? 1 : 0,
+        isOnline: false,
+      });
+    } else {
+      if (isRealVisit(v)) cur.visitCount++;
+      // Oldest wins for firstAt
+      if (v.created_at < cur.firstAt) cur.firstAt = v.created_at;
+      // Newest wins for lastActivityAt (any row type)
+      if (v.created_at > cur.lastActivityAt) cur.lastActivityAt = v.created_at;
+      // Backfill identity fields from newer rows if missing
+      if (!cur.name && v.chat_name) cur.name = v.chat_name;
+      if (!cur.ip && v.ip) cur.ip = v.ip;
+      if (!cur.city && v.city) cur.city = v.city;
+      if (!cur.country && v.country) cur.country = v.country;
+      if (!cur.device && v.device_type) cur.device = v.device_type;
+      if (!cur.browser && v.browser) cur.browser = v.browser;
+      if (!cur.os && v.os) cur.os = v.os;
+      // Track newest offline marker
+      if (isOfflineRow(v) && (!cur.offlineAt || v.created_at > cur.offlineAt)) {
+        cur.offlineAt = v.created_at;
+      }
+    }
+  }
+  // Compute isOnline + clear stale offlineAt
+  for (const row of byId.values()) {
+    const activityMs = Date.parse(row.lastActivityAt);
+    const offlineMs = row.offlineAt ? Date.parse(row.offlineAt) : -1;
+    // If their newest activity isn't an offline marker and is < 45s old → online
+    const latestIsOffline = offlineMs >= activityMs;
+    row.isOnline = !latestIsOffline && (now - activityMs <= LIVE_FRESH_MS);
+    // If any activity happened AFTER the offline marker, clear the offline
+    if (row.offlineAt && activityMs > offlineMs) row.offlineAt = null;
+  }
+  // Sort: online first (newest activity on top), then everyone else by newest activity
+  return Array.from(byId.values()).sort((a, b) => {
+    if (a.isOnline && !b.isOnline) return -1;
+    if (!a.isOnline && b.isOnline) return 1;
+    return Date.parse(b.lastActivityAt) - Date.parse(a.lastActivityAt);
+  });
 }
 
 export function AdminDashboard({
@@ -94,51 +145,10 @@ export function AdminDashboard({
   const [data, setData] = useState<Payload>(initialData);
   const [status, setStatus] = useState<"live" | "stale" | "error">("live");
   const [lastPingAt, setLastPingAt] = useState<number>(Date.now());
-  const [tick, setTick] = useState(0); // re-render for "relSince" every 15s
-  const seenIdsRef = useRef<Set<string>>(new Set(initialData.visits.map((v) => v.id)));
-  const seenVisitorsRef = useRef<Set<string>>(new Set(
-    initialData.visits.map((v) => v.visitor_id).filter((x): x is string => !!x)
-  ));
-  const [newVisitIds, setNewVisitIds] = useState<Set<string>>(new Set());
-  const [newVisitorIds, setNewVisitorIds] = useState<Set<string>>(new Set());
-  const [liveNow, setLiveNow] = useState<PresenceEntry[]>([]);
-  const [realtimeStatus, setRealtimeStatus] = useState<"connecting" | "live" | "down">("connecting");
-  // When a visitor leaves presence, remember the moment so we can display
-  // "Last seen 15s ago" without waiting for a visit row to appear.
-  // Also persist to localStorage so a dashboard refresh keeps the data.
-  const LEFT_STORAGE_KEY = "snd.admin.leftAt.v1";
-  const leftAtRef = useRef<Map<string, number>>(new Map());
-  const [, setLeftTick] = useState(0); // force re-render when leftAtRef mutates
-  // Grace-period: mobile browsers often lose their Supabase WebSocket for a
-  // few seconds (bad cellular, screen off, app switch) and the server fires
-  // a false "leave". We hold the visitor in a quarantine for 60s before
-  // actually treating them as offline — if they rejoin in that window (they
-  // almost always do), nothing visibly changes.
-  const LEAVE_GRACE_MS = 60_000;
-  const pendingLeavesRef = useRef<Map<string, number>>(new Map()); // key → timeout id
-  const quarantineRef = useRef<Map<string, PresenceEntry>>(new Map()); // kept-visible entries
+  const [, forceTick] = useState(0);
   const [isAdminDevice, setIsAdminDevice] = useState(false);
 
-  // Hydrate leftAtRef from localStorage on mount
-  useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem(LEFT_STORAGE_KEY);
-      if (raw) {
-        const obj = JSON.parse(raw) as Record<string, number>;
-        for (const [k, v] of Object.entries(obj)) leftAtRef.current.set(k, v);
-        setLeftTick((t) => t + 1);
-      }
-    } catch {}
-  }, []);
-  const persistLeftAt = () => {
-    try {
-      const obj: Record<string, number> = {};
-      for (const [k, v] of leftAtRef.current) obj[k] = v;
-      window.localStorage.setItem(LEFT_STORAGE_KEY, JSON.stringify(obj));
-    } catch {}
-  };
-
-  // Read admin-device flag from localStorage on mount
+  // Admin-device toggle (localStorage flag read by VisitTracker)
   useEffect(() => {
     try { setIsAdminDevice(window.localStorage.getItem(ADMIN_DEVICE_KEY) === "1"); } catch {}
   }, []);
@@ -151,154 +161,19 @@ export function AdminDashboard({
     } catch {}
   };
 
-  // ─── Shared helper: merge one new visit into state with flash + dedupe ──
-  const applyNewVisit = (v: Visit) => {
-    if (!v || !v.id) return;
-    if (seenIdsRef.current.has(v.id)) return;
-    seenIdsRef.current.add(v.id);
-    const isNewVisitor = v.visitor_id && !seenVisitorsRef.current.has(v.visitor_id);
-    if (isNewVisitor && v.visitor_id) seenVisitorsRef.current.add(v.visitor_id);
-
-    // Prepend to the visits list (newest-first), cap at 500
-    setData((prev) => ({ ...prev, visits: [v, ...prev.visits].slice(0, 500) }));
-    // Clear a stale "left" timestamp if this new visit is newer — they're back
-    if (v.visitor_id && leftAtRef.current.has(v.visitor_id)) {
-      const prevLeft = leftAtRef.current.get(v.visitor_id)!;
-      if (Date.parse(v.created_at) > prevLeft) {
-        leftAtRef.current.delete(v.visitor_id);
-        persistLeftAt();
-      }
-    }
-    setNewVisitIds((prev) => { const n = new Set(prev); n.add(v.id); return n; });
-    if (isNewVisitor && v.visitor_id) {
-      setNewVisitorIds((prev) => { const n = new Set(prev); n.add(v.visitor_id!); return n; });
-    }
-    window.setTimeout(() => {
-      setNewVisitIds((prev) => { const n = new Set(prev); n.delete(v.id); return n; });
-      if (isNewVisitor && v.visitor_id) {
-        setNewVisitorIds((prev) => { const n = new Set(prev); n.delete(v.visitor_id!); return n; });
-      }
-    }, NEW_FLASH_MS);
-  };
-
-  // ─── 1) Supabase Realtime BROADCAST: new visits appear within ~500ms ───
-  useEffect(() => {
-    const supa = getSupabaseBrowser();
-    if (!supa) { setRealtimeStatus("down"); return; }
-    const ch = supa.channel("snd:visits:feed");
-    ch.on("broadcast", { event: "new_visit" }, (msg) => {
-      const payload = msg.payload as Visit | null;
-      if (payload) applyNewVisit(payload);
-    });
-    ch.subscribe((status) => {
-      if (status === "SUBSCRIBED") setRealtimeStatus("live");
-      else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") setRealtimeStatus("down");
-    });
-    return () => { try { supa.removeChannel(ch); } catch {} };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // ─── 2) Live Now — derived purely from visit timestamps.
-  // A visitor is LIVE if their newest row (of ANY type: visit, heartbeat,
-  // or offline) satisfies:
-  //    - Latest row is NOT an "offline" row, AND
-  //    - Latest row's created_at is within the last 45 seconds
-  // So heartbeats keep them alive; a stale heartbeat (phone locked / closed)
-  // makes them disappear after 45s. An explicit offline row makes them
-  // disappear immediately on tab close.
-  const HEARTBEAT_FRESH_MS = 45_000;
-  useEffect(() => {
-    const recompute = () => {
-      const now = Date.now();
-      const latestByVisitor = new Map<string, Visit>();
-      for (const v of data.visits) {
-        if (!v.visitor_id) continue;
-        const cur = latestByVisitor.get(v.visitor_id);
-        if (!cur || Date.parse(v.created_at) > Date.parse(cur.created_at)) {
-          latestByVisitor.set(v.visitor_id, v);
-        }
-      }
-      const live: PresenceEntry[] = [];
-      for (const v of latestByVisitor.values()) {
-        if (!v.visitor_id) continue;
-        if (isOfflineRow(v)) continue; // explicitly offline
-        const ms = Date.parse(v.created_at);
-        if (now - ms <= HEARTBEAT_FRESH_MS) {
-          live.push({
-            visitor_id: v.visitor_id,
-            chat_name: v.chat_name,
-            path: isHeartbeatRow(v) ? "/" : (v.path || "/"),
-            device: v.device_type || "unknown",
-            browser: v.browser || "unknown",
-          });
-        }
-      }
-      setLiveNow(live);
-    };
-    recompute();
-    const id = window.setInterval(recompute, 2000);
-    return () => window.clearInterval(id);
-  }, [data.visits]);
-
-  // Polling loop
+  // Poll /api/admin/data every POLL_MS, with a URL cache-buster
   useEffect(() => {
     let cancelled = false;
     let timer: number | null = null;
-
     const poll = async () => {
       try {
-        const r = await fetch(`/api/admin/data?token=${encodeURIComponent(token)}`, {
-          cache: "no-store",
-        });
+        const r = await fetch(
+          `/api/admin/data?token=${encodeURIComponent(token)}&_t=${Date.now()}`,
+          { cache: "no-store" }
+        );
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const p = (await r.json()) as Payload;
         if (cancelled) return;
-
-        // Detect new visits (ids we haven't seen before)
-        const freshVisitIds: string[] = [];
-        for (const v of p.visits) {
-          if (!seenIdsRef.current.has(v.id)) freshVisitIds.push(v.id);
-        }
-        // Detect new visitors (visitor_ids we haven't seen before)
-        const freshVisitorIds: string[] = [];
-        for (const v of p.visits) {
-          if (v.visitor_id && !seenVisitorsRef.current.has(v.visitor_id)) {
-            freshVisitorIds.push(v.visitor_id);
-          }
-        }
-
-        if (freshVisitIds.length > 0) {
-          setNewVisitIds((prev) => {
-            const next = new Set(prev);
-            freshVisitIds.forEach((id) => next.add(id));
-            return next;
-          });
-          freshVisitIds.forEach((id) => seenIdsRef.current.add(id));
-          // Auto-clear flash after NEW_FLASH_MS
-          window.setTimeout(() => {
-            setNewVisitIds((prev) => {
-              const next = new Set(prev);
-              freshVisitIds.forEach((id) => next.delete(id));
-              return next;
-            });
-          }, NEW_FLASH_MS);
-        }
-        if (freshVisitorIds.length > 0) {
-          setNewVisitorIds((prev) => {
-            const next = new Set(prev);
-            freshVisitorIds.forEach((vid) => next.add(vid));
-            return next;
-          });
-          freshVisitorIds.forEach((vid) => seenVisitorsRef.current.add(vid));
-          window.setTimeout(() => {
-            setNewVisitorIds((prev) => {
-              const next = new Set(prev);
-              freshVisitorIds.forEach((vid) => next.delete(vid));
-              return next;
-            });
-          }, NEW_FLASH_MS);
-        }
-
         setData(p);
         setLastPingAt(Date.now());
         setStatus("live");
@@ -308,9 +183,6 @@ export function AdminDashboard({
         if (!cancelled) timer = window.setTimeout(poll, POLL_MS);
       }
     };
-
-    // First poll fires shortly after mount to catch anything that came in
-    // between server-render and hydration
     timer = window.setTimeout(poll, 500);
     return () => {
       cancelled = true;
@@ -318,146 +190,43 @@ export function AdminDashboard({
     };
   }, [token]);
 
-  // Force a re-render every 15s so the "relSince" labels update
+  // Re-render every 2s so "x seconds ago" ticks and online flips cleanly
   useEffect(() => {
-    const id = window.setInterval(() => setTick((t) => t + 1), 15_000);
+    const id = window.setInterval(() => forceTick((t) => t + 1), 2000);
     return () => window.clearInterval(id);
   }, []);
-  useEffect(() => { void tick; }, [tick]);
 
-  // Mark connection as stale if we haven't pinged in > 3× poll interval
+  // Mark connection as stale if we haven't pinged recently
   useEffect(() => {
     const id = window.setInterval(() => {
-      if (Date.now() - lastPingAt > POLL_MS * 3) setStatus("stale");
+      if (Date.now() - lastPingAt > POLL_MS * 4) setStatus("stale");
     }, 2000);
     return () => window.clearInterval(id);
   }, [lastPingAt]);
 
-  // ── Derive display stats ──
-  const { visits, messages } = data;
-  const now = Date.now();
+  const visitors = useMemo(() => buildVisitorRows(data.visits), [data.visits, lastPingAt]);
+  const liveNow = visitors.filter((v) => v.isOnline);
 
-  const perNameMap = new Map<string, { name: string; count: number; first: string; last: string }>();
-  for (const m of messages) {
-    const key = (m.sender_name ?? "").trim();
-    if (!key) continue;
-    const cur = perNameMap.get(key);
-    if (!cur) perNameMap.set(key, { name: key, count: 1, first: m.created_at, last: m.created_at });
-    else {
-      cur.count++;
-      if (m.created_at < cur.first) cur.first = m.created_at;
-      if (m.created_at > cur.last) cur.last = m.created_at;
-    }
-  }
-  const perName = Array.from(perNameMap.values()).sort((a, b) => b.count - a.count);
-  const nameActive24h = perName.filter((u) => Date.parse(u.last) > now - 86400_000).length;
-  const nameActive7d = perName.filter((u) => Date.parse(u.last) > now - 7 * 86400_000).length;
-
-  // Count only REAL page views in all stats — heartbeat/offline markers
-  // are infrastructure, not visits.
-  const realVisits = visits.filter(isRealVisit);
-  const uniqueVisitors = new Set(realVisits.map((v) => v.visitor_id).filter(Boolean)).size;
-  const visits24h = realVisits.filter((v) => Date.parse(v.created_at) > now - 86400_000).length;
-  const visits7d = realVisits.filter((v) => Date.parse(v.created_at) > now - 7 * 86400_000).length;
-
-  const countryCount = new Map<string, number>();
-  const deviceCount = new Map<string, number>();
-  const browserCount = new Map<string, number>();
-  const osCount = new Map<string, number>();
-  const pathCount = new Map<string, number>();
-  for (const v of realVisits) {
-    if (v.country) countryCount.set(v.country, (countryCount.get(v.country) ?? 0) + 1);
-    if (v.device_type) deviceCount.set(v.device_type, (deviceCount.get(v.device_type) ?? 0) + 1);
-    if (v.browser) browserCount.set(v.browser, (browserCount.get(v.browser) ?? 0) + 1);
-    if (v.os) osCount.set(v.os, (osCount.get(v.os) ?? 0) + 1);
-    if (v.path) pathCount.set(v.path, (pathCount.get(v.path) ?? 0) + 1);
-  }
-  const topBy = (m: Map<string, number>) =>
-    Array.from(m.entries()).sort((a, b) => b[1] - a[1]).slice(0, 8);
-
-  const perVisitor = useMemo(() => {
-    const map = new Map<string, {
-      visitorId: string;
-      lastName: string | null;
-      lastIp: string | null;
-      lastCity: string | null;
-      lastCountry: string | null;
-      lastDevice: string | null;
-      lastBrowser: string | null;
-      lastOs: string | null;
-      firstAt: string;
-      lastAt: string;
-      lastHeartbeatAt: string | null; // newest heartbeat or visit timestamp
-      offlineAt: string | null;        // newest offline-marker row timestamp
-      visitCount: number;
-    }>();
-    for (const v of visits) {
-      if (!v.visitor_id) continue;
-      const cur = map.get(v.visitor_id);
-      if (!cur) {
-        map.set(v.visitor_id, {
-          visitorId: v.visitor_id,
-          lastName: v.chat_name,
-          lastIp: v.ip,
-          lastCity: v.city,
-          lastCountry: v.country,
-          lastDevice: v.device_type,
-          lastBrowser: v.browser,
-          lastOs: v.os,
-          firstAt: v.created_at,
-          lastAt: v.created_at,
-          lastHeartbeatAt: isHeartbeatRow(v) || isRealVisit(v) ? v.created_at : null,
-          offlineAt: isOfflineRow(v) ? v.created_at : null,
-          visitCount: isRealVisit(v) ? 1 : 0, // only real page views count
-        });
-      } else {
-        if (isRealVisit(v)) cur.visitCount++;
-        if (v.created_at < cur.firstAt) cur.firstAt = v.created_at;
-        if (!cur.lastName && v.chat_name) cur.lastName = v.chat_name;
-        // lastAt tracks the overall latest row (any type)
-        if (v.created_at > cur.lastAt) cur.lastAt = v.created_at;
-        // Heartbeat / visit timestamps update "last activity"
-        if ((isHeartbeatRow(v) || isRealVisit(v)) && (!cur.lastHeartbeatAt || v.created_at > cur.lastHeartbeatAt)) {
-          cur.lastHeartbeatAt = v.created_at;
-        }
-        // Offline marker — keep the newest
-        if (isOfflineRow(v) && (!cur.offlineAt || v.created_at > cur.offlineAt)) {
-          cur.offlineAt = v.created_at;
-        }
+  // Chat activity (per-name)
+  const perName = useMemo(() => {
+    const map = new Map<string, { name: string; count: number; first: string; last: string }>();
+    for (const m of data.messages) {
+      const name = (m.sender_name ?? "").trim();
+      if (!name) continue;
+      const cur = map.get(name);
+      if (!cur) map.set(name, { name, count: 1, first: m.created_at, last: m.created_at });
+      else {
+        cur.count++;
+        if (m.created_at < cur.first) cur.first = m.created_at;
+        if (m.created_at > cur.last) cur.last = m.created_at;
       }
     }
-    // After processing: if the newest heartbeat/visit happened AFTER the
-    // offline marker, the visitor is back online — clear offline for display
-    for (const row of map.values()) {
-      if (row.offlineAt && row.lastHeartbeatAt && row.lastHeartbeatAt > row.offlineAt) {
-        row.offlineAt = null;
-      }
-    }
-    // Effective last-seen (for sort). Everything is server-backed now:
-    //   - Online now (in liveNow) → always wins
-    //   - Else → max(offlineAt, lastHeartbeatAt, lastAt)
-    const liveSet = new Set(liveNow.map((p) => p.visitor_id));
-    const arr = Array.from(map.values());
-    const effSeen = (x: typeof arr[number]) => {
-      if (liveSet.has(x.visitorId)) return Number.MAX_SAFE_INTEGER;
-      const candidates: number[] = [Date.parse(x.lastAt)];
-      if (x.lastHeartbeatAt) candidates.push(Date.parse(x.lastHeartbeatAt));
-      if (x.offlineAt)       candidates.push(Date.parse(x.offlineAt));
-      return Math.max(...candidates);
-    };
-    return arr.sort((a, b) => effSeen(b) - effSeen(a));
-  }, [visits, liveNow]);
+    return Array.from(map.values()).sort((a, b) => b.count - a.count);
+  }, [data.messages]);
 
   return (
-    <div className="mx-auto max-w-[1400px] p-4 sm:p-6">
+    <div className="mx-auto max-w-[1200px] p-4 sm:p-6">
       <style>{`
-        @keyframes admin-row-flash {
-          0%   { background: rgba(76, 175, 80, 0.35); }
-          100% { background: transparent; }
-        }
-        .admin-new-row {
-          animation: admin-row-flash 6s ease-out forwards;
-        }
         @keyframes admin-live-dot {
           0%, 100% { opacity: 1; transform: scale(1); }
           50%      { opacity: 0.5; transform: scale(1.4); }
@@ -465,104 +234,56 @@ export function AdminDashboard({
         .admin-live-dot { animation: admin-live-dot 1.5s ease-in-out infinite; }
       `}</style>
 
-      <header className="mb-4 flex flex-col gap-1 border-b border-[var(--line)] pb-3">
-        <div className="flex items-center justify-between gap-2 flex-wrap">
+      {/* Header */}
+      <header className="mb-5 flex items-center justify-between gap-3 border-b border-[var(--line)] pb-3">
+        <div>
           <h1 className="text-lg font-semibold">SN Desk — Admin</h1>
-          <div className="flex items-center gap-3 text-[10.5px] text-[var(--text-muted)]">
-            <span className="flex items-center gap-1.5">
-              <span
-                className={`inline-block h-2 w-2 rounded-full ${
-                  status === "live" ? "bg-success admin-live-dot" :
-                  status === "stale" ? "bg-warning" : "bg-danger"
-                }`}
-              />
-              <span className="uppercase tracking-wider">
-                {status === "live" ? "LIVE" : status === "stale" ? "STALE" : "OFFLINE"}
-              </span>
-              <span>· polling every {POLL_MS / 1000}s</span>
-            </span>
-            <span>updated {relSince(new Date(lastPingAt).toISOString())}</span>
-            <button
-              onClick={toggleAdminDevice}
-              className={`rounded px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${
-                isAdminDevice
-                  ? "bg-success/20 text-success"
-                  : "bg-[var(--surface-2)] text-[var(--text-muted)] hover:text-[var(--text)]"
-              }`}
-              title={isAdminDevice
-                ? "This device is marked as admin — its visits are NOT tracked. Click to un-mark."
-                : "Mark this device as admin so its visits stop appearing in Recent Visits & Live Now."}
-            >
-              {isAdminDevice ? "✓ Admin device" : "Mark as admin device"}
-            </button>
-          </div>
+          <p className="mt-0.5 text-[10.5px] text-[var(--text-muted)]">
+            Live tracker for everyone who opens the SN Desk link. Auto-refreshes every {POLL_MS / 1000}s.
+          </p>
         </div>
-        <p className="text-[10.5px] text-[var(--text-muted)]">
-          Every page view logs IP, device, browser, city (via Vercel edge), path and timestamp.
-          Phones heartbeat every 15s while open — if a heartbeat is 45s stale, that visitor flips to
-          offline. The offline moment is written to the database and stays forever.
-        </p>
+        <div className="flex items-center gap-2 text-[10.5px]">
+          <span className="flex items-center gap-1.5 text-[var(--text-muted)]">
+            <span
+              className={`inline-block h-2 w-2 rounded-full ${
+                status === "live" ? "bg-success admin-live-dot" :
+                status === "stale" ? "bg-warning" : "bg-danger"
+              }`}
+            />
+            <span className="uppercase tracking-wider">{status}</span>
+          </span>
+          <button
+            onClick={toggleAdminDevice}
+            className={`rounded px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${
+              isAdminDevice
+                ? "bg-success/20 text-success"
+                : "bg-[var(--surface-2)] text-[var(--text-muted)] hover:text-[var(--text)]"
+            }`}
+            title={isAdminDevice
+              ? "This device is marked as admin — its visits are NOT tracked. Click to un-mark."
+              : "Mark this device as admin so its visits stop appearing in Recent Visitors."}
+          >
+            {isAdminDevice ? "✓ Admin device" : "Mark as admin device"}
+          </button>
+        </div>
       </header>
 
-      {/* ── LIVE NOW — green dots for everyone currently on the site ─────── */}
-      <section className="mb-5 rounded-xl border border-[var(--line)] bg-[var(--surface)] overflow-hidden">
+      {/* Summary line */}
+      <section className="mb-4 grid grid-cols-3 gap-2">
+        <SummaryCard label="Online now" value={liveNow.length} accent={liveNow.length > 0} />
+        <SummaryCard label="Total visitors" value={visitors.length} />
+        <SummaryCard label="Chat messages" value={data.messages.length} />
+      </section>
+
+      {/* THE main table — all visitors in one place */}
+      <section className="mb-6 rounded-xl border border-[var(--line)] bg-[var(--surface)] overflow-hidden">
         <header className="flex items-center justify-between border-b border-[var(--line)] px-3 py-2">
-          <div className="flex items-center gap-2">
-            <span className="inline-block h-2 w-2 rounded-full bg-success admin-live-dot" />
-            <span className="text-[11px] font-semibold uppercase tracking-[0.06em] text-[var(--text-muted)]">
-              Live now
-            </span>
-            <span className="text-[11px] text-[var(--text-muted)]">({liveNow.length} online)</span>
-          </div>
-          <span className="text-[10px] text-[var(--text-muted)]">heartbeat ≤ 45s</span>
-        </header>
-        {liveNow.length === 0 ? (
-          <div className="px-3 py-4 text-[11.5px] text-[var(--text-muted)]">
-            No one on the site right now.
-          </div>
-        ) : (
-          <ul className="divide-y divide-[var(--line)]">
-            {liveNow.map((p) => (
-              <li key={p.visitor_id} className="flex items-center gap-3 px-3 py-2 text-[11.5px]">
-                <span className="inline-block h-2 w-2 shrink-0 rounded-full bg-success admin-live-dot" />
-                <span className="font-medium">
-                  {p.chat_name || <span className="text-[var(--text-muted)]">(anonymous)</span>}
-                </span>
-                <span className="text-[var(--text-muted)]">·</span>
-                <span className="font-mono text-[10.5px]">{p.path}</span>
-                <span className="text-[var(--text-muted)]">·</span>
-                <span className="text-[var(--text-muted)]">{p.device} / {p.browser}</span>
-                <span className="ml-auto font-mono text-[10px] text-[var(--text-muted)]" title={p.visitor_id}>
-                  {p.visitor_id.slice(0, 8)}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-
-      {/* Summary cards */}
-      <section className="mb-5 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6">
-        <StatCard label="Total visits" value={realVisits.length} sublabel="last 500 shown" />
-        <StatCard label="Unique visitors" value={uniqueVisitors} sublabel="by browser fingerprint" />
-        <StatCard label="Visits 24h" value={visits24h} accent />
-        <StatCard label="Visits 7d" value={visits7d} />
-        <StatCard label="Unique names" value={perName.length} sublabel="in chat" />
-        <StatCard label="Names active 7d" value={nameActive7d} sublabel={`${nameActive24h} in 24h`} />
-      </section>
-
-      <section className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
-        <BreakdownCard title="Countries" entries={topBy(countryCount)} />
-        <BreakdownCard title="Devices" entries={topBy(deviceCount)} />
-        <BreakdownCard title="Browsers" entries={topBy(browserCount)} />
-        <BreakdownCard title="OS" entries={topBy(osCount)} />
-        <BreakdownCard title="Top pages" entries={topBy(pathCount)} />
-      </section>
-
-      {/* Unique visitors */}
-      <section className="mb-5 rounded-xl border border-[var(--line)] bg-[var(--surface)] overflow-hidden">
-        <header className="border-b border-[var(--line)] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-[var(--text-muted)]">
-          Unique visitors ({perVisitor.length})
+          <span className="text-[11px] font-semibold uppercase tracking-[0.06em] text-[var(--text-muted)]">
+            Recent Visitors ({visitors.length})
+          </span>
+          <span className="text-[10px] text-[var(--text-muted)]">
+            Online = active within last {LIVE_FRESH_MS / 1000}s
+          </span>
         </header>
         <div className="overflow-x-auto">
           <table className="w-full text-[11.5px]">
@@ -580,104 +301,51 @@ export function AdminDashboard({
               </tr>
             </thead>
             <tbody>
-              {perVisitor.map((v) => (
-                <tr key={v.visitorId}
-                    className={`border-t border-[var(--line)] hover:bg-[var(--surface-2)] ${newVisitorIds.has(v.visitorId) ? "admin-new-row" : ""}`}>
+              {visitors.map((v) => (
+                <tr key={v.visitorId} className="border-t border-[var(--line)] hover:bg-[var(--surface-2)]">
                   <td className="px-2 py-1.5 font-medium">
-                    {newVisitorIds.has(v.visitorId) && <span className="mr-1 text-success">🟢</span>}
-                    {v.lastName || <span className="text-[var(--text-muted)]">(anonymous)</span>}
-                  </td>
-                  <td className="px-2 py-1.5 tabular text-[var(--text-muted)]">{v.lastIp || "—"}</td>
-                  <td className="px-2 py-1.5">{v.lastCity ? `${v.lastCity}, ` : ""}{v.lastCountry || "—"}</td>
-                  <td className="px-2 py-1.5">{v.lastDevice || "—"}</td>
-                  <td className="px-2 py-1.5">{v.lastBrowser || "—"}</td>
-                  <td className="px-2 py-1.5">{v.lastOs || "—"}</td>
-                  <td className="px-2 py-1.5 tabular text-right">{v.visitCount}</td>
-                  <td className="px-2 py-1.5 tabular">{fmtWhen(v.firstAt)}</td>
-                  <td className="px-2 py-1.5 tabular">
-                    {(() => {
-                      // Live-aware Last Seen, all backed by server columns:
-                      //   1) In liveNow (heartbeat < 45s and offline_at null) → Online now
-                      //   2) offline_at set              → "went offline at X"
-                      //   3) Else                        → heartbeat / created_at
-                      const isLive = liveNow.some((p) => p.visitor_id === v.visitorId);
-                      if (isLive) {
-                        return (
-                          <span className="text-success font-medium">
-                            <span className="inline-block h-1.5 w-1.5 rounded-full bg-success admin-live-dot mr-1 align-middle" />
-                            Online now
-                          </span>
-                        );
-                      }
-                      if (v.offlineAt) {
-                        return <>{fmtWhen(v.offlineAt)} <span className="text-[9.5px] text-[var(--text-muted)]">(went offline {relSince(v.offlineAt)})</span></>;
-                      }
-                      const seen = v.lastHeartbeatAt || v.lastAt;
-                      return <>{fmtWhen(seen)} <span className="text-[9.5px] text-[var(--text-muted)]">({relSince(seen)})</span></>;
-                    })()}
-                  </td>
-                </tr>
-              ))}
-              {perVisitor.length === 0 && (
-                <tr><td colSpan={9} className="px-2 py-6 text-center text-[var(--text-muted)]">No visits recorded yet.</td></tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      {/* Recent visits raw feed — heartbeat rows hidden */}
-      <section className="mb-5 rounded-xl border border-[var(--line)] bg-[var(--surface)] overflow-hidden">
-        <header className="border-b border-[var(--line)] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-[var(--text-muted)]">
-          Recent visits ({visits.filter((v) => !isHeartbeatRow(v)).length})
-        </header>
-        <div className="overflow-x-auto">
-          <table className="w-full text-[11px]">
-            <thead className="bg-[var(--surface-2)] text-[10px] uppercase tracking-wider text-[var(--text-muted)]">
-              <tr>
-                <th className="px-2 py-2 text-left">Time</th>
-                <th className="px-2 py-2 text-left">Name</th>
-                <th className="px-2 py-2 text-left">IP</th>
-                <th className="px-2 py-2 text-left">Location</th>
-                <th className="px-2 py-2 text-left">Device</th>
-                <th className="px-2 py-2 text-left">Browser</th>
-                <th className="px-2 py-2 text-left">OS</th>
-                <th className="px-2 py-2 text-left">Path</th>
-                <th className="px-2 py-2 text-left">Referrer</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visits.filter((v) => !isHeartbeatRow(v)).map((v) => (
-                <tr key={v.id}
-                    className={`border-t border-[var(--line)] hover:bg-[var(--surface-2)] ${newVisitIds.has(v.id) ? "admin-new-row" : ""}`}
-                    title={v.user_agent ?? ""}>
-                  <td className="px-2 py-1.5 tabular whitespace-nowrap">
-                    {newVisitIds.has(v.id) && <span className="mr-1 text-success">🟢</span>}
-                    {isOfflineRow(v) && <span className="mr-1 text-[var(--text-muted)]">⬛</span>}
-                    {fmtWhen(v.created_at)}
-                  </td>
-                  <td className="px-2 py-1.5 font-medium">
-                    {v.chat_name || <span className="text-[var(--text-muted)]">—</span>}
-                    {isOfflineRow(v) && <span className="ml-1 text-[9.5px] text-[var(--text-muted)]">(went offline)</span>}
+                    {v.isOnline && (
+                      <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-success admin-live-dot align-middle" />
+                    )}
+                    {v.name || <span className="text-[var(--text-muted)]">(anonymous)</span>}
                   </td>
                   <td className="px-2 py-1.5 tabular text-[var(--text-muted)]">{v.ip || "—"}</td>
                   <td className="px-2 py-1.5">{v.city ? `${v.city}, ` : ""}{v.country || "—"}</td>
-                  <td className="px-2 py-1.5">{v.device_type || "—"}</td>
+                  <td className="px-2 py-1.5">{v.device || "—"}</td>
                   <td className="px-2 py-1.5">{v.browser || "—"}</td>
                   <td className="px-2 py-1.5">{v.os || "—"}</td>
-                  <td className="px-2 py-1.5 font-mono text-[10.5px]">{isOfflineRow(v) ? "—" : (v.path || "—")}</td>
-                  <td className="px-2 py-1.5 text-[10.5px] text-[var(--text-muted)] max-w-[220px] truncate">{v.referrer || "direct"}</td>
+                  <td className="px-2 py-1.5 tabular text-right">{v.visitCount}</td>
+                  <td className="px-2 py-1.5 tabular">{fmtWhen(v.firstAt)}</td>
+                  <td className="px-2 py-1.5 tabular">
+                    {v.isOnline ? (
+                      <span className="font-medium text-success">
+                        <span className="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-success admin-live-dot align-middle" />
+                        Online now
+                      </span>
+                    ) : v.offlineAt ? (
+                      <>
+                        {fmtWhen(v.offlineAt)}
+                        <span className="text-[9.5px] text-[var(--text-muted)]"> (went offline {relSince(v.offlineAt)})</span>
+                      </>
+                    ) : (
+                      <>
+                        {fmtWhen(v.lastActivityAt)}
+                        <span className="text-[9.5px] text-[var(--text-muted)]"> ({relSince(v.lastActivityAt)})</span>
+                      </>
+                    )}
+                  </td>
                 </tr>
               ))}
-              {visits.length === 0 && (
-                <tr><td colSpan={9} className="px-2 py-6 text-center text-[var(--text-muted)]">No visits yet.</td></tr>
+              {visitors.length === 0 && (
+                <tr><td colSpan={9} className="px-2 py-6 text-center text-[var(--text-muted)]">No visitors yet.</td></tr>
               )}
             </tbody>
           </table>
         </div>
       </section>
 
-      <section className="mb-8 rounded-xl border border-[var(--line)] bg-[var(--surface)] overflow-hidden">
+      {/* Chat activity */}
+      <section className="rounded-xl border border-[var(--line)] bg-[var(--surface)] overflow-hidden">
         <header className="border-b border-[var(--line)] px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-[var(--text-muted)]">
           Chat activity — messages per registered name
         </header>
@@ -709,37 +377,19 @@ export function AdminDashboard({
           </table>
         </div>
       </section>
+
+      <footer className="mt-4 text-center text-[10px] text-[var(--text-muted)]">
+        Updated {relSince(new Date(lastPingAt).toISOString())} · generatedAt {data.generatedAt}
+      </footer>
     </div>
   );
 }
 
-function StatCard({ label, value, sublabel, accent }: { label: string; value: string | number; sublabel?: string; accent?: boolean }) {
+function SummaryCard({ label, value, accent }: { label: string; value: number; accent?: boolean }) {
   return (
     <div className="rounded-xl border border-[var(--line)] bg-[var(--surface)] p-3">
       <div className="text-[9.5px] uppercase tracking-[0.08em] text-[var(--text-muted)]">{label}</div>
-      <div className={`mt-0.5 text-[22px] font-semibold tabular ${accent ? "text-accent" : ""}`}>{value}</div>
-      {sublabel && <div className="text-[9.5px] text-[var(--text-muted)]">{sublabel}</div>}
-    </div>
-  );
-}
-
-function BreakdownCard({ title, entries }: { title: string; entries: [string, number][] }) {
-  const total = entries.reduce((s, [, n]) => s + n, 0) || 1;
-  return (
-    <div className="rounded-xl border border-[var(--line)] bg-[var(--surface)] p-3">
-      <div className="mb-1.5 text-[9.5px] uppercase tracking-[0.08em] text-[var(--text-muted)]">{title}</div>
-      {entries.length === 0 ? (
-        <div className="text-[11px] text-[var(--text-muted)]">no data</div>
-      ) : (
-        <ul className="space-y-0.5">
-          {entries.map(([k, n]) => (
-            <li key={k} className="flex items-center justify-between gap-2 text-[11px]">
-              <span className="truncate">{k}</span>
-              <span className="tabular text-[var(--text-muted)]">{n} · {Math.round((n / total) * 100)}%</span>
-            </li>
-          ))}
-        </ul>
-      )}
+      <div className={`mt-0.5 text-[22px] font-semibold tabular ${accent ? "text-success" : ""}`}>{value}</div>
     </div>
   );
 }
