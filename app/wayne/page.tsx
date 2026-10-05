@@ -6,8 +6,9 @@
 // gets a 12-month target price. Powered by /api/wayne/analyze.
 
 import { useEffect, useRef, useState } from "react";
-import { Brain, Loader2, Search, TrendingUp, TrendingDown, ShieldAlert, AlertTriangle, CheckCircle2 } from "lucide-react";
-import type { MarketCode } from "@/lib/types";
+import { Brain, Loader2, Search, TrendingUp, TrendingDown, ShieldAlert, AlertTriangle, CheckCircle2, ClipboardPaste, XCircle, ThumbsUp, ThumbsDown } from "lucide-react";
+import type { MarketCode, Tranche } from "@/lib/types";
+import { parseTrancheText } from "@/lib/parser";
 
 interface Projection { year: number; fcf: number; pv: number; }
 interface Analysis {
@@ -53,6 +54,8 @@ interface Analysis {
     waynesFutureValue: number | null;
     ourEvSalesIV: number | null;
     waynesEvSalesIV: number | null;
+    ourEvSalesFV: number | null;
+    waynesEvSalesFV: number | null;
     evSalesMarketMultiple: number;
     evSalesWayneMultiple: number;
     evSalesUsed: boolean;
@@ -139,6 +142,21 @@ const MARKETS: { code: MarketCode; label: string }[] = [
   { code: "AU", label: "AU" },
 ];
 
+interface TranchePerUnderlying {
+  symbol: string; market: string; longName: string | null;
+  analysis: Analysis | null; error: string | null;
+}
+interface TrancheAnalysis {
+  tranche: Tranche;
+  perUnderlying: TranchePerUnderlying[];
+  verdict: {
+    overall: "GO" | "NO" | "CONDITIONAL";
+    passes: string[];
+    fails: string[];
+    notes: string[];
+  };
+}
+
 export default function WaynePage() {
   const [symbol, setSymbol] = useState("");
   const [market, setMarket] = useState<MarketCode>("US");
@@ -147,6 +165,14 @@ export default function WaynePage() {
   const [result, setResult] = useState<Analysis | null>(null);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // ─── Tranche parser state ─────────────────────────────────────────────
+  const [trancheOpen, setTrancheOpen] = useState(false);
+  const [trancheText, setTrancheText] = useState("");
+  const [trancheAnalyzing, setTrancheAnalyzing] = useState(false);
+  const [trancheResult, setTrancheResult] = useState<TrancheAnalysis | null>(null);
+  const [trancheError, setTrancheError] = useState<string | null>(null);
+  const trancheResultRef = useRef<HTMLDivElement | null>(null);
 
   // Animate the step list sequentially while the fetch runs in parallel.
   useEffect(() => {
@@ -187,6 +213,131 @@ export default function WaynePage() {
   }
 
   function onKey(e: React.KeyboardEvent) { if (e.key === "Enter") ask(); }
+
+  // ─── Tranche-level analysis ────────────────────────────────────────────
+  async function analyzeTranche() {
+    const text = trancheText.trim();
+    if (!text) return;
+    setTrancheError(null);
+    setTrancheResult(null);
+    setTrancheAnalyzing(true);
+    try {
+      const parsed = parseTrancheText(text);
+      if (!parsed?.tranche?.underlyings?.length) {
+        throw new Error("No underlyings detected in that message. Make sure it includes the stock names.");
+      }
+      const tranche = parsed.tranche;
+
+      // Fetch Wayne analysis for each underlying in parallel
+      const perResults = await Promise.all(
+        tranche.underlyings.map(async (u) => {
+          try {
+            const r = await fetch(`/api/wayne/analyze?symbol=${encodeURIComponent(u.symbol)}&market=${u.market}`, { cache: "no-store" });
+            if (!r.ok) {
+              const j = await r.json().catch(() => ({}));
+              return { symbol: u.symbol, market: u.market, longName: u.rawName, analysis: null, error: j.error || `HTTP ${r.status}` };
+            }
+            const a = (await r.json()) as Analysis;
+            return { symbol: u.symbol, market: u.market, longName: a.longName ?? u.rawName, analysis: a, error: null };
+          } catch (e: any) {
+            return { symbol: u.symbol, market: u.market, longName: u.rawName, analysis: null, error: String(e?.message || e) };
+          }
+        })
+      );
+
+      // ── Decide the tranche verdict ──────────────────────────────────────
+      const passes: string[] = [];
+      const fails: string[] = [];
+      const notes: string[] = [];
+
+      const haveAll = perResults.every((r) => r.analysis != null);
+      if (!haveAll) {
+        const missing = perResults.filter((r) => !r.analysis).map((r) => r.symbol).join(", ");
+        notes.push(`Could not fetch data for: ${missing}. Verdict uses available names only.`);
+      }
+
+      // 1) Debt Gate — ANY banned underlying is a hard NO
+      const anyBanned = perResults.some((r) => r.analysis?.computed.banned);
+      const bannedNames = perResults.filter((r) => r.analysis?.computed.banned).map((r) => `${r.symbol} (${r.analysis!.computed.banReasons[0] ?? "high debt"})`);
+      if (anyBanned) {
+        fails.push(`Debt gate failed: ${bannedNames.join(" · ")}`);
+      } else {
+        passes.push("Debt gate: all underlyings healthy balance sheet");
+      }
+
+      // 2) Easy KO — Wayne's FV above current means stock likely clears KO
+      const easyKO = perResults.filter((r) => r.analysis?.computed.waynesTarget != null && r.analysis.computed.waynesTarget > r.analysis.price);
+      if (easyKO.length === perResults.length) {
+        passes.push(`Easy KO: Wayne's 12M target above current for all ${perResults.length} underlyings`);
+      } else if (easyKO.length === 0) {
+        fails.push("Hard KO: Wayne's 12M target BELOW current for every underlying — unlikely to autocall");
+      } else {
+        notes.push(`Mixed KO outlook: ${easyKO.length}/${perResults.length} underlyings have upside to Wayne's 12M target`);
+      }
+
+      // 3) Stepdown feature — makes KO progressively easier over the tenor
+      const hasStepdown = tranche.koStepdownPct > 0;
+      if (hasStepdown) {
+        passes.push(`Stepdown ${(tranche.koStepdownPct * 100).toFixed(1)}%/period — KO threshold drops each observation, easing autocall`);
+      } else {
+        notes.push(`No stepdown — KO stays flat at ${(tranche.koStartPct * 100).toFixed(0)}% of initial for the full tenor`);
+      }
+
+      // 4) EKI safety — KI barrier must be well below Wayne's IV so you're
+      // not stuck with overvalued shares if you do get knocked in
+      const unsafeKI = perResults.filter((r) => {
+        const a = r.analysis; if (!a) return false;
+        const ekiPrice = a.price * tranche.ekiPct;
+        const ivAnchor = a.computed.waynesIntrinsicValue ?? a.computed.waynesEvSalesIV ?? a.computed.waynesFutureValue ?? null;
+        return ivAnchor != null && ekiPrice > ivAnchor; // EKI above IV = overpaying if knocked in
+      });
+      if (unsafeKI.length === 0) {
+        passes.push(`EKI safe: ${(tranche.ekiPct * 100).toFixed(0)}% barrier sits below Wayne's intrinsic value for all underlyings`);
+      } else {
+        fails.push(`EKI unsafe for ${unsafeKI.map((r) => r.symbol).join(", ")}: barrier price is ABOVE Wayne's intrinsic — assignment means overpaying`);
+      }
+
+      // 5) Coupon premium vs risk-free (3.5% SGD-ish)
+      const RF = 0.035;
+      const excess = tranche.couponPa - RF;
+      if (excess >= 0.045) {
+        passes.push(`Coupon premium: ${(tranche.couponPa * 100).toFixed(1)}% p.a. · +${(excess * 100).toFixed(1)}% over risk-free (adequate compensation for equity risk)`);
+      } else {
+        notes.push(`Coupon premium slim: ${(tranche.couponPa * 100).toFixed(1)}% p.a. is only +${(excess * 100).toFixed(1)}% over risk-free`);
+      }
+
+      // 6) Growth / earnings health — flag any sub-5% revenue grower
+      const slowGrowers = perResults.filter((r) => {
+        const g = r.analysis?.inputs.earningsGrowth ?? r.analysis?.inputs.revenueGrowth;
+        return g != null && g < 0.05;
+      });
+      if (slowGrowers.length) {
+        notes.push(`Slow growth watch: ${slowGrowers.map((r) => r.symbol).join(", ")} < 5% YoY — may struggle to clear KO`);
+      } else {
+        passes.push("Growth: all underlyings have healthy earnings/revenue momentum");
+      }
+
+      // Final decision
+      let overall: "GO" | "NO" | "CONDITIONAL";
+      if (fails.length === 0 && passes.length >= 4) overall = "GO";
+      else if (fails.length >= 2 || anyBanned) overall = "NO";
+      else overall = "CONDITIONAL";
+
+      setTrancheResult({
+        tranche,
+        perUnderlying: perResults,
+        verdict: { overall, passes, fails, notes },
+      });
+      // Auto-scroll to the verdict
+      setTimeout(() => {
+        trancheResultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 100);
+    } catch (e: any) {
+      setTrancheError(String(e?.message || e));
+    } finally {
+      setTrancheAnalyzing(false);
+    }
+  }
 
   const c = result?.computed;
   const i = result?.inputs;
@@ -260,6 +411,51 @@ export default function WaynePage() {
             </button>
           </div>
 
+          {/* Tranche parser toggle button — modelled on Desk tab's parser */}
+          <div className="mt-3">
+            <button
+              onClick={() => setTrancheOpen((v) => !v)}
+              className="flex w-full items-center justify-center gap-2 rounded-lg border border-indigo-500/30 bg-indigo-500/10 px-4 py-2 text-[12.5px] font-semibold text-indigo-300 transition hover:bg-indigo-500/20"
+            >
+              <ClipboardPaste size={14} />
+              {trancheOpen ? "Hide tranche parser" : "Or parse your tranche here and see what's Wayne thinking"}
+            </button>
+          </div>
+
+          {trancheOpen && (
+            <div className="mt-3 rounded-lg border border-[var(--line)] bg-[var(--surface)] p-3 slide-up">
+              <label className="mb-1.5 block text-[10.5px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+                Paste the tranche message (same format as the Desk tab's parser)
+              </label>
+              <textarea
+                value={trancheText}
+                onChange={(e) => setTrancheText(e.target.value)}
+                placeholder={"e.g.\nMSI\nTrade: 6 Oct 2026\nTranche Code: MSIT26J072\nSGD\nMarvell US\nWestern Digital US\nStrike 90%\nKO 100%, stepdown 3%\nCoupon 10%\nTenor 12M\nEKI 50%"}
+                rows={10}
+                className="w-full rounded-md border border-[var(--line)] bg-[var(--surface-2)] px-3 py-2 font-mono text-[11.5px] outline-none focus:border-indigo-500/50"
+              />
+              <div className="mt-2 flex items-center justify-between gap-2 flex-wrap">
+                <span className="text-[10.5px] text-[var(--text-muted)]">
+                  Extracts underlyings, pulls live Yahoo fundamentals, runs Wayne's DCF on each, then combines with the tranche's stepdown + EKI + coupon.
+                </span>
+                <button
+                  onClick={analyzeTranche}
+                  disabled={trancheAnalyzing || !trancheText.trim()}
+                  className="flex items-center gap-2 rounded-lg bg-indigo-600 px-3.5 py-1.5 text-[11.5px] font-semibold text-white shadow-md shadow-indigo-500/30 hover:bg-indigo-500 disabled:opacity-50"
+                >
+                  {trancheAnalyzing ? <Loader2 size={13} className="animate-spin" /> : <Brain size={13} />}
+                  Does Wayne approve?
+                </button>
+              </div>
+              {trancheError && (
+                <div className="mt-2 flex items-start gap-2 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-[11.5px] text-red-400">
+                  <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+                  <span>{trancheError}</span>
+                </div>
+              )}
+            </div>
+          )}
+
           {error && (
             <div className="mt-4 flex items-start gap-2 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-[12px] text-red-400">
               <AlertTriangle size={14} className="mt-0.5 shrink-0" />
@@ -268,6 +464,13 @@ export default function WaynePage() {
           )}
         </div>
       </section>
+
+      {/* ─── TRANCHE VERDICT (shown after Does Wayne approve? click) ──── */}
+      {trancheResult && (
+        <div ref={trancheResultRef}>
+          <TrancheVerdict data={trancheResult} ccy="$" />
+        </div>
+      )}
 
       {/* THEATRICAL CALCULATION STREAM */}
       {analyzing && (
@@ -743,6 +946,131 @@ function InputRow({ label, value }: { label: string; value: string }) {
     <div className="flex items-baseline justify-between gap-2 border-b border-dashed border-[var(--line)] py-1">
       <span className="text-[var(--text-muted)]">{label}</span>
       <span className="tabular font-semibold">{value}</span>
+    </div>
+  );
+}
+
+function TrancheVerdict({ data, ccy }: { data: TrancheAnalysis; ccy: string }) {
+  const { tranche, perUnderlying, verdict } = data;
+  const banner =
+    verdict.overall === "GO"
+      ? { bg: "from-emerald-500/20 to-emerald-500/5", border: "border-emerald-500/50", text: "text-emerald-400", icon: ThumbsUp, headline: "Wayne says GO.", sub: "This tranche clears all of Wayne's gates — launch it." }
+      : verdict.overall === "NO"
+      ? { bg: "from-red-500/20 to-red-500/5", border: "border-red-500/50", text: "text-red-400", icon: ThumbsDown, headline: "Wayne says NO.", sub: "At least one hard gate failed — don't take this tranche." }
+      : { bg: "from-amber-500/20 to-amber-500/5", border: "border-amber-500/40", text: "text-amber-400", icon: AlertTriangle, headline: "Wayne says IT DEPENDS.", sub: "Mixed signals — review the gate detail below before deciding." };
+  const Icon = banner.icon;
+
+  return (
+    <section className="mb-8 mt-6 slide-up">
+      {/* Big verdict banner */}
+      <div className={`rounded-2xl border ${banner.border} bg-gradient-to-br ${banner.bg} p-5`}>
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div className="flex items-start gap-3">
+            <Icon size={28} className={`mt-0.5 ${banner.text}`} />
+            <div>
+              <div className={`text-[20px] font-bold ${banner.text}`}>{banner.headline}</div>
+              <div className="mt-0.5 text-[12px] text-[var(--text-muted)]">{banner.sub}</div>
+            </div>
+          </div>
+          <div className="text-right text-[10.5px]">
+            <div className="uppercase tracking-wider text-[var(--text-muted)]">Tranche</div>
+            <div className="font-mono text-[11.5px] font-semibold">{tranche.trancheCode || "—"}</div>
+            <div className="mt-1 text-[var(--text-muted)]">
+              {tranche.currency} · {(tranche.couponPa * 100).toFixed(2)}% p.a. · {tranche.tenorMonths}M · Strike {(tranche.strikePct * 100).toFixed(0)}% · KO {(tranche.koStartPct * 100).toFixed(0)}% ↓{(tranche.koStepdownPct * 100).toFixed(1)}% · EKI {(tranche.ekiPct * 100).toFixed(0)}%
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Gate detail */}
+      <section className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <GateList title="PASSES" items={verdict.passes} color="emerald" icon={CheckCircle2} />
+        <GateList title="FAILS" items={verdict.fails} color="red" icon={XCircle} />
+        <GateList title="NOTES" items={verdict.notes} color="muted" icon={AlertTriangle} />
+      </section>
+
+      {/* Per-underlying breakdown */}
+      <section className="mt-4 rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-4">
+        <h2 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+          Per-underlying Wayne analysis
+        </h2>
+        <div className="overflow-x-auto">
+          <table className="w-full text-[11.5px]">
+            <thead className="bg-[var(--surface-2)] text-[10px] uppercase tracking-wider text-[var(--text-muted)]">
+              <tr>
+                <th className="px-2 py-2 text-left">Underlying</th>
+                <th className="px-2 py-2 text-right">Current</th>
+                <th className="px-2 py-2 text-right">Strike ({(tranche.strikePct * 100).toFixed(0)}%)</th>
+                <th className="px-2 py-2 text-right">EKI ({(tranche.ekiPct * 100).toFixed(0)}%)</th>
+                <th className="px-2 py-2 text-right">Wayne's IV</th>
+                <th className="px-2 py-2 text-right">Wayne's FV 12M</th>
+                <th className="px-2 py-2 text-center">Debt Gate</th>
+                <th className="px-2 py-2 text-center">KO Likely?</th>
+                <th className="px-2 py-2 text-center">EKI Safe?</th>
+              </tr>
+            </thead>
+            <tbody>
+              {perUnderlying.map((u) => {
+                if (!u.analysis) return (
+                  <tr key={u.symbol} className="border-t border-[var(--line)]">
+                    <td className="px-2 py-1.5 font-medium">{u.symbol}</td>
+                    <td colSpan={8} className="px-2 py-1.5 text-[var(--text-muted)]">
+                      <AlertTriangle size={10} className="mr-1 inline" /> {u.error || "no data"}
+                    </td>
+                  </tr>
+                );
+                const a = u.analysis;
+                const strike = a.price * tranche.strikePct;
+                const eki = a.price * tranche.ekiPct;
+                const wayneIV = a.computed.waynesIntrinsicValue ?? a.computed.waynesEvSalesIV;
+                const wayneFV = a.computed.waynesTarget;
+                const koLikely = wayneFV != null && wayneFV > a.price;
+                const ekiSafe = wayneIV != null && eki < wayneIV;
+                const debtOK = !a.computed.banned;
+                return (
+                  <tr key={u.symbol} className="border-t border-[var(--line)] hover:bg-[var(--surface-2)]">
+                    <td className="px-2 py-1.5">
+                      <div className="font-semibold">{a.longName || u.symbol}</div>
+                      <div className="text-[9.5px] text-[var(--text-muted)]">{u.symbol} · {u.market}</div>
+                    </td>
+                    <td className="px-2 py-1.5 tabular text-right font-semibold">{fmtPrice(a.price, ccy)}</td>
+                    <td className="px-2 py-1.5 tabular text-right text-[var(--text-muted)]">{fmtPrice(strike, ccy)}</td>
+                    <td className="px-2 py-1.5 tabular text-right text-[var(--text-muted)]">{fmtPrice(eki, ccy)}</td>
+                    <td className="px-2 py-1.5 tabular text-right">{wayneIV != null ? fmtPrice(wayneIV, ccy) : "—"}</td>
+                    <td className="px-2 py-1.5 tabular text-right">{wayneFV != null ? fmtPrice(wayneFV, ccy) : "—"}</td>
+                    <td className="px-2 py-1.5 text-center">{debtOK ? "✅" : "❌"}</td>
+                    <td className="px-2 py-1.5 text-center">{koLikely ? "✅" : "⚠️"}</td>
+                    <td className="px-2 py-1.5 text-center">{ekiSafe ? "✅" : "⚠️"}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+  );
+}
+
+function GateList({ title, items, color, icon: Icon }: {
+  title: string; items: string[]; color: "emerald" | "red" | "muted"; icon: any;
+}) {
+  const cs =
+    color === "emerald" ? "border-emerald-500/40 bg-emerald-500/5 text-emerald-400" :
+    color === "red" ? "border-red-500/40 bg-red-500/5 text-red-400" :
+    "border-[var(--line)] bg-[var(--surface)] text-[var(--text-muted)]";
+  return (
+    <div className={`rounded-xl border p-3 ${cs}`}>
+      <div className="mb-2 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider">
+        <Icon size={11} />{title} ({items.length})
+      </div>
+      {items.length === 0 ? (
+        <div className="text-[10.5px] italic opacity-50">none</div>
+      ) : (
+        <ul className="space-y-1 text-[11px] text-[var(--text)]">
+          {items.map((it, idx) => <li key={idx} className="leading-snug">• {it}</li>)}
+        </ul>
+      )}
     </div>
   );
 }

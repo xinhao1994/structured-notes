@@ -231,13 +231,30 @@ export async function GET(req: NextRequest) {
 
   // ── Rule (b): Net Debt / Equity ──
   // Prefer Yahoo's normalized debtToEquity from defaultKeyStatistics (it
-  // excludes financing-arm debt). Yahoo reports percent (250 = 2.5x), so
-  // divide by 100 to get the ratio.
+  // excludes financing-arm debt like DELL's DFS book). Yahoo reports
+  // percent (250 = 2.5x), so divide by 100 to get the ratio.
+  //
+  // Sanity ceiling: when a company has done massive buybacks (DELL, MCD,
+  // SBUX, HD, AZO, DPZ, LMT, PM, etc.), their stockholder equity turns
+  // negative or near-zero. The D/E ratio then becomes mathematically huge
+  // (3000%+, 10,000%+) and meaningless — it does NOT indicate real
+  // leverage, just that returned-to-shareholder capital exceeds retained
+  // earnings. Debt-to-FCF is the honest gauge for these names. So if the
+  // reported D/E is above 10× (1000%), we DROP it and gate on D/FCF only.
+  const D_E_SANITY_CEILING = 10;
   let debtToEquity: number | null = null;
-  let debtToEquitySource: "yahoo-normalized" | "raw-computed" | "unavailable" = "unavailable";
+  let debtToEquitySource: "yahoo-normalized" | "raw-computed" | "unavailable" | "ignored-distorted" = "unavailable";
   if (f.debtToEquityYahoo != null && Number.isFinite(f.debtToEquityYahoo)) {
-    debtToEquity = f.debtToEquityYahoo / 100;
-    debtToEquitySource = "yahoo-normalized";
+    const yahooDE = f.debtToEquityYahoo / 100;
+    if (yahooDE > D_E_SANITY_CEILING) {
+      // Negative/near-zero equity from buybacks — ratio not meaningful
+      debtToEquity = null;
+      debtToEquitySource = "ignored-distorted";
+      warnings.push(`Equity-ratio skipped: Yahoo reports D/E = ${(yahooDE * 100).toFixed(0)}%, which signals negative or near-zero book equity (common for buyback-heavy co's like DELL). Debt-to-FCF is the honest gauge; using that alone.`);
+    } else {
+      debtToEquity = yahooDE;
+      debtToEquitySource = "yahoo-normalized";
+    }
   } else if (equity != null && equity > 0) {
     debtToEquity = netDebt / equity;
     debtToEquitySource = "raw-computed";
@@ -311,29 +328,33 @@ export async function GET(req: NextRequest) {
   }
 
   // ─── EV/Sales fallback (for pre-profit growth names) ────────────────
-  // When Forward EPS is negative or null, PE-based IV is meaningless.
-  // Switch to EV/Sales using a sector-adjusted multiple. Equity value =
-  // (target EV/Sales × TTM revenue) + net cash. Per share from that.
   const peMethodFailed = ourIntrinsicValue == null || (f.epsForward != null && f.epsForward <= 0);
   const evSalesMultiples = targetEvSalesMultiple(f.revenueGrowth ?? null, f.profitMargin ?? null);
   let ourEvSalesIV: number | null = null;
   let waynesEvSalesIV: number | null = null;
+  let ourEvSalesFV: number | null = null;    // 12M forward on next-year revenue
+  let waynesEvSalesFV: number | null = null;
   let evSalesUsed = false;
   if (f.totalRevenueTTM != null && f.totalRevenueTTM > 0 && f.sharesOutstanding) {
-    const ourTargetEV = evSalesMultiples.market * f.totalRevenueTTM;
-    const waynesTargetEV = evSalesMultiples.wayne * f.totalRevenueTTM;
     const netCash = (f.totalCash ?? 0) - (f.totalDebt ?? 0);
-    ourEvSalesIV = (ourTargetEV + netCash) / f.sharesOutstanding;
-    waynesEvSalesIV = (waynesTargetEV + netCash) / f.sharesOutstanding;
+    ourEvSalesIV   = (evSalesMultiples.market * f.totalRevenueTTM + netCash) / f.sharesOutstanding;
+    waynesEvSalesIV = (evSalesMultiples.wayne * f.totalRevenueTTM + netCash) / f.sharesOutstanding;
+    const nextYearRev = f.totalRevenueTTM * (1 + growth);
+    ourEvSalesFV   = (evSalesMultiples.market * nextYearRev + netCash) / f.sharesOutstanding;
+    waynesEvSalesFV = (evSalesMultiples.wayne * nextYearRev + netCash) / f.sharesOutstanding;
     if (peMethodFailed) evSalesUsed = true;
   }
 
-  // ─── Wayne's Target Price = Wayne's Intrinsic Value (today) ──────────
-  // Friday showed that this is the right anchor — Wayne's conservative PE
-  // applied to current forward EPS. For MRVL this gave $220-230, matching
-  // what the user heard from Wayne directly.
-  // When PE method fails (pre-profit), fall back to Wayne's EV/Sales IV.
-  const waynesTarget = waynesIntrinsicValue ?? waynesEvSalesIV;
+  // ─── Wayne's Target Price = Wayne's FUTURE value (12M) ───────────────
+  // CRITICAL fix: using Wayne's current IV (= Forward EPS × Market PE × 0.85)
+  // meant every stock trading at market multiple showed a mechanical −15%
+  // "richly priced" verdict — pure artefact of the haircut, not a real
+  // signal. Wayne's actual investable target is the FUTURE price: next-
+  // year EPS × Wayne's PE. For a growing stock, that lands ABOVE current;
+  // for a flat/declining one it stays below — which is the real signal.
+  const waynesTarget = evSalesUsed
+    ? (waynesEvSalesFV ?? waynesEvSalesIV)
+    : (waynesFutureValue ?? waynesEvSalesFV ?? waynesIntrinsicValue);
   const effectiveOurIV = ourIntrinsicValue ?? ourEvSalesIV;
 
   // ─── ELI level analysis (90/50 defaults) ─────────────────────────────
@@ -408,6 +429,8 @@ export async function GET(req: NextRequest) {
       // EV/Sales fallback (for pre-profit growth names like CRWV)
       ourEvSalesIV,
       waynesEvSalesIV,
+      ourEvSalesFV,
+      waynesEvSalesFV,
       evSalesMarketMultiple: evSalesMultiples.market,
       evSalesWayneMultiple: evSalesMultiples.wayne,
       evSalesUsed,
