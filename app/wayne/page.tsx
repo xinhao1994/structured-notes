@@ -51,8 +51,14 @@ interface Analysis {
     waynesIntrinsicValue: number | null;
     ourFutureValue: number | null;
     waynesFutureValue: number | null;
-    intrinsicPerShare: number | null; // legacy alias = ourIntrinsicValue
-    futureValue12m: number | null;    // legacy alias = ourFutureValue
+    ourEvSalesIV: number | null;
+    waynesEvSalesIV: number | null;
+    evSalesMarketMultiple: number;
+    evSalesWayneMultiple: number;
+    evSalesUsed: boolean;
+    peMethodFailed: boolean;
+    intrinsicPerShare: number | null; // legacy alias
+    futureValue12m: number | null;    // legacy alias
     waynesTarget: number | null;
     fcfIntrinsicValue: number | null;
     projections: Projection[];
@@ -62,6 +68,8 @@ interface Analysis {
     netDebt: number;
     debtToFCF: number | null;
     debtToEquity: number | null;
+    debtToEquitySource: "yahoo-normalized" | "raw-computed" | "unavailable";
+    cashRich: boolean;
     banned: boolean;
     banReasons: string[];
     eliLevels: {
@@ -295,12 +303,26 @@ export default function WaynePage() {
             reasons={c.banReasons}
             debtToFCF={c.debtToFCF}
             debtToEquity={c.debtToEquity}
+            debtToEquitySource={c.debtToEquitySource}
+            cashRich={c.cashRich}
             netDebt={c.netDebt}
             fcf={i.freeCashFlow}
             equity={i.totalEquity}
             fcfBan={a.netDebtToFCFBan}
             equityBan={a.netDebtToEquityBan}
           />
+
+          {/* Warnings (growth-stage exemption, missing data flags, etc.) */}
+          {result.warnings && result.warnings.length > 0 && (
+            <div className="mb-4 slide-up rounded-xl border border-amber-500/30 bg-amber-500/5 p-3">
+              {result.warnings.map((w, idx) => (
+                <div key={idx} className="flex items-start gap-2 text-[11.5px] text-amber-200">
+                  <AlertTriangle size={12} className="mt-0.5 shrink-0 text-amber-400" />
+                  <span>{w}</span>
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* 2. Verdict banner */}
           <VerdictBanner verdict={c.verdict} upsidePct={c.upsidePct} banned={c.banned} />
@@ -324,42 +346,66 @@ export default function WaynePage() {
             <div className="mb-3 flex items-center justify-between flex-wrap gap-2">
               <h2 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
                 Dual-model valuation
+                {c.evSalesUsed && <span className="ml-2 rounded bg-amber-500/20 px-1.5 py-0.5 text-[9px] text-amber-400">EV/Sales fallback — pre-profit name</span>}
               </h2>
               <span className="text-[10px] text-[var(--text-muted)]">
-                Our PE: <b className="text-[var(--text)]">{c.ourPE?.toFixed(1) ?? "—"}x</b> · Wayne's PE: <b className="text-[var(--text)]">{c.waynesPE?.toFixed(1) ?? "—"}x</b> ({(a.waynePEHaircut * 100).toFixed(0)}% haircut)
+                {c.evSalesUsed ? (
+                  <>Our multiple: <b className="text-[var(--text)]">{c.evSalesMarketMultiple.toFixed(1)}x</b> EV/Sales · Wayne's: <b className="text-[var(--text)]">{c.evSalesWayneMultiple.toFixed(1)}x</b></>
+                ) : (
+                  <>Our PE: <b className="text-[var(--text)]">{c.ourPE?.toFixed(1) ?? "—"}x</b> · Wayne's PE: <b className="text-[var(--text)]">{c.waynesPE?.toFixed(1) ?? "—"}x</b> ({(a.waynePEHaircut * 100).toFixed(0)}% haircut)</>
+                )}
               </span>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <ValueCard
-                label="Our Intrinsic Value"
-                sublabel="Fwd EPS × Market PE · today"
-                value={c.ourIntrinsicValue}
+                label={c.evSalesUsed ? "Our IV (EV/Sales)" : "Our Intrinsic Value"}
+                sublabel={c.evSalesUsed ? "Target EV/Sales × TTM revenue" : "Fwd EPS × Market PE · today"}
+                value={c.evSalesUsed ? c.ourEvSalesIV : c.ourIntrinsicValue}
                 ccy={ccy}
-                hint={c.ourIntrinsicValue && result.price ? ((c.ourIntrinsicValue - result.price) / result.price) : null}
+                hint={(() => {
+                  const v = c.evSalesUsed ? c.ourEvSalesIV : c.ourIntrinsicValue;
+                  return v && result.price ? ((v - result.price) / result.price) : null;
+                })()}
               />
               <ValueCard
-                label="Wayne's Intrinsic Value"
-                sublabel={`Fwd EPS × Wayne's PE · today`}
-                value={c.waynesIntrinsicValue}
+                label={c.evSalesUsed ? "Wayne's IV (EV/Sales)" : "Wayne's Intrinsic Value"}
+                sublabel={c.evSalesUsed ? "Wayne's multiple × TTM revenue" : `Fwd EPS × Wayne's PE · today`}
+                value={c.evSalesUsed ? c.waynesEvSalesIV : c.waynesIntrinsicValue}
                 ccy={ccy}
-                hint={c.waynesIntrinsicValue && result.price ? ((c.waynesIntrinsicValue - result.price) / result.price) : null}
+                hint={(() => {
+                  const v = c.evSalesUsed ? c.waynesEvSalesIV : c.waynesIntrinsicValue;
+                  return v && result.price ? ((v - result.price) / result.price) : null;
+                })()}
                 accent
               />
-              <ValueCard
-                label="Our Future Value (12M)"
-                sublabel="FY+1 EPS × Market PE"
-                value={c.ourFutureValue}
-                ccy={ccy}
-                hint={c.ourFutureValue && result.price ? ((c.ourFutureValue - result.price) / result.price) : null}
-              />
-              <ValueCard
-                label="Wayne's Future Value (12M)"
-                sublabel="FY+1 EPS × Wayne's PE"
-                value={c.waynesFutureValue}
-                ccy={ccy}
-                hint={c.waynesFutureValue && result.price ? ((c.waynesFutureValue - result.price) / result.price) : null}
-                accent
-              />
+              {!c.evSalesUsed && (
+                <>
+                  <ValueCard
+                    label="Our Future Value (12M)"
+                    sublabel="FY+1 EPS × Market PE"
+                    value={c.ourFutureValue}
+                    ccy={ccy}
+                    hint={c.ourFutureValue && result.price ? ((c.ourFutureValue - result.price) / result.price) : null}
+                  />
+                  <ValueCard
+                    label="Wayne's Future Value (12M)"
+                    sublabel="FY+1 EPS × Wayne's PE"
+                    value={c.waynesFutureValue}
+                    ccy={ccy}
+                    hint={c.waynesFutureValue && result.price ? ((c.waynesFutureValue - result.price) / result.price) : null}
+                    accent
+                  />
+                </>
+              )}
+              {c.evSalesUsed && (
+                <div className="col-span-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-[11px] text-amber-200">
+                  <b>Note:</b> This stock has negative or null Forward EPS so the PE method doesn't apply.
+                  Using <b>EV/Sales</b> instead — target multiple is sector-adjusted based on revenue growth
+                  ({c.growth > 0 ? `${(c.growth * 100).toFixed(0)}% growth bucket` : "slow bucket"}).
+                  Future Value (12M) suppressed because growth-stage names revalue on next quarter's
+                  revenue, not EPS extrapolation.
+                </div>
+              )}
             </div>
             <div className="mt-3 rounded-lg border border-indigo-500/30 bg-indigo-500/5 p-3">
               <div className="text-[10px] font-semibold uppercase tracking-wider text-indigo-400">Wayne's Target Price (today)</div>
@@ -584,29 +630,50 @@ function renderGap(gap: number | null, ccy: string) {
   );
 }
 
-function DebtGate({ banned, reasons, debtToFCF, debtToEquity, netDebt, fcf, equity, fcfBan, equityBan }: {
+function DebtGate({ banned, reasons, debtToFCF, debtToEquity, debtToEquitySource, cashRich, netDebt, fcf, equity, fcfBan, equityBan }: {
   banned: boolean; reasons: string[];
   debtToFCF: number | null; debtToEquity: number | null;
+  debtToEquitySource: "yahoo-normalized" | "raw-computed" | "unavailable";
+  cashRich: boolean;
   netDebt: number; fcf: number | null; equity: number | null;
   fcfBan: number; equityBan: number;
 }) {
-  const fcfOK = debtToFCF == null || debtToFCF <= fcfBan;
+  const fcfRatioFinite = debtToFCF != null && Number.isFinite(debtToFCF);
+  const fcfOK = cashRich || (fcfRatioFinite && (debtToFCF as number) <= fcfBan);
   const eqOK = debtToEquity == null || debtToEquity <= equityBan;
+  const fcfDisplay = cashRich
+    ? "n/a"
+    : debtToFCF == null
+    ? "—"
+    : !Number.isFinite(debtToFCF)
+    ? "∞ (FCF ≤ 0)"
+    : `${(debtToFCF as number).toFixed(2)}x`;
+  const sourceLabel =
+    debtToEquitySource === "yahoo-normalized" ? "Yahoo normalized" :
+    debtToEquitySource === "raw-computed" ? "computed from balance sheet" : "unavailable";
   return (
     <section className={`mb-4 rounded-2xl border p-4 slide-up ${banned ? "border-amber-500/40 bg-amber-500/10" : "border-emerald-500/30 bg-emerald-500/5"}`}>
-      <div className="mb-2 flex items-center gap-2">
-        <ShieldAlert size={16} className={banned ? "text-amber-400" : "text-emerald-400"} />
-        <h2 className={`text-[11px] font-bold uppercase tracking-wider ${banned ? "text-amber-400" : "text-emerald-400"}`}>
-          Debt Gate — {banned ? "BANNED" : "PASS"}
-        </h2>
+      <div className="mb-2 flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-2">
+          <ShieldAlert size={16} className={banned ? "text-amber-400" : "text-emerald-400"} />
+          <h2 className={`text-[11px] font-bold uppercase tracking-wider ${banned ? "text-amber-400" : "text-emerald-400"}`}>
+            Debt Gate — {banned ? "BANNED" : cashRich ? "PASS (net cash)" : "PASS"}
+          </h2>
+        </div>
+        <span className="text-[9.5px] text-[var(--text-muted)]">D/E source: {sourceLabel}</span>
       </div>
       <div className="grid grid-cols-2 gap-2 text-[11.5px] sm:grid-cols-4">
-        <div><div className="text-[9.5px] uppercase text-[var(--text-muted)]">Net Debt</div><div className="tabular font-semibold">{fmtMoney(netDebt)}</div></div>
-        <div><div className="text-[9.5px] uppercase text-[var(--text-muted)]">Annual FCF</div><div className="tabular font-semibold">{fcf != null ? fmtMoney(fcf) : "—"}</div></div>
+        <div>
+          <div className="text-[9.5px] uppercase text-[var(--text-muted)]">Net Debt</div>
+          <div className={`tabular font-semibold ${cashRich ? "text-emerald-400" : ""}`}>
+            {cashRich ? `+${fmtMoney(-netDebt)} cash` : fmtMoney(netDebt)}
+          </div>
+        </div>
+        <div><div className="text-[9.5px] uppercase text-[var(--text-muted)]">Annual FCF</div><div className={`tabular font-semibold ${fcf != null && fcf < 0 ? "text-amber-400" : ""}`}>{fcf != null ? fmtMoney(fcf) : "—"}</div></div>
         <div>
           <div className="text-[9.5px] uppercase text-[var(--text-muted)]">Debt / FCF</div>
           <div className={`tabular font-bold ${fcfOK ? "text-emerald-400" : "text-amber-400"}`}>
-            {debtToFCF != null ? `${debtToFCF.toFixed(2)}x` : "—"}
+            {fcfDisplay}
             <span className="ml-1 text-[9px] font-normal text-[var(--text-muted)]">limit {fcfBan}x</span>
           </div>
         </div>

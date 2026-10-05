@@ -440,8 +440,21 @@ export async function GET(req: NextRequest) {
     epsTrailing: pickNum(ks, "trailingEps") ?? pickNum(qv7 ?? {}, "epsTrailingTwelveMonths") ?? fm["epsTTM"] ?? null,
     epsForward: pickNum(ks, "forwardEps") ?? pickNum(qv7 ?? {}, "epsForward") ?? null,
     // ─── Added for Wayne DCF ────────────────────────────────────────────
-    freeCashflow: pickNum(fd, "freeCashflow"),           // direct value if Yahoo gives it
+    freeCashflow: pickNum(fd, "freeCashflow"),           // direct TTM value if Yahoo gives it
     operatingCashflow: pickNum(fd, "operatingCashflow"), // alt direct
+    // Yahoo's NORMALIZED debt/equity ratio from key statistics. This is
+    // computed by Yahoo using standardized rules (excludes financing-arm
+    // customer debt like DFS for DELL), so it's much more trustworthy than
+    // raw totalDebt / totalStockholderEquity. Note Yahoo reports this as a
+    // PERCENT (e.g. 250 = 2.5x, not 2.5).
+    debtToEquityYahoo: pickNum(ks, "debtToEquity"),
+    // Current ratio and quick ratio from financialData
+    currentRatio: pickNum(fd, "currentRatio"),
+    quickRatio: pickNum(fd, "quickRatio"),
+    // Revenue (TTM) + EV for the EV/Sales fallback method used by Wayne
+    // when a stock is pre-profit (RBLX, CRWV, SNDK fresh spinoff, etc.)
+    totalRevenueTTM: pickNum(fd, "totalRevenue"),
+    enterpriseToRevenueTTM: pickNum(ks, "enterpriseToRevenue"),
     ...(() => {
       // Compute FCF from the cashflow statement if direct value missing
       const cf = qs?.cashflowStatementHistory?.cashflowStatements?.[0];

@@ -77,16 +77,39 @@ interface StockProfileResp {
     profitMargin?: number | null;
     operatingMargin?: number | null;
     enterpriseValue?: number | null;
-    // Added for Wayne:
     freeCashflow?: number | null;
     operatingCashflow?: number | null;
+    debtToEquityYahoo?: number | null;
+    currentRatio?: number | null;
+    quickRatio?: number | null;
     cashflowOpCF?: number | null;
     cashflowCapex?: number | null;
     cashflowFCF?: number | null;
     totalStockholderEquity?: number | null;
+    totalRevenueTTM?: number | null;
+    enterpriseToRevenueTTM?: number | null;
   };
   warnings?: string[];
   error?: string;
+}
+
+// Target EV/Sales multiples by growth bucket. Pre-profit growth names
+// (CRWV, PLTR early, SNOW, SHOP, SPOT early) are valued on sales because
+// earnings are temporarily suppressed by capex / S&M intensity.
+function targetEvSalesMultiple(revenueGrowth: number | null, profitMargin: number | null): { market: number; wayne: number } {
+  // Hyper-growth (>40% YoY): priced like premium cloud → 10x market, 8x Wayne
+  // High-growth (20-40%):    7x market, 5.5x Wayne
+  // Moderate (10-20%):       4x market, 3x Wayne
+  // Slow (<10%):             2x market, 1.5x Wayne
+  const g = revenueGrowth ?? 0.1;
+  let market: number;
+  if (g > 0.40) market = 10;
+  else if (g > 0.20) market = 7;
+  else if (g > 0.10) market = 4;
+  else market = 2;
+  // Already-profitable names (positive margin) deserve a bump; cash-burners get the raw rate
+  if (profitMargin != null && profitMargin > 0.10) market *= 1.2;
+  return { market, wayne: market * 0.80 }; // Wayne even more conservative here (20% haircut)
 }
 
 export async function GET(req: NextRequest) {
@@ -150,21 +173,83 @@ export async function GET(req: NextRequest) {
   }
 
   // ─── DEBT GATE (hard filter — Friday's rule, runs FIRST) ──────────────
-  const netDebt = (f.totalDebt ?? 0) - (f.totalCash ?? 0);
+  // Two independent rules — EITHER triggers a ban:
+  //   (a) Net Debt / Annual FCF > 3x  — can't service debt from cashflow
+  //   (b) Net Debt / Equity > 300%    — balance sheet is dangerously levered
+  //
+  // Edge cases that caught the original Oracle/Dell bugs:
+  //   • Oracle burns cash (FCF = -$23B) with $135B net debt → the naive
+  //     ratio is NEGATIVE (passes a `> 3` check falsely). Negative FCF
+  //     with positive net debt is itself the worst possible state → BAN.
+  //   • Dell's Yahoo totalDebt INCLUDES DFS customer-financing debt that
+  //     is self-liquidating. Yahoo's own normalized `debtToEquity` from
+  //     defaultKeyStatistics (reported as PERCENT, e.g. 250 = 2.5x) is the
+  //     correct number to gate on. We prefer that over the raw calculation.
+
+  const totalDebt = f.totalDebt ?? 0;
+  const totalCash = f.totalCash ?? 0;
+  const netDebt = totalDebt - totalCash;
   const annualFCF = fcf; // FCF resolved above
-  const debtToFCF =
-    annualFCF != null && annualFCF !== 0 ? netDebt / annualFCF : null;
   const equity = f.totalStockholderEquity;
-  const debtToEquity =
-    equity != null && equity > 0 ? netDebt / equity : null;
+  const cashRich = netDebt <= 0;
+
+  // ── Rule (a): Net Debt / FCF ──
+  let debtToFCF: number | null = null;
+  let fcfGateReason: string | null = null;
+  if (cashRich) {
+    // Net cash position — nothing to service, pass automatically.
+    debtToFCF = netDebt !== 0 && annualFCF != null && annualFCF !== 0
+      ? netDebt / annualFCF
+      : 0;
+  } else if (annualFCF == null) {
+    // No FCF data at all — can't evaluate this rule; don't ban on absence.
+    debtToFCF = null;
+  } else if (annualFCF <= 0) {
+    // Positive net debt + negative/zero FCF → normally fail immediately.
+    // BUT the hyper-growth exemption applies: a company growing revenue
+    // > 40% while burning cash is doing growth-capex (CoreWeave spinning
+    // up data centres), not failing — Oracle is NOT a hyper-grower, it's
+    // a mature firm burning cash. The exemption keeps the risk flagged
+    // but doesn't hard-ban such names.
+    const hyperGrowth = (f.revenueGrowth ?? 0) > 0.40;
+    debtToFCF = Number.POSITIVE_INFINITY;
+    if (hyperGrowth) {
+      // Soft warning, no ban — add to warnings so it surfaces in the UI
+      fcfGateReason = null;
+      warnings.push(`Growth-stage exemption: FCF is negative (${(annualFCF / 1_000_000_000).toFixed(1)}B) but revenue growing ${((f.revenueGrowth ?? 0) * 100).toFixed(0)}% YoY — treated as growth capex, not operating distress. Still risky for ELI exposure.`);
+    } else {
+      fcfGateReason = annualFCF < 0
+        ? `FCF is ${(annualFCF / 1_000_000_000).toFixed(1)}B (NEGATIVE) with ${(netDebt / 1_000_000_000).toFixed(1)}B of net debt — company burns cash while carrying debt.`
+        : `FCF is zero with ${(netDebt / 1_000_000_000).toFixed(1)}B of net debt — no cashflow to service it.`;
+    }
+  } else {
+    debtToFCF = netDebt / annualFCF;
+    if (debtToFCF > NET_DEBT_TO_FCF_BAN) {
+      fcfGateReason = `Net Debt / FCF = ${debtToFCF.toFixed(2)}x (> ${NET_DEBT_TO_FCF_BAN}x limit)`;
+    }
+  }
+
+  // ── Rule (b): Net Debt / Equity ──
+  // Prefer Yahoo's normalized debtToEquity from defaultKeyStatistics (it
+  // excludes financing-arm debt). Yahoo reports percent (250 = 2.5x), so
+  // divide by 100 to get the ratio.
+  let debtToEquity: number | null = null;
+  let debtToEquitySource: "yahoo-normalized" | "raw-computed" | "unavailable" = "unavailable";
+  if (f.debtToEquityYahoo != null && Number.isFinite(f.debtToEquityYahoo)) {
+    debtToEquity = f.debtToEquityYahoo / 100;
+    debtToEquitySource = "yahoo-normalized";
+  } else if (equity != null && equity > 0) {
+    debtToEquity = netDebt / equity;
+    debtToEquitySource = "raw-computed";
+  }
+  let equityGateReason: string | null = null;
+  if (debtToEquity != null && debtToEquity > NET_DEBT_TO_EQUITY_BAN) {
+    equityGateReason = `Debt / Equity = ${(debtToEquity * 100).toFixed(0)}% (> ${NET_DEBT_TO_EQUITY_BAN * 100}% limit)`;
+  }
 
   const banReasons: string[] = [];
-  if (debtToFCF != null && debtToFCF > NET_DEBT_TO_FCF_BAN) {
-    banReasons.push(`Net Debt / FCF = ${debtToFCF.toFixed(2)}x (> ${NET_DEBT_TO_FCF_BAN}x limit)`);
-  }
-  if (debtToEquity != null && debtToEquity > NET_DEBT_TO_EQUITY_BAN) {
-    banReasons.push(`Net Debt / Equity = ${(debtToEquity * 100).toFixed(0)}% (> ${NET_DEBT_TO_EQUITY_BAN * 100}% limit)`);
-  }
+  if (fcfGateReason) banReasons.push(fcfGateReason);
+  if (equityGateReason) banReasons.push(equityGateReason);
   const banned = banReasons.length > 0;
 
   // ─── CAPM discount rate ───────────────────────────────────────────────
@@ -225,11 +310,31 @@ export async function GET(req: NextRequest) {
     fcfIntrinsicValue = (enterpriseValue - netDebt) / f.sharesOutstanding;
   }
 
+  // ─── EV/Sales fallback (for pre-profit growth names) ────────────────
+  // When Forward EPS is negative or null, PE-based IV is meaningless.
+  // Switch to EV/Sales using a sector-adjusted multiple. Equity value =
+  // (target EV/Sales × TTM revenue) + net cash. Per share from that.
+  const peMethodFailed = ourIntrinsicValue == null || (f.epsForward != null && f.epsForward <= 0);
+  const evSalesMultiples = targetEvSalesMultiple(f.revenueGrowth ?? null, f.profitMargin ?? null);
+  let ourEvSalesIV: number | null = null;
+  let waynesEvSalesIV: number | null = null;
+  let evSalesUsed = false;
+  if (f.totalRevenueTTM != null && f.totalRevenueTTM > 0 && f.sharesOutstanding) {
+    const ourTargetEV = evSalesMultiples.market * f.totalRevenueTTM;
+    const waynesTargetEV = evSalesMultiples.wayne * f.totalRevenueTTM;
+    const netCash = (f.totalCash ?? 0) - (f.totalDebt ?? 0);
+    ourEvSalesIV = (ourTargetEV + netCash) / f.sharesOutstanding;
+    waynesEvSalesIV = (waynesTargetEV + netCash) / f.sharesOutstanding;
+    if (peMethodFailed) evSalesUsed = true;
+  }
+
   // ─── Wayne's Target Price = Wayne's Intrinsic Value (today) ──────────
   // Friday showed that this is the right anchor — Wayne's conservative PE
   // applied to current forward EPS. For MRVL this gave $220-230, matching
   // what the user heard from Wayne directly.
-  const waynesTarget = waynesIntrinsicValue;
+  // When PE method fails (pre-profit), fall back to Wayne's EV/Sales IV.
+  const waynesTarget = waynesIntrinsicValue ?? waynesEvSalesIV;
+  const effectiveOurIV = ourIntrinsicValue ?? ourEvSalesIV;
 
   // ─── ELI level analysis (90/50 defaults) ─────────────────────────────
   const strikePct = Number(sp.get("strikePct")) || DEFAULT_STRIKE_PCT;
@@ -300,8 +405,15 @@ export async function GET(req: NextRequest) {
       waynesIntrinsicValue,
       ourFutureValue,
       waynesFutureValue,
+      // EV/Sales fallback (for pre-profit growth names like CRWV)
+      ourEvSalesIV,
+      waynesEvSalesIV,
+      evSalesMarketMultiple: evSalesMultiples.market,
+      evSalesWayneMultiple: evSalesMultiples.wayne,
+      evSalesUsed,
+      peMethodFailed,
       // Legacy aliases (kept so the current page keeps working)
-      intrinsicPerShare: ourIntrinsicValue,
+      intrinsicPerShare: effectiveOurIV,
       futureValue12m: ourFutureValue,
       waynesTarget,
       // FCF supporting DCF (undershoots growth names)
@@ -314,6 +426,8 @@ export async function GET(req: NextRequest) {
       netDebt,
       debtToFCF,
       debtToEquity,
+      debtToEquitySource,
+      cashRich,
       banned,
       banReasons,
       // ELI
