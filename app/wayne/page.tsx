@@ -36,25 +36,48 @@ interface Analysis {
   };
   assumptions: {
     riskFree: number; equityPremium: number; terminalGrowth: number;
-    wayneMargin: number; explicitYears: number;
+    waynePEHaircut: number; explicitYears: number;
     growthUsed: number; growthSource: string;
-    debtDenomLabel: string; banThreshold: number;
+    fcfSource: string;
+    netDebtToFCFBan: number; netDebtToEquityBan: number;
   };
   computed: {
     discountRate: number;
     growth: number;
+    ourPE: number | null;
+    waynesPE: number | null;
+    nextYearEPS: number | null;
+    ourIntrinsicValue: number | null;
+    waynesIntrinsicValue: number | null;
+    ourFutureValue: number | null;
+    waynesFutureValue: number | null;
+    intrinsicPerShare: number | null; // legacy alias = ourIntrinsicValue
+    futureValue12m: number | null;    // legacy alias = ourFutureValue
+    waynesTarget: number | null;
+    fcfIntrinsicValue: number | null;
     projections: Projection[];
     terminalValue: number | null;
     terminalPV: number | null;
     enterpriseValue: number | null;
-    intrinsicPerShare: number | null;
-    futureValue12m: number | null;
-    waynesTarget: number | null;
-    debtRatio: number | null;
+    netDebt: number;
+    debtToFCF: number | null;
+    debtToEquity: number | null;
     banned: boolean;
+    banReasons: string[];
+    eliLevels: {
+      strikePct: number;
+      ekiPct: number;
+      strikePrice: number;
+      ekiPrice: number;
+      strikeVsOurIV: number | null;
+      strikeVsWaynesIV: number | null;
+      ekiVsOurIV: number | null;
+      ekiVsWaynesIV: number | null;
+    };
     verdict: "LAUNCH" | "WATCH" | "AVOID" | "SKIP";
     upsidePct: number | null;
   };
+  warnings?: string[];
   generatedAt: string;
 }
 
@@ -266,46 +289,130 @@ export default function WaynePage() {
       {/* RESULTS */}
       {result && !analyzing && c && i && a && (
         <>
-          {/* Verdict banner */}
-          <VerdictBanner verdict={c.verdict} upsidePct={c.upsidePct} banned={c.banned} debtRatio={c.debtRatio} debtDenomLabel={a.debtDenomLabel} />
+          {/* 1. DEBT GATE — runs first, visible first */}
+          <DebtGate
+            banned={c.banned}
+            reasons={c.banReasons}
+            debtToFCF={c.debtToFCF}
+            debtToEquity={c.debtToEquity}
+            netDebt={c.netDebt}
+            fcf={i.freeCashFlow}
+            equity={i.totalEquity}
+            fcfBan={a.netDebtToFCFBan}
+            equityBan={a.netDebtToEquityBan}
+          />
 
-          {/* 3 Big result cards */}
-          <section className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <ResultCard
-              label="Intrinsic Value"
-              sublabel="DCF + terminal, per share"
-              value={c.intrinsicPerShare}
-              ccy={ccy}
-              hint={c.intrinsicPerShare && result.price ? ((c.intrinsicPerShare - result.price) / result.price) : null}
-            />
-            <ResultCard
-              label="Future Value (12m)"
-              sublabel="Forward EPS × Forward P/E"
-              value={c.futureValue12m}
-              ccy={ccy}
-              hint={c.futureValue12m && result.price ? ((c.futureValue12m - result.price) / result.price) : null}
-            />
-            <ResultCard
-              label="Wayne's Target"
-              sublabel="Blended · 5% safety margin"
-              value={c.waynesTarget}
-              ccy={ccy}
-              hint={c.waynesTarget && result.price ? ((c.waynesTarget - result.price) / result.price) : null}
-              accent
-            />
-          </section>
+          {/* 2. Verdict banner */}
+          <VerdictBanner verdict={c.verdict} upsidePct={c.upsidePct} banned={c.banned} />
 
-          {/* Current context */}
-          <section className="mb-5 rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-4">
-            <div className="mb-2 flex items-center justify-between gap-2 flex-wrap">
+          {/* 3. Current price + name */}
+          <section className="mb-4 rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-4">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
               <div>
-                <div className="text-[11px] uppercase tracking-wider text-[var(--text-muted)]">{result.ySymbol} · {result.market}</div>
+                <div className="text-[10.5px] uppercase tracking-wider text-[var(--text-muted)]">{result.ySymbol} · {result.market}</div>
                 <div className="text-[16px] font-bold">{result.longName || result.symbol}</div>
               </div>
               <div className="text-right">
                 <div className="text-[10.5px] uppercase tracking-wider text-[var(--text-muted)]">Current</div>
-                <div className="text-[22px] font-bold tabular">{fmtPrice(result.price, ccy)}</div>
+                <div className="text-[24px] font-bold tabular">{fmtPrice(result.price, ccy)}</div>
               </div>
+            </div>
+          </section>
+
+          {/* 4. The 4-value matrix — Our vs Wayne's, Intrinsic vs Future */}
+          <section className="mb-4 rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-4">
+            <div className="mb-3 flex items-center justify-between flex-wrap gap-2">
+              <h2 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+                Dual-model valuation
+              </h2>
+              <span className="text-[10px] text-[var(--text-muted)]">
+                Our PE: <b className="text-[var(--text)]">{c.ourPE?.toFixed(1) ?? "—"}x</b> · Wayne's PE: <b className="text-[var(--text)]">{c.waynesPE?.toFixed(1) ?? "—"}x</b> ({(a.waynePEHaircut * 100).toFixed(0)}% haircut)
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <ValueCard
+                label="Our Intrinsic Value"
+                sublabel="Fwd EPS × Market PE · today"
+                value={c.ourIntrinsicValue}
+                ccy={ccy}
+                hint={c.ourIntrinsicValue && result.price ? ((c.ourIntrinsicValue - result.price) / result.price) : null}
+              />
+              <ValueCard
+                label="Wayne's Intrinsic Value"
+                sublabel={`Fwd EPS × Wayne's PE · today`}
+                value={c.waynesIntrinsicValue}
+                ccy={ccy}
+                hint={c.waynesIntrinsicValue && result.price ? ((c.waynesIntrinsicValue - result.price) / result.price) : null}
+                accent
+              />
+              <ValueCard
+                label="Our Future Value (12M)"
+                sublabel="FY+1 EPS × Market PE"
+                value={c.ourFutureValue}
+                ccy={ccy}
+                hint={c.ourFutureValue && result.price ? ((c.ourFutureValue - result.price) / result.price) : null}
+              />
+              <ValueCard
+                label="Wayne's Future Value (12M)"
+                sublabel="FY+1 EPS × Wayne's PE"
+                value={c.waynesFutureValue}
+                ccy={ccy}
+                hint={c.waynesFutureValue && result.price ? ((c.waynesFutureValue - result.price) / result.price) : null}
+                accent
+              />
+            </div>
+            <div className="mt-3 rounded-lg border border-indigo-500/30 bg-indigo-500/5 p-3">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-indigo-400">Wayne's Target Price (today)</div>
+              <div className="mt-0.5 flex items-baseline gap-3 flex-wrap">
+                <div className="text-[32px] font-bold tabular text-indigo-400">
+                  {c.waynesTarget != null ? <AnimatedNumber value={c.waynesTarget} format={(n) => fmtPrice(n, ccy)} /> : "—"}
+                </div>
+                {c.upsidePct != null && (
+                  <div className={`text-[13px] font-semibold ${c.upsidePct >= 0 ? "text-success" : "text-danger"}`}>
+                    {c.upsidePct > 0 ? "+" : ""}{c.upsidePct.toFixed(1)}% vs current
+                  </div>
+                )}
+              </div>
+              <div className="mt-0.5 text-[10.5px] text-[var(--text-muted)]">
+                Wayne's conservative PE applied to current forward EPS (his primary anchor).
+              </div>
+            </div>
+          </section>
+
+          {/* 5. ELI level analysis (Strike + EKI vs IV) */}
+          <section className="mb-4 rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-4">
+            <h2 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+              ELI tranche levels ({(c.eliLevels.strikePct * 100).toFixed(0)}% strike · {(c.eliLevels.ekiPct * 100).toFixed(0)}% EKI)
+            </h2>
+            <div className="overflow-x-auto">
+              <table className="w-full text-[11.5px]">
+                <thead className="bg-[var(--surface-2)] text-[10px] uppercase tracking-wider text-[var(--text-muted)]">
+                  <tr>
+                    <th className="px-2 py-2 text-left">Level</th>
+                    <th className="px-2 py-2 text-right">Price</th>
+                    <th className="px-2 py-2 text-right">vs Our IV</th>
+                    <th className="px-2 py-2 text-right">vs Wayne's IV</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr className="border-t border-[var(--line)]">
+                    <td className="px-2 py-1.5 font-medium">Strike ({(c.eliLevels.strikePct * 100).toFixed(0)}%)</td>
+                    <td className="px-2 py-1.5 tabular text-right">{fmtPrice(c.eliLevels.strikePrice, ccy)}</td>
+                    <td className="px-2 py-1.5 tabular text-right">{renderGap(c.eliLevels.strikeVsOurIV, ccy)}</td>
+                    <td className="px-2 py-1.5 tabular text-right">{renderGap(c.eliLevels.strikeVsWaynesIV, ccy)}</td>
+                  </tr>
+                  <tr className="border-t border-[var(--line)]">
+                    <td className="px-2 py-1.5 font-medium">EKI barrier ({(c.eliLevels.ekiPct * 100).toFixed(0)}%)</td>
+                    <td className="px-2 py-1.5 tabular text-right">{fmtPrice(c.eliLevels.ekiPrice, ccy)}</td>
+                    <td className="px-2 py-1.5 tabular text-right">{renderGap(c.eliLevels.ekiVsOurIV, ccy)}</td>
+                    <td className="px-2 py-1.5 tabular text-right">{renderGap(c.eliLevels.ekiVsWaynesIV, ccy)}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div className="mt-2 text-[10.5px] text-[var(--text-muted)]">
+              Negative gap (<span className="text-success">green</span>) = level is <b>below</b> intrinsic → entering at a discount if knocked in · safer.
+              Positive gap (<span className="text-danger">red</span>) = overpaying at that level.
             </div>
           </section>
 
@@ -355,31 +462,61 @@ export default function WaynePage() {
             />
 
             <FormulaBlock delay={560}
-              label="⑥ Intrinsic / Share"
-              equation="(ΣPV + TV_PV + netCash) / shares"
+              label="⑥ FCF Intrinsic (Gordon, supporting)"
+              equation="(ΣPV + TV_PV − netDebt) / shares"
               substitution={c.enterpriseValue != null && i.sharesOut
-                ? `EV ${fmtMoney(c.enterpriseValue)} + netCash ${fmtMoney((i.totalCash ?? 0) - (i.totalDebt ?? 0))} ÷ ${fmtMoney(i.sharesOut)} shares`
+                ? `EV ${fmtMoney(c.enterpriseValue)} − netDebt ${fmtMoney(c.netDebt)} ÷ ${fmtMoney(i.sharesOut)} shares`
                 : "—"}
-              result={c.intrinsicPerShare != null ? fmtPrice(c.intrinsicPerShare, ccy) : "—"}
+              result={c.fcfIntrinsicValue != null ? fmtPrice(c.fcfIntrinsicValue, ccy) : "—"}
             />
+            <div className="mb-2 ml-2 text-[10px] italic text-[var(--text-muted)]">
+              Friday's caveat: Gordon-based FCF undershoots high-growth names. PE is the primary anchor.
+            </div>
 
             <FormulaBlock delay={660}
-              label="⑦ Forward Multiple (12 months out)"
-              equation="FV = Forward EPS × Forward P/E"
-              substitution={i.epsForward != null && i.forwardPE != null
-                ? `FV = ${fmtPrice(i.epsForward, "")} × ${i.forwardPE.toFixed(1)}`
+              label="⑦ Our Intrinsic Value (today)"
+              equation="Our IV = Forward EPS × Market Forward PE"
+              substitution={i.epsForward != null && c.ourPE != null
+                ? `${fmtPrice(i.epsForward, "")} × ${c.ourPE.toFixed(1)}x`
                 : "—"}
-              result={c.futureValue12m != null ? fmtPrice(c.futureValue12m, ccy) : "—"}
+              result={c.ourIntrinsicValue != null ? fmtPrice(c.ourIntrinsicValue, ccy) : "—"}
             />
 
-            <FormulaBlock delay={760}
-              label="⑧ Wayne's Target (blended, 5% safety)"
-              equation="target = (0.5·Intrinsic + 0.5·FV) × 0.95"
-              substitution={c.intrinsicPerShare != null && c.futureValue12m != null
-                ? `(0.5·${fmtPrice(c.intrinsicPerShare, "")} + 0.5·${fmtPrice(c.futureValue12m, "")}) × 0.95`
+            <FormulaBlock delay={740}
+              label="⑧ Wayne's PE Haircut"
+              equation={`Wayne's PE = Market PE × ${a.waynePEHaircut}`}
+              substitution={c.ourPE != null && c.waynesPE != null
+                ? `${c.ourPE.toFixed(1)}x × ${a.waynePEHaircut} = ${c.waynesPE.toFixed(1)}x`
                 : "—"}
-              result={c.waynesTarget != null ? fmtPrice(c.waynesTarget, ccy) : "—"}
+              result={c.waynesPE != null ? `${c.waynesPE.toFixed(1)}x` : "—"}
+            />
+
+            <FormulaBlock delay={820}
+              label="⑨ Wayne's Intrinsic Value (today)"
+              equation="Wayne IV = Forward EPS × Wayne's PE"
+              substitution={i.epsForward != null && c.waynesPE != null
+                ? `${fmtPrice(i.epsForward, "")} × ${c.waynesPE.toFixed(1)}x`
+                : "—"}
+              result={c.waynesIntrinsicValue != null ? fmtPrice(c.waynesIntrinsicValue, ccy) : "—"}
               accent
+            />
+
+            <FormulaBlock delay={900}
+              label="⑩ Next-Year EPS (growth-adjusted)"
+              equation="FY+1 EPS = Forward EPS × (1 + g)"
+              substitution={i.epsForward != null
+                ? `${fmtPrice(i.epsForward, "")} × ${(1 + c.growth).toFixed(3)}`
+                : "—"}
+              result={c.nextYearEPS != null ? fmtPrice(c.nextYearEPS, "") : "—"}
+            />
+
+            <FormulaBlock delay={980}
+              label="⑪ Future Value (12M, both models)"
+              equation="FV = FY+1 EPS × PE"
+              substitution={c.nextYearEPS != null && c.ourPE != null && c.waynesPE != null
+                ? `Ours ${fmtPrice(c.ourFutureValue ?? 0, ccy)}  ·  Wayne ${fmtPrice(c.waynesFutureValue ?? 0, ccy)}`
+                : "—"}
+              result={c.waynesFutureValue != null ? fmtPrice(c.waynesFutureValue, ccy) : "—"}
             />
           </section>
 
@@ -415,45 +552,85 @@ export default function WaynePage() {
   );
 }
 
-function ResultCard({ label, sublabel, value, ccy, hint, accent }: {
+function ValueCard({ label, sublabel, value, ccy, hint, accent }: {
   label: string; sublabel: string; value: number | null; ccy: string; hint: number | null; accent?: boolean;
 }) {
   const hintUp = hint != null && hint > 0;
   return (
-    <div className={`rounded-2xl border p-4 ${accent ? "border-indigo-500/50 bg-gradient-to-br from-indigo-500/10 to-purple-500/10" : "border-[var(--line)] bg-[var(--surface)]"}`}>
-      <div className="text-[10.5px] font-semibold uppercase tracking-[0.1em] text-[var(--text-muted)]">{label}</div>
-      <div className="text-[9.5px] text-[var(--text-muted)]">{sublabel}</div>
-      <div className={`mt-2 text-[28px] font-bold tabular ${accent ? "text-indigo-400" : ""}`}>
+    <div className={`rounded-xl border p-3 ${accent ? "border-indigo-500/50 bg-gradient-to-br from-indigo-500/10 to-purple-500/5" : "border-[var(--line)] bg-[var(--surface-2)]/50"}`}>
+      <div className="text-[9.5px] font-semibold uppercase tracking-[0.08em] text-[var(--text-muted)]">{label}</div>
+      <div className="text-[9px] text-[var(--text-muted)]">{sublabel}</div>
+      <div className={`mt-1.5 text-[22px] font-bold tabular ${accent ? "text-indigo-400" : ""}`}>
         {value != null ? <AnimatedNumber value={value} format={(n) => fmtPrice(n, ccy)} /> : "—"}
       </div>
       {hint != null && (
-        <div className={`mt-1 flex items-center gap-1 text-[11px] font-semibold ${hintUp ? "text-success" : "text-danger"}`}>
-          {hintUp ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
-          {hint > 0 ? "+" : ""}{(hint * 100).toFixed(1)}% vs. current
+        <div className={`mt-0.5 flex items-center gap-1 text-[10.5px] font-semibold ${hintUp ? "text-success" : "text-danger"}`}>
+          {hintUp ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
+          {hint > 0 ? "+" : ""}{(hint * 100).toFixed(1)}%
         </div>
       )}
     </div>
   );
 }
 
-function VerdictBanner({ verdict, upsidePct, banned, debtRatio, debtDenomLabel }: {
-  verdict: Analysis["computed"]["verdict"]; upsidePct: number | null;
-  banned: boolean; debtRatio: number | null; debtDenomLabel: string;
+function renderGap(gap: number | null, ccy: string) {
+  if (gap == null) return <span className="text-[var(--text-muted)]">—</span>;
+  const safe = gap <= 0; // negative = level below IV = GOOD (entering at discount)
+  return (
+    <span className={safe ? "text-success font-semibold" : "text-danger font-semibold"}>
+      {gap > 0 ? "+" : ""}{fmtPrice(gap, ccy)}
+    </span>
+  );
+}
+
+function DebtGate({ banned, reasons, debtToFCF, debtToEquity, netDebt, fcf, equity, fcfBan, equityBan }: {
+  banned: boolean; reasons: string[];
+  debtToFCF: number | null; debtToEquity: number | null;
+  netDebt: number; fcf: number | null; equity: number | null;
+  fcfBan: number; equityBan: number;
 }) {
-  if (banned) {
-    return (
-      <div className="mb-4 flex items-start gap-3 rounded-2xl border border-amber-500/40 bg-amber-500/10 p-4 slide-up">
-        <ShieldAlert size={22} className="mt-0.5 shrink-0 text-amber-400" />
+  const fcfOK = debtToFCF == null || debtToFCF <= fcfBan;
+  const eqOK = debtToEquity == null || debtToEquity <= equityBan;
+  return (
+    <section className={`mb-4 rounded-2xl border p-4 slide-up ${banned ? "border-amber-500/40 bg-amber-500/10" : "border-emerald-500/30 bg-emerald-500/5"}`}>
+      <div className="mb-2 flex items-center gap-2">
+        <ShieldAlert size={16} className={banned ? "text-amber-400" : "text-emerald-400"} />
+        <h2 className={`text-[11px] font-bold uppercase tracking-wider ${banned ? "text-amber-400" : "text-emerald-400"}`}>
+          Debt Gate — {banned ? "BANNED" : "PASS"}
+        </h2>
+      </div>
+      <div className="grid grid-cols-2 gap-2 text-[11.5px] sm:grid-cols-4">
+        <div><div className="text-[9.5px] uppercase text-[var(--text-muted)]">Net Debt</div><div className="tabular font-semibold">{fmtMoney(netDebt)}</div></div>
+        <div><div className="text-[9.5px] uppercase text-[var(--text-muted)]">Annual FCF</div><div className="tabular font-semibold">{fcf != null ? fmtMoney(fcf) : "—"}</div></div>
         <div>
-          <div className="text-[13px] font-bold text-amber-400">Wayne skips this one.</div>
-          <div className="mt-0.5 text-[11.5px] text-[var(--text-muted)]">
-            Debt / {debtDenomLabel} = {debtRatio?.toFixed(2)}x — above Wayne's 1.0x limit.
-            Over-leveraged names tend to drag through long drawdowns and he refuses to underwrite them.
+          <div className="text-[9.5px] uppercase text-[var(--text-muted)]">Debt / FCF</div>
+          <div className={`tabular font-bold ${fcfOK ? "text-emerald-400" : "text-amber-400"}`}>
+            {debtToFCF != null ? `${debtToFCF.toFixed(2)}x` : "—"}
+            <span className="ml-1 text-[9px] font-normal text-[var(--text-muted)]">limit {fcfBan}x</span>
+          </div>
+        </div>
+        <div>
+          <div className="text-[9.5px] uppercase text-[var(--text-muted)]">Debt / Equity</div>
+          <div className={`tabular font-bold ${eqOK ? "text-emerald-400" : "text-amber-400"}`}>
+            {debtToEquity != null ? `${(debtToEquity * 100).toFixed(0)}%` : "—"}
+            <span className="ml-1 text-[9px] font-normal text-[var(--text-muted)]">limit {equityBan * 100}%</span>
           </div>
         </div>
       </div>
-    );
-  }
+      {banned && reasons.length > 0 && (
+        <div className="mt-2 border-t border-amber-500/20 pt-2 text-[11px] text-amber-200">
+          <b>Wayne skips this one.</b>{" "}
+          {reasons.join(" · ")}. Over-leveraged names drag through long drawdowns.
+        </div>
+      )}
+    </section>
+  );
+}
+
+function VerdictBanner({ verdict, upsidePct, banned }: {
+  verdict: Analysis["computed"]["verdict"]; upsidePct: number | null; banned: boolean;
+}) {
+  if (banned) return null; // Debt Gate above already carries the SKIP message
   const colors = {
     LAUNCH: { bg: "bg-emerald-500/10", border: "border-emerald-500/40", text: "text-emerald-400", label: "LAUNCH READY" },
     WATCH:  { bg: "bg-sky-500/10",     border: "border-sky-500/40",     text: "text-sky-400",     label: "ON THE WATCHLIST" },

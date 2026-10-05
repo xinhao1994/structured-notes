@@ -1,26 +1,26 @@
 // GET /api/wayne/analyze?symbol=MRVL&market=US
 //
-// Wayne's DCF: a two-stage discounted cash flow + forward-multiple blend.
-// Named after the treasury specialist whose structured note tranches knock
-// out early because he underwrites to intrinsic value with a safety margin
-// and refuses highly-leveraged names.
+// Wayne's DCF model: two-stage DCF + forward-multiple blend with safety
+// margin. Named after the treasury specialist whose structured note tranches
+// knock out early because he underwrites to intrinsic value and refuses
+// highly-leveraged names.
 //
-// Inputs (fetched from Yahoo Finance v10 quoteSummary + v7 quote):
-//   • Forward P/E
-//   • Forward EPS
-//   • Beta
-//   • Trailing-twelve-month Free Cash Flow (op cashflow − capex)
-//   • Total debt / total equity (ban rule: D/E > 1.0 → "Wayne skips")
-//   • Earnings growth, revenue growth (used as growth proxies)
+// Data pipeline:
+//   This route delegates ALL market data fetching to /api/stock-profile,
+//   which already has:
+//     • Yahoo quoteSummary WITH crumb/cookie handshake (survives 401/403)
+//     • Yahoo v7 quote WITH crumb (fallback)
+//     • Finnhub /stock/profile2 + /stock/metric (secondary fallback)
+//     • Stooq CSV (last-resort price history)
+//   So Wayne gets the same resilience that the Analyze tab enjoys.
 //
-// Formulas:
-//   WACC (CAPM)       r = Rf + β × ERP
-//   5-yr explicit DCF Σ FCFₜ / (1+r)ᵗ  with FCFₜ = FCF₀·(1+g₁)ᵗ
-//   Terminal value    TV = FCF₅·(1+g∞) / (r − g∞), discounted back 5 years
-//   Intrinsic / share (ΣPV + TV_PV) / sharesOut
-//   Future value 12m  epsForward × forwardPE   (next-year multiple)
-//   Wayne's target    0.50 × intrinsic + 0.50 × fwdMultiple
-//                     × (1 − 0.05)   (5% Wayne safety discount)
+// Wayne's rules:
+//   • CAPM discount rate: r = 4.5% + β × 5.5%
+//   • Growth clamped [2%, 20%] — no fantasy numbers
+//   • 5-year explicit DCF + Gordon terminal (g∞ = 3%)
+//   • Blended target = 0.5·Intrinsic + 0.5·(ForwardEPS × ForwardPE)
+//   • 5% safety margin applied
+//   • D/E > 1.0 → "Wayne skips" (Oracle gets filtered out automatically)
 
 import { NextRequest, NextResponse } from "next/server";
 import type { MarketCode } from "@/lib/types";
@@ -28,125 +28,65 @@ import type { MarketCode } from "@/lib/types";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// ─── CAPM constants ────────────────────────────────────────────────────
-const RISK_FREE = 0.045;        // US 10Y treasury, 2026 ballpark
-const EQUITY_PREMIUM = 0.055;   // long-run equity risk premium
-const TERMINAL_GROWTH = 0.03;   // long-term GDP ≈ 3%
-const EXPLICIT_YEARS = 5;       // 5-year explicit forecast window
-const WAYNE_MARGIN = 0.05;      // 5% safety discount
-const MAX_G1 = 0.20;            // cap FCF growth at 20% (no magical thinking)
-const MIN_G1 = 0.02;            // floor at 2% (no negative perpetual growth)
-const DE_BAN = 1.0;             // D/E above 1.0 → Wayne skips
+// ─── Model constants (Friday × Wayne framework) ───────────────────────
+const RISK_FREE = 0.0528;        // US 10Y treasury (Friday uses 5.28%)
+const EQUITY_PREMIUM = 0.055;    // long-run equity risk premium
+const TERMINAL_GROWTH = 0.05;    // Friday uses 5% for Gordon terminal
+const EXPLICIT_YEARS = 5;
+const MAX_G1 = 0.20;
+const MIN_G1 = 0.02;
+const DEFAULT_GROWTH = 0.08;
 
-// Market → Yahoo symbol suffix
-function yahooSymbol(symbol: string, market: MarketCode): string {
-  if (market === "US") return symbol;
-  if (market === "HK") return symbol.padStart(4, "0") + ".HK";
-  if (market === "SG") return symbol + ".SI";
-  if (market === "MY") return symbol + ".KL";
-  if (market === "JP") return symbol + ".T";
-  if (market === "AU") return symbol + ".AX";
-  return symbol;
-}
+// Wayne's PE discipline — reverse-engineered from MRVL ($59x vs market
+// $72x = 0.82). Rounded to 0.85 for a cleaner conservative haircut rule.
+const WAYNE_PE_HAIRCUT = 0.85;
 
-interface YahooQS {
-  quoteSummary?: { result?: Array<Record<string, any>> };
-}
+// Debt Gate — HARD FILTER (runs first, overrides everything)
+const NET_DEBT_TO_FCF_BAN = 3.0;    // Friday: Net Debt / FCF > 3x → BAN
+const NET_DEBT_TO_EQUITY_BAN = 3.0; // Friday: Net Debt / Equity > 300% → BAN
 
-interface YahooQ {
-  quoteResponse?: { result?: Array<Record<string, any>> };
-}
-
-function num(v: any): number | null {
-  if (v == null) return null;
-  if (typeof v === "number" && Number.isFinite(v)) return v;
-  if (typeof v === "object" && typeof v.raw === "number") return v.raw;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
-}
-
-async function fetchYahoo(symbol: string): Promise<{
-  price: number | null;
-  longName: string | null;
-  currency: string | null;
-  forwardPE: number | null;
-  trailingPE: number | null;
-  epsForward: number | null;
-  epsTrailing: number | null;
-  beta: number | null;
-  sharesOut: number | null;
-  totalDebt: number | null;
-  totalCash: number | null;
-  marketCap: number | null;
-  operatingCashFlow: number | null;
-  capex: number | null;
-  freeCashFlow: number | null;
-  earningsGrowth: number | null;
-  revenueGrowth: number | null;
-  totalEquity: number | null;
-}> {
-  const modules = [
-    "price", "summaryDetail", "defaultKeyStatistics", "financialData",
-    "cashflowStatementHistory", "balanceSheetHistory",
-  ].join(",");
-  const headers = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-    "Accept": "application/json",
-  };
-
-  const qsUrl = `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(symbol)}?modules=${modules}`;
-  const qUrl  = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(symbol)}`;
-
-  const [qsRes, qRes] = await Promise.allSettled([
-    fetch(qsUrl, { headers, cache: "no-store" }).then((r) => r.ok ? r.json() : null),
-    fetch(qUrl,  { headers, cache: "no-store" }).then((r) => r.ok ? r.json() : null),
-  ]);
-
-  const qs: YahooQS | null = qsRes.status === "fulfilled" ? qsRes.value : null;
-  const q:  YahooQ  | null = qRes.status  === "fulfilled" ? qRes.value  : null;
-
-  const r0 = qs?.quoteSummary?.result?.[0] ?? {};
-  const pr = r0.price ?? {};
-  const sd = r0.summaryDetail ?? {};
-  const ks = r0.defaultKeyStatistics ?? {};
-  const fd = r0.financialData ?? {};
-  const cf = r0.cashflowStatementHistory?.cashflowStatements ?? [];
-  const bs = r0.balanceSheetHistory?.balanceSheetStatements ?? [];
-  const qv = q?.quoteResponse?.result?.[0] ?? {};
-
-  // Latest annual cashflow row
-  const latestCF = cf[0] ?? {};
-  const opCF   = num(latestCF.totalCashFromOperatingActivities);
-  const capex  = num(latestCF.capitalExpenditures); // Yahoo reports as negative
-  const fcf    = opCF != null && capex != null ? opCF + capex : num(fd.freeCashflow);
-
-  const latestBS = bs[0] ?? {};
-  const totalEq  = num(latestBS.totalStockholderEquity);
-
-  return {
-    price: num(pr.regularMarketPrice) ?? num(fd.currentPrice) ?? num(qv.regularMarketPrice),
-    longName: pr.longName || pr.shortName || qv.longName || qv.shortName || null,
-    currency: pr.currency || qv.currency || null,
-    forwardPE: num(ks.forwardPE) ?? num(sd.forwardPE) ?? num(qv.forwardPE),
-    trailingPE: num(sd.trailingPE) ?? num(qv.trailingPE),
-    epsForward: num(ks.forwardEps) ?? num(qv.epsForward),
-    epsTrailing: num(ks.trailingEps) ?? num(qv.epsTrailingTwelveMonths),
-    beta: num(ks.beta) ?? num(sd.beta),
-    sharesOut: num(ks.sharesOutstanding) ?? num(qv.sharesOutstanding),
-    totalDebt: num(fd.totalDebt),
-    totalCash: num(fd.totalCash),
-    marketCap: num(pr.marketCap) ?? num(sd.marketCap) ?? num(qv.marketCap),
-    operatingCashFlow: opCF,
-    capex: capex,
-    freeCashFlow: fcf,
-    earningsGrowth: num(fd.earningsGrowth),
-    revenueGrowth: num(fd.revenueGrowth),
-    totalEquity: totalEq,
-  };
-}
+// ELI structure defaults (90/50 is typical for your tranches)
+const DEFAULT_STRIKE_PCT = 0.90;
+const DEFAULT_EKI_PCT = 0.50;
 
 function clamp(v: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, v));
+}
+
+interface StockProfileResp {
+  symbol?: string;
+  snapshot?: {
+    longName?: string;
+    exchange?: string;
+    currency?: string;
+    price?: number;
+    marketCap?: number;
+    beta?: number;
+    perf30d?: number | null;
+  };
+  fundamentals?: {
+    forwardPE?: number | null;
+    trailingPE?: number | null;
+    epsForward?: number | null;
+    epsTrailing?: number | null;
+    totalCash?: number | null;
+    totalDebt?: number | null;
+    sharesOutstanding?: number | null;
+    revenueGrowth?: number | null;
+    earningsGrowth?: number | null;
+    profitMargin?: number | null;
+    operatingMargin?: number | null;
+    enterpriseValue?: number | null;
+    // Added for Wayne:
+    freeCashflow?: number | null;
+    operatingCashflow?: number | null;
+    cashflowOpCF?: number | null;
+    cashflowCapex?: number | null;
+    cashflowFCF?: number | null;
+    totalStockholderEquity?: number | null;
+  };
+  warnings?: string[];
+  error?: string;
 }
 
 export async function GET(req: NextRequest) {
@@ -155,52 +95,125 @@ export async function GET(req: NextRequest) {
   const market = (sp.get("market") || "US").toUpperCase() as MarketCode;
   if (!symbol) return NextResponse.json({ error: "missing symbol" }, { status: 400 });
 
-  const ySym = yahooSymbol(symbol, market);
-  let data;
-  try { data = await fetchYahoo(ySym); }
-  catch (e: any) { return NextResponse.json({ error: `yahoo fetch failed: ${String(e?.message || e)}` }, { status: 502 }); }
-
-  if (data.price == null) {
-    return NextResponse.json({ error: `no quote for ${symbol}` }, { status: 404 });
+  // Delegate data fetching to /api/stock-profile — uses the same deployment
+  // host so it inherits all env vars + Yahoo auth session.
+  const origin = req.nextUrl.origin;
+  const profileUrl = `${origin}/api/stock-profile?symbol=${encodeURIComponent(symbol)}&market=${market}`;
+  let profile: StockProfileResp | null = null;
+  try {
+    const r = await fetch(profileUrl, { cache: "no-store" });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      return NextResponse.json(
+        { error: j.error || `stock-profile returned HTTP ${r.status}` },
+        { status: r.status },
+      );
+    }
+    profile = (await r.json()) as StockProfileResp;
+  } catch (e: any) {
+    return NextResponse.json(
+      { error: `stock-profile fetch failed: ${String(e?.message || e)}` },
+      { status: 502 },
+    );
   }
 
-  // ─── Debt check (Wayne's ban rule) ───────────────────────────────────
-  // Use D/E vs equity when available, otherwise fall back to debt / market cap.
-  let debtRatio: number | null = null;
-  let debtDenomLabel = "equity";
-  if (data.totalDebt != null && data.totalEquity != null && data.totalEquity > 0) {
-    debtRatio = data.totalDebt / data.totalEquity;
-    debtDenomLabel = "equity";
-  } else if (data.totalDebt != null && data.marketCap != null && data.marketCap > 0) {
-    debtRatio = data.totalDebt / data.marketCap;
-    debtDenomLabel = "market cap";
+  if (!profile || !profile.snapshot?.price) {
+    return NextResponse.json(
+      { error: `No quote found for ${symbol} (${market}). Try the exact ticker as it appears on your exchange.` },
+      { status: 404 },
+    );
   }
-  const banned = debtRatio != null && debtRatio > DE_BAN;
 
-  // ─── Discount rate (CAPM) ────────────────────────────────────────────
-  const beta = data.beta ?? 1.0;
+  const snap = profile.snapshot;
+  const f = profile.fundamentals || {};
+  const warnings: string[] = [...(profile.warnings || [])];
+
+  // Resolve FCF: direct value → cashflow computed value → NetIncome × 1.1 proxy
+  // We don't have netIncome exposed, so fall back to earnings yield proxy if needed.
+  let fcf = f.freeCashflow ?? f.cashflowFCF ?? null;
+  let fcfSource: "yahoo-direct" | "cashflow-stmt" | "estimated" | "unavailable" = "unavailable";
+  if (f.freeCashflow != null && Number.isFinite(f.freeCashflow)) {
+    fcf = f.freeCashflow;
+    fcfSource = "yahoo-direct";
+  } else if (f.cashflowFCF != null && Number.isFinite(f.cashflowFCF)) {
+    fcf = f.cashflowFCF;
+    fcfSource = "cashflow-stmt";
+  } else if (
+    f.epsForward != null && f.sharesOutstanding != null &&
+    Number.isFinite(f.epsForward) && Number.isFinite(f.sharesOutstanding)
+  ) {
+    // Estimate FCF from forward earnings × ~1.1 (typical FCF/earnings ratio for stable co)
+    const estNetIncome = f.epsForward * f.sharesOutstanding;
+    fcf = estNetIncome * 1.1;
+    fcfSource = "estimated";
+    warnings.push("FCF estimated from forward EPS × shares × 1.1 — no cashflow statement from Yahoo.");
+  }
+
+  // ─── DEBT GATE (hard filter — Friday's rule, runs FIRST) ──────────────
+  const netDebt = (f.totalDebt ?? 0) - (f.totalCash ?? 0);
+  const annualFCF = fcf; // FCF resolved above
+  const debtToFCF =
+    annualFCF != null && annualFCF !== 0 ? netDebt / annualFCF : null;
+  const equity = f.totalStockholderEquity;
+  const debtToEquity =
+    equity != null && equity > 0 ? netDebt / equity : null;
+
+  const banReasons: string[] = [];
+  if (debtToFCF != null && debtToFCF > NET_DEBT_TO_FCF_BAN) {
+    banReasons.push(`Net Debt / FCF = ${debtToFCF.toFixed(2)}x (> ${NET_DEBT_TO_FCF_BAN}x limit)`);
+  }
+  if (debtToEquity != null && debtToEquity > NET_DEBT_TO_EQUITY_BAN) {
+    banReasons.push(`Net Debt / Equity = ${(debtToEquity * 100).toFixed(0)}% (> ${NET_DEBT_TO_EQUITY_BAN * 100}% limit)`);
+  }
+  const banned = banReasons.length > 0;
+
+  // ─── CAPM discount rate ───────────────────────────────────────────────
+  const beta = snap.beta ?? 1.0;
   const discountRate = RISK_FREE + beta * EQUITY_PREMIUM;
 
-  // ─── Growth rate (bounded, favour earnings growth) ───────────────────
+  // ─── Growth rate (bounded, favour earnings growth) ────────────────────
   const rawG =
-    data.earningsGrowth != null && Number.isFinite(data.earningsGrowth) ? data.earningsGrowth :
-    data.revenueGrowth != null && Number.isFinite(data.revenueGrowth) ? data.revenueGrowth :
-    0.08;
+    f.earningsGrowth != null && Number.isFinite(f.earningsGrowth) ? f.earningsGrowth :
+    f.revenueGrowth != null && Number.isFinite(f.revenueGrowth) ? f.revenueGrowth :
+    DEFAULT_GROWTH;
   const growth = clamp(rawG, MIN_G1, MAX_G1);
+  const growthSource =
+    f.earningsGrowth != null && Number.isFinite(f.earningsGrowth) ? "earningsGrowth" :
+    f.revenueGrowth != null && Number.isFinite(f.revenueGrowth) ? "revenueGrowth" : `default-${(DEFAULT_GROWTH*100).toFixed(0)}%`;
 
-  // ─── 5-year explicit DCF + terminal ──────────────────────────────────
-  const fcf0 = data.freeCashFlow;
-  let intrinsicPerShare: number | null = null;
+  // ─── PE multiples (Our = market forward PE, Wayne's = 85% of that) ───
+  const ourPE = f.forwardPE ?? null;
+  const waynesPE = ourPE != null ? ourPE * WAYNE_PE_HAIRCUT : null;
+
+  // ─── Intrinsic Value TODAY — PE method (Friday's primary anchor) ─────
+  // Our IV = Forward EPS × Market Forward PE
+  // Wayne's IV = Forward EPS × (Market PE × 0.85)   [his discipline]
+  const ourIntrinsicValue =
+    f.epsForward != null && ourPE != null ? f.epsForward * ourPE : null;
+  const waynesIntrinsicValue =
+    f.epsForward != null && waynesPE != null ? f.epsForward * waynesPE : null;
+
+  // ─── Future Value 12M — next-fiscal-year EPS × same PE ───────────────
+  // FY+1 EPS projection = Forward EPS × (1 + growth)
+  const nextYearEPS =
+    f.epsForward != null ? f.epsForward * (1 + growth) : null;
+  const ourFutureValue =
+    nextYearEPS != null && ourPE != null ? nextYearEPS * ourPE : null;
+  const waynesFutureValue =
+    nextYearEPS != null && waynesPE != null ? nextYearEPS * waynesPE : null;
+
+  // ─── FCF DCF (cross-check — Friday notes it undershoots growth names)─
   const projections: Array<{ year: number; fcf: number; pv: number }> = [];
+  let fcfIntrinsicValue: number | null = null;
   let terminalValue: number | null = null;
   let terminalPV: number | null = null;
-  let totalEnterpriseValue: number | null = null;
+  let enterpriseValue: number | null = null;
 
-  if (fcf0 != null && fcf0 > 0 && data.sharesOut != null && data.sharesOut > 0) {
+  if (annualFCF != null && annualFCF > 0 && f.sharesOutstanding && f.sharesOutstanding > 0) {
     let sumPV = 0;
-    let lastFCF = fcf0;
+    let lastFCF = annualFCF;
     for (let t = 1; t <= EXPLICIT_YEARS; t++) {
-      const fcfT = fcf0 * Math.pow(1 + growth, t);
+      const fcfT = annualFCF * Math.pow(1 + growth, t);
       const pv = fcfT / Math.pow(1 + discountRate, t);
       sumPV += pv;
       lastFCF = fcfT;
@@ -208,89 +221,107 @@ export async function GET(req: NextRequest) {
     }
     terminalValue = lastFCF * (1 + TERMINAL_GROWTH) / (discountRate - TERMINAL_GROWTH);
     terminalPV = terminalValue / Math.pow(1 + discountRate, EXPLICIT_YEARS);
-    totalEnterpriseValue = sumPV + terminalPV;
-    // Net cash adjustment
-    const netCash = (data.totalCash ?? 0) - (data.totalDebt ?? 0);
-    const equityValue = totalEnterpriseValue + netCash;
-    intrinsicPerShare = equityValue / data.sharesOut;
+    enterpriseValue = sumPV + terminalPV;
+    fcfIntrinsicValue = (enterpriseValue - netDebt) / f.sharesOutstanding;
   }
 
-  // ─── 12-month future value (forward P/E × forward EPS) ───────────────
-  const futureValue12m =
-    data.epsForward != null && data.forwardPE != null
-      ? data.epsForward * data.forwardPE
-      : null;
+  // ─── Wayne's Target Price = Wayne's Intrinsic Value (today) ──────────
+  // Friday showed that this is the right anchor — Wayne's conservative PE
+  // applied to current forward EPS. For MRVL this gave $220-230, matching
+  // what the user heard from Wayne directly.
+  const waynesTarget = waynesIntrinsicValue;
 
-  // ─── Wayne's target (blended, with safety discount) ──────────────────
-  let waynesTarget: number | null = null;
-  if (intrinsicPerShare != null && futureValue12m != null) {
-    waynesTarget = (0.5 * intrinsicPerShare + 0.5 * futureValue12m) * (1 - WAYNE_MARGIN);
-  } else if (futureValue12m != null) {
-    waynesTarget = futureValue12m * (1 - WAYNE_MARGIN);
-  } else if (intrinsicPerShare != null) {
-    waynesTarget = intrinsicPerShare * (1 - WAYNE_MARGIN);
-  }
+  // ─── ELI level analysis (90/50 defaults) ─────────────────────────────
+  const strikePct = Number(sp.get("strikePct")) || DEFAULT_STRIKE_PCT;
+  const ekiPct = Number(sp.get("ekiPct")) || DEFAULT_EKI_PCT;
+  const strikePrice = snap.price! * strikePct;
+  const ekiPrice = snap.price! * ekiPct;
+  const eliLevels = {
+    strikePct, ekiPct, strikePrice, ekiPrice,
+    strikeVsOurIV:    ourIntrinsicValue    != null ? strikePrice - ourIntrinsicValue    : null,
+    strikeVsWaynesIV: waynesIntrinsicValue != null ? strikePrice - waynesIntrinsicValue : null,
+    ekiVsOurIV:       ourIntrinsicValue    != null ? ekiPrice    - ourIntrinsicValue    : null,
+    ekiVsWaynesIV:    waynesIntrinsicValue != null ? ekiPrice    - waynesIntrinsicValue : null,
+  };
 
-  // ─── Verdict ─────────────────────────────────────────────────────────
-  // Upside = Wayne's target vs. current price. For structured notes, we
-  // like downside protection → prefer high upside AND non-banned.
+  // ─── Verdict (judged against WAYNE'S target — the conservative view) ─
   let verdict: "LAUNCH" | "WATCH" | "AVOID" | "SKIP" = "WATCH";
   if (banned) verdict = "SKIP";
-  else if (waynesTarget != null && data.price != null) {
-    const upside = (waynesTarget - data.price) / data.price;
-    verdict = upside >= 0.20 ? "LAUNCH" : upside >= 0.05 ? "WATCH" : "AVOID";
+  else if (waynesTarget != null && snap.price != null) {
+    const upside = (waynesTarget - snap.price) / snap.price;
+    verdict = upside >= 0.15 ? "LAUNCH" : upside >= 0 ? "WATCH" : "AVOID";
   }
 
   return NextResponse.json({
-    symbol, market, ySymbol: ySym,
-    longName: data.longName,
-    currency: data.currency,
-    price: data.price,
-    marketCap: data.marketCap,
+    symbol,
+    market,
+    ySymbol: profile.symbol || symbol,
+    longName: snap.longName || null,
+    currency: snap.currency || null,
+    price: snap.price!,
+    marketCap: snap.marketCap || null,
     inputs: {
       beta,
-      forwardPE: data.forwardPE,
-      trailingPE: data.trailingPE,
-      epsForward: data.epsForward,
-      epsTrailing: data.epsTrailing,
-      freeCashFlow: data.freeCashFlow,
-      operatingCashFlow: data.operatingCashFlow,
-      capex: data.capex,
-      sharesOut: data.sharesOut,
-      totalDebt: data.totalDebt,
-      totalCash: data.totalCash,
-      totalEquity: data.totalEquity,
-      earningsGrowth: data.earningsGrowth,
-      revenueGrowth: data.revenueGrowth,
+      forwardPE: f.forwardPE ?? null,
+      trailingPE: f.trailingPE ?? null,
+      epsForward: f.epsForward ?? null,
+      epsTrailing: f.epsTrailing ?? null,
+      freeCashFlow: fcf,
+      operatingCashFlow: f.cashflowOpCF ?? f.operatingCashflow ?? null,
+      capex: f.cashflowCapex ?? null,
+      sharesOut: f.sharesOutstanding ?? null,
+      totalDebt: f.totalDebt ?? null,
+      totalCash: f.totalCash ?? null,
+      totalEquity: f.totalStockholderEquity ?? null,
+      earningsGrowth: f.earningsGrowth ?? null,
+      revenueGrowth: f.revenueGrowth ?? null,
     },
     assumptions: {
       riskFree: RISK_FREE,
       equityPremium: EQUITY_PREMIUM,
       terminalGrowth: TERMINAL_GROWTH,
-      wayneMargin: WAYNE_MARGIN,
+      waynePEHaircut: WAYNE_PE_HAIRCUT,
       explicitYears: EXPLICIT_YEARS,
       growthUsed: growth,
-      growthSource:
-        data.earningsGrowth != null && Number.isFinite(data.earningsGrowth) ? "earningsGrowth" :
-        data.revenueGrowth != null && Number.isFinite(data.revenueGrowth) ? "revenueGrowth" : "default-8%",
-      debtDenomLabel,
-      banThreshold: DE_BAN,
+      growthSource,
+      fcfSource,
+      netDebtToFCFBan: NET_DEBT_TO_FCF_BAN,
+      netDebtToEquityBan: NET_DEBT_TO_EQUITY_BAN,
     },
     computed: {
       discountRate,
       growth,
+      // PE multiples
+      ourPE,
+      waynesPE,
+      nextYearEPS,
+      // The four main numbers Friday called out:
+      ourIntrinsicValue,
+      waynesIntrinsicValue,
+      ourFutureValue,
+      waynesFutureValue,
+      // Legacy aliases (kept so the current page keeps working)
+      intrinsicPerShare: ourIntrinsicValue,
+      futureValue12m: ourFutureValue,
+      waynesTarget,
+      // FCF supporting DCF (undershoots growth names)
+      fcfIntrinsicValue,
       projections,
       terminalValue,
       terminalPV,
-      enterpriseValue: totalEnterpriseValue,
-      intrinsicPerShare,
-      futureValue12m,
-      waynesTarget,
-      debtRatio,
+      enterpriseValue,
+      // Debt Gate detail
+      netDebt,
+      debtToFCF,
+      debtToEquity,
       banned,
+      banReasons,
+      // ELI
+      eliLevels,
       verdict,
-      upsidePct: waynesTarget != null && data.price ? ((waynesTarget - data.price) / data.price) * 100 : null,
+      upsidePct: waynesTarget != null && snap.price ? ((waynesTarget - snap.price) / snap.price) * 100 : null,
     },
+    warnings,
     generatedAt: new Date().toISOString(),
   }, { headers: { "cache-control": "no-store" } });
 }

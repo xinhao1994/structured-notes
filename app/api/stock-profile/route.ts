@@ -183,6 +183,8 @@ async function fetchQuoteSummary(sym: string): Promise<Record<string, any> | nul
     "recommendationTrend",   // analyst Buy / Hold / Sell distribution
     "calendarEvents",         // next earnings date + estimates
     "upgradeDowngradeHistory",// recent upgrades / downgrades
+    "cashflowStatementHistory", // for Wayne DCF: operating cashflow + capex → FCF
+    "balanceSheetHistory",      // for Wayne DCF: total stockholder equity
   ].join(",");
   const j = await yahooAuthedGet<YahooModuleResp>(`/v10/finance/quoteSummary/${encodeURIComponent(sym)}`, { modules });
   return j?.quoteSummary?.result?.[0] ?? null;
@@ -437,6 +439,23 @@ export async function GET(req: NextRequest) {
       ?? (fhProfile?.shareOutstanding ? fhProfile.shareOutstanding * 1_000_000 : null),
     epsTrailing: pickNum(ks, "trailingEps") ?? pickNum(qv7 ?? {}, "epsTrailingTwelveMonths") ?? fm["epsTTM"] ?? null,
     epsForward: pickNum(ks, "forwardEps") ?? pickNum(qv7 ?? {}, "epsForward") ?? null,
+    // ─── Added for Wayne DCF ────────────────────────────────────────────
+    freeCashflow: pickNum(fd, "freeCashflow"),           // direct value if Yahoo gives it
+    operatingCashflow: pickNum(fd, "operatingCashflow"), // alt direct
+    ...(() => {
+      // Compute FCF from the cashflow statement if direct value missing
+      const cf = qs?.cashflowStatementHistory?.cashflowStatements?.[0];
+      const bs = qs?.balanceSheetHistory?.balanceSheetStatements?.[0];
+      const opCF = pickNum(cf ?? {}, "totalCashFromOperatingActivities");
+      const capex = pickNum(cf ?? {}, "capitalExpenditures"); // negative in Yahoo
+      const totalEq = pickNum(bs ?? {}, "totalStockholderEquity");
+      return {
+        cashflowOpCF: opCF,
+        cashflowCapex: capex,
+        cashflowFCF: opCF != null && capex != null ? opCF + capex : null,
+        totalStockholderEquity: totalEq,
+      };
+    })(),
   };
 
   const incomeRows: Array<{ year: number; revenue: number; netIncome: number | null }> = [];
