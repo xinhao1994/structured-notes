@@ -11,7 +11,7 @@
 import { useEffect } from "react";
 import { useRouter, usePathname } from "next/navigation";
 
-const TABS = ["/", "/pocket", "/calculator", "/analyze", "/chat"] as const;
+const TABS = ["/", "/pocket", "/calculator", "/analyze", "/wayne", "/chat"] as const;
 
 // Tuning
 const THRESHOLD_PX = 80;        // dragged past this → commit
