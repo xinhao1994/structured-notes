@@ -537,7 +537,8 @@ export default function WaynePage() {
               <InputRow label="Total Cash" value={i.totalCash != null ? fmtMoney(i.totalCash) : "—"} />
               <InputRow label="Earnings growth" value={i.earningsGrowth != null ? fmtPct(i.earningsGrowth) : "—"} />
               <InputRow label="Revenue growth" value={i.revenueGrowth != null ? fmtPct(i.revenueGrowth) : "—"} />
-              <InputRow label="D/E ratio" value={c.debtRatio != null ? `${c.debtRatio.toFixed(2)}x` : "—"} />
+              <InputRow label="D / Equity" value={c.debtToEquity != null ? `${(c.debtToEquity * 100).toFixed(0)}%` : "—"} />
+              <InputRow label="D / FCF" value={c.debtToFCF != null ? `${c.debtToFCF.toFixed(2)}x` : "—"} />
             </div>
           </section>
         </>
