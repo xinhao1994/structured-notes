@@ -1130,12 +1130,22 @@ function TrancheVerdict({ data, ccy }: { data: TrancheAnalysis; ccy: string }) {
         </div>
       </div>
 
-      {/* Gate detail */}
-      <section className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <GateList title="PASSES" items={verdict.passes} color="emerald" icon={CheckCircle2} />
-        <GateList title="FAILS" items={verdict.fails} color="red" icon={XCircle} />
-        <GateList title="NOTES" items={verdict.notes} color="muted" icon={AlertTriangle} />
-      </section>
+      {/* Gate detail — only render columns that have at least one entry */}
+      {(() => {
+        const visible: Array<{ title: string; items: string[]; color: "emerald" | "red" | "muted"; icon: any }> = [];
+        if (verdict.passes.length) visible.push({ title: "PASSES", items: verdict.passes, color: "emerald", icon: CheckCircle2 });
+        if (verdict.fails.length)   visible.push({ title: "FAILS",  items: verdict.fails,  color: "red",     icon: XCircle });
+        if (verdict.notes.length)   visible.push({ title: "NOTES",  items: verdict.notes,  color: "muted",   icon: AlertTriangle });
+        if (visible.length === 0) return null;
+        const cols = visible.length === 1 ? "sm:grid-cols-1" : visible.length === 2 ? "sm:grid-cols-2" : "sm:grid-cols-3";
+        return (
+          <section className={`mt-4 grid grid-cols-1 gap-3 ${cols}`}>
+            {visible.map((g) => (
+              <GateList key={g.title} title={g.title} items={g.items} color={g.color} icon={g.icon} />
+            ))}
+          </section>
+        );
+      })()}
 
       {/* Per-underlying breakdown */}
       <section className="mt-4 rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-4">
