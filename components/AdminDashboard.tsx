@@ -77,47 +77,84 @@ interface VisitorRow {
   isOnline: boolean;
 }
 
+// If a visitor has no activity for longer than this, the next ping is
+// treated as a brand-new session (even if their browser session_id is the
+// same). Covers the case where someone keeps the tab open all day — a
+// lunch break or overnight gap is still "they went offline and came back".
+const SESSION_GAP_MS = 30 * 60_000; // 30 minutes
+
 function buildVisitorRows(visits: Visit[]): VisitorRow[] {
   const now = Date.now();
-  // KEY = visitor_id + session_id → each browser session is its own row.
-  // Opening a new tab (= new sessionStorage sessionId) creates a brand-new
-  // session row with its own First Seen and Last Seen.
-  const byKey = new Map<string, VisitorRow>();
+
+  // Group all rows by visitor first, then split each visitor's rows into
+  // sessions by walking chronologically and starting a NEW session whenever:
+  //   - we just saw an "offline" marker, OR
+  //   - the gap since the last activity exceeds SESSION_GAP_MS.
+  const byVisitor = new Map<string, Visit[]>();
   for (const v of visits) {
     if (!v.visitor_id) continue;
-    const key = `${v.visitor_id}:${v.session_id ?? "nosession"}`;
-    const cur = byKey.get(key);
-    if (!cur) {
-      byKey.set(key, {
-        rowKey: key,
-        visitorId: v.visitor_id,
-        sessionId: v.session_id,
-        name: v.chat_name,
-        ip: v.ip,
-        city: v.city,
-        country: v.country,
-        device: v.device_type,
-        browser: v.browser,
-        os: v.os,
-        firstAt: v.created_at,
-        lastActivityAt: v.created_at,
-        offlineAt: isOfflineRow(v) ? v.created_at : null,
-        visitCount: isRealVisit(v) ? 1 : 0,
-        isOnline: false,
-      });
-    } else {
-      if (isRealVisit(v)) cur.visitCount++;
-      if (v.created_at < cur.firstAt) cur.firstAt = v.created_at;
-      if (v.created_at > cur.lastActivityAt) cur.lastActivityAt = v.created_at;
-      if (!cur.name && v.chat_name) cur.name = v.chat_name;
-      if (!cur.ip && v.ip) cur.ip = v.ip;
-      if (!cur.city && v.city) cur.city = v.city;
-      if (!cur.country && v.country) cur.country = v.country;
-      if (!cur.device && v.device_type) cur.device = v.device_type;
-      if (!cur.browser && v.browser) cur.browser = v.browser;
-      if (!cur.os && v.os) cur.os = v.os;
-      if (isOfflineRow(v) && (!cur.offlineAt || v.created_at > cur.offlineAt)) {
-        cur.offlineAt = v.created_at;
+    const arr = byVisitor.get(v.visitor_id) || [];
+    arr.push(v);
+    byVisitor.set(v.visitor_id, arr);
+  }
+
+  const byKey = new Map<string, VisitorRow>();
+  for (const [visitorId, rows] of byVisitor.entries()) {
+    // Chronological order (oldest first) so we can walk the timeline
+    rows.sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
+
+    let sessionIndex = 0;
+    let prevRow: Visit | null = null;
+    let currentKey = "";
+
+    for (const v of rows) {
+      let startNewSession = false;
+      if (!prevRow) {
+        startNewSession = true;
+      } else {
+        const gap = Date.parse(v.created_at) - Date.parse(prevRow.created_at);
+        if (isOfflineRow(prevRow)) startNewSession = true;
+        else if (gap > SESSION_GAP_MS) startNewSession = true;
+      }
+      if (startNewSession) {
+        sessionIndex++;
+        currentKey = `${visitorId}:s${sessionIndex}:${v.created_at}`;
+      }
+      prevRow = v;
+
+      const cur = byKey.get(currentKey);
+      if (!cur) {
+        byKey.set(currentKey, {
+          rowKey: currentKey,
+          visitorId,
+          sessionId: v.session_id,
+          name: v.chat_name,
+          ip: v.ip,
+          city: v.city,
+          country: v.country,
+          device: v.device_type,
+          browser: v.browser,
+          os: v.os,
+          firstAt: v.created_at,
+          lastActivityAt: v.created_at,
+          offlineAt: isOfflineRow(v) ? v.created_at : null,
+          visitCount: isRealVisit(v) ? 1 : 0,
+          isOnline: false,
+        });
+      } else {
+        if (isRealVisit(v)) cur.visitCount++;
+        if (v.created_at < cur.firstAt) cur.firstAt = v.created_at;
+        if (v.created_at > cur.lastActivityAt) cur.lastActivityAt = v.created_at;
+        if (!cur.name && v.chat_name) cur.name = v.chat_name;
+        if (!cur.ip && v.ip) cur.ip = v.ip;
+        if (!cur.city && v.city) cur.city = v.city;
+        if (!cur.country && v.country) cur.country = v.country;
+        if (!cur.device && v.device_type) cur.device = v.device_type;
+        if (!cur.browser && v.browser) cur.browser = v.browser;
+        if (!cur.os && v.os) cur.os = v.os;
+        if (isOfflineRow(v) && (!cur.offlineAt || v.created_at > cur.offlineAt)) {
+          cur.offlineAt = v.created_at;
+        }
       }
     }
   }
