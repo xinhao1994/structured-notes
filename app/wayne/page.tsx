@@ -167,12 +167,16 @@ export default function WaynePage() {
   const inputRef = useRef<HTMLInputElement>(null);
 
   // ─── Tranche parser state ─────────────────────────────────────────────
-  const [trancheOpen, setTrancheOpen] = useState(false);
+  const [trancheEditOpen, setTrancheEditOpen] = useState(false);
   const [trancheText, setTrancheText] = useState("");
   const [trancheAnalyzing, setTrancheAnalyzing] = useState(false);
+  const [trancheSteps, setTrancheSteps] = useState<string[]>([]);
+  const [trancheStepIdx, setTrancheStepIdx] = useState(-1);
   const [trancheResult, setTrancheResult] = useState<TrancheAnalysis | null>(null);
   const [trancheError, setTrancheError] = useState<string | null>(null);
+  const [trancheFlash, setTrancheFlash] = useState<"none" | "empty" | "denied">("none");
   const trancheResultRef = useRef<HTMLDivElement | null>(null);
+  const trancheAnimRef = useRef<HTMLDivElement | null>(null);
 
   // Animate the step list sequentially while the fetch runs in parallel.
   useEffect(() => {
@@ -214,13 +218,34 @@ export default function WaynePage() {
 
   function onKey(e: React.KeyboardEvent) { if (e.key === "Enter") ask(); }
 
-  // ─── Tranche-level analysis ────────────────────────────────────────────
-  async function analyzeTranche() {
-    const text = trancheText.trim();
+  // One-click clipboard-paste → auto-parse → full animated analysis.
+  // Mirrors the Desk tab's ProductParser UX (single tap, no second click).
+  async function trancheFromClipboard() {
+    try {
+      const t = await navigator.clipboard.readText();
+      if (!t.trim()) {
+        setTrancheFlash("empty");
+        setTimeout(() => setTrancheFlash("none"), 2500);
+        return;
+      }
+      setTrancheText(t);
+      await analyzeTranche(t);
+    } catch {
+      setTrancheFlash("denied");
+      setTimeout(() => setTrancheFlash("none"), 3500);
+    }
+  }
+
+  // ─── Tranche-level analysis with full theatrical animation ─────────────
+  async function analyzeTranche(overrideText?: string) {
+    const text = (overrideText ?? trancheText).trim();
     if (!text) return;
     setTrancheError(null);
     setTrancheResult(null);
     setTrancheAnalyzing(true);
+    setTrancheEditOpen(false); // close editor if open
+    setTrancheStepIdx(-1);
+
     try {
       const parsed = parseTrancheText(text);
       if (!parsed?.tranche?.underlyings?.length) {
@@ -228,8 +253,35 @@ export default function WaynePage() {
       }
       const tranche = parsed.tranche;
 
-      // Fetch Wayne analysis for each underlying in parallel
-      const perResults = await Promise.all(
+      // Build dynamic animated steps that call out each underlying by name
+      const dynamicSteps: string[] = [
+        `Parsing tranche structure…`,
+        `Resolved ${tranche.underlyings.length} underlying${tranche.underlyings.length === 1 ? "" : "s"}: ${tranche.underlyings.map((u) => u.symbol).join(", ")}`,
+      ];
+      for (const u of tranche.underlyings) {
+        dynamicSteps.push(
+          `Pulling live market data for ${u.symbol}…`,
+          `Running Debt Gate on ${u.symbol} (D/FCF, D/E)…`,
+          `CAPM: r = Rf + β·ERP for ${u.symbol}…`,
+          `Forward EPS × Market PE → Our IV for ${u.symbol}…`,
+          `Forward EPS × 0.85·PE → Wayne's IV for ${u.symbol}…`,
+          `Projecting FY+1 EPS × PE → 12M Future Value for ${u.symbol}…`,
+        );
+      }
+      dynamicSteps.push(
+        `Checking EKI depth against each underlying's intrinsic value…`,
+        `Scoring stepdown feature (${(tranche.koStepdownPct * 100).toFixed(1)}% per period)…`,
+        `Coupon vs risk-free: ${(tranche.couponPa * 100).toFixed(1)}% − 3.5% = +${((tranche.couponPa - 0.035) * 100).toFixed(1)}%`,
+        `Finalizing Wayne's verdict…`,
+      );
+      setTrancheSteps(dynamicSteps);
+
+      // Scroll the animation into view
+      setTimeout(() => trancheAnimRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+
+      // Kick off data fetching + minimum animation window IN PARALLEL
+      const minAnimation = new Promise<void>((res) => setTimeout(res, dynamicSteps.length * 420));
+      const dataFetch = Promise.all(
         tranche.underlyings.map(async (u) => {
           try {
             const r = await fetch(`/api/wayne/analyze?symbol=${encodeURIComponent(u.symbol)}&market=${u.market}`, { cache: "no-store" });
@@ -244,6 +296,7 @@ export default function WaynePage() {
           }
         })
       );
+      const [perResults] = await Promise.all([dataFetch, minAnimation]);
 
       // ── Decide the tranche verdict ──────────────────────────────────────
       const passes: string[] = [];
@@ -336,8 +389,22 @@ export default function WaynePage() {
       setTrancheError(String(e?.message || e));
     } finally {
       setTrancheAnalyzing(false);
+      setTrancheStepIdx(-1);
     }
   }
+
+  // Step animator for tranche flow — matches the single-stock pacing
+  useEffect(() => {
+    if (!trancheAnalyzing || trancheSteps.length === 0) return;
+    setTrancheStepIdx(0);
+    let i = 0;
+    const id = window.setInterval(() => {
+      i++;
+      if (i >= trancheSteps.length) { window.clearInterval(id); return; }
+      setTrancheStepIdx(i);
+    }, 400);
+    return () => window.clearInterval(id);
+  }, [trancheAnalyzing, trancheSteps]);
 
   const c = result?.computed;
   const i = result?.inputs;
@@ -352,10 +419,24 @@ export default function WaynePage() {
         @keyframes formula-pop { from { opacity: 0; transform: translateY(6px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
         @keyframes line-grow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
         @keyframes grid-pan { from { background-position: 0 0; } to { background-position: 40px 40px; } }
+        @keyframes formula-float {
+          0%   { opacity: 0; transform: translateY(10px) scale(.9); }
+          15%  { opacity: 1; transform: translateY(0) scale(1); }
+          85%  { opacity: 1; transform: translateY(-4px) scale(1); }
+          100% { opacity: 0; transform: translateY(-18px) scale(.95); }
+        }
+        @keyframes digit-tick {
+          0%, 100% { transform: translateY(0); }
+          50%      { transform: translateY(-2px); }
+        }
         .brain-glow { animation: brain-glow 2.4s ease-in-out infinite; }
         .slide-up { animation: slide-up .5s ease-out both; }
         .formula-pop { animation: formula-pop .55s ease-out both; }
         .line-grow { transform-origin: left; animation: line-grow .6s ease-out both; }
+        .formula-float {
+          animation: formula-float 2.5s ease-in-out infinite;
+          text-shadow: 0 0 8px rgba(99,102,241,.6);
+        }
         .wayne-grid { background-image:
           linear-gradient(var(--line) 1px, transparent 1px),
           linear-gradient(90deg, var(--line) 1px, transparent 1px);
@@ -411,21 +492,47 @@ export default function WaynePage() {
             </button>
           </div>
 
-          {/* Tranche parser toggle button — modelled on Desk tab's parser */}
-          <div className="mt-3">
+          {/* ─── ONE-CLICK tranche paste button (modelled on Desk's orb) ─ */}
+          <div className="mt-3 flex items-center gap-2">
             <button
-              onClick={() => setTrancheOpen((v) => !v)}
-              className="flex w-full items-center justify-center gap-2 rounded-lg border border-indigo-500/30 bg-indigo-500/10 px-4 py-2 text-[12.5px] font-semibold text-indigo-300 transition hover:bg-indigo-500/20"
+              onClick={trancheFromClipboard}
+              disabled={trancheAnalyzing}
+              className="group flex flex-1 items-center justify-center gap-2.5 rounded-lg border border-indigo-500/40 bg-gradient-to-r from-indigo-600/20 via-purple-600/15 to-sky-500/20 px-4 py-2.5 text-[12.5px] font-semibold text-indigo-200 shadow-md shadow-indigo-500/20 transition hover:border-indigo-400/60 hover:from-indigo-600/30 hover:to-sky-500/30 disabled:opacity-50"
+              title="Reads the tranche from your clipboard and immediately runs Wayne's DCF on every underlying."
             >
-              <ClipboardPaste size={14} />
-              {trancheOpen ? "Hide tranche parser" : "Or parse your tranche here and see what's Wayne thinking"}
+              {trancheAnalyzing ? (
+                <Loader2 size={15} className="animate-spin" />
+              ) : (
+                <ClipboardPaste size={15} className="transition group-hover:scale-110" />
+              )}
+              Or parse your tranche here — see what Wayne's thinking
+            </button>
+            <button
+              onClick={() => setTrancheEditOpen((v) => !v)}
+              className="rounded-lg border border-[var(--line)] bg-[var(--surface)] px-3 py-2.5 text-[11px] font-semibold text-[var(--text-muted)] hover:text-[var(--text)]"
+              title="Open manual editor as a fallback if clipboard access is blocked."
+            >
+              Edit
             </button>
           </div>
 
-          {trancheOpen && (
+          {/* Status chip for clipboard flash */}
+          {trancheFlash !== "none" && (
+            <div className={`mt-2 flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[11px] ${
+              trancheFlash === "empty" ? "bg-warning/10 text-warning" : "bg-danger/10 text-danger"
+            }`}>
+              <AlertTriangle size={12} />
+              {trancheFlash === "empty"
+                ? "Clipboard is empty — copy your tranche message first."
+                : "Clipboard permission denied — tap Edit to paste manually."}
+            </div>
+          )}
+
+          {/* Fallback manual editor (ONLY shown when user explicitly opens it) */}
+          {trancheEditOpen && (
             <div className="mt-3 rounded-lg border border-[var(--line)] bg-[var(--surface)] p-3 slide-up">
               <label className="mb-1.5 block text-[10.5px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-                Paste the tranche message (same format as the Desk tab's parser)
+                Paste manually (fallback when clipboard is blocked)
               </label>
               <textarea
                 value={trancheText}
@@ -434,17 +541,14 @@ export default function WaynePage() {
                 rows={10}
                 className="w-full rounded-md border border-[var(--line)] bg-[var(--surface-2)] px-3 py-2 font-mono text-[11.5px] outline-none focus:border-indigo-500/50"
               />
-              <div className="mt-2 flex items-center justify-between gap-2 flex-wrap">
-                <span className="text-[10.5px] text-[var(--text-muted)]">
-                  Extracts underlyings, pulls live Yahoo fundamentals, runs Wayne's DCF on each, then combines with the tranche's stepdown + EKI + coupon.
-                </span>
+              <div className="mt-2 flex justify-end">
                 <button
-                  onClick={analyzeTranche}
+                  onClick={() => analyzeTranche()}
                   disabled={trancheAnalyzing || !trancheText.trim()}
                   className="flex items-center gap-2 rounded-lg bg-indigo-600 px-3.5 py-1.5 text-[11.5px] font-semibold text-white shadow-md shadow-indigo-500/30 hover:bg-indigo-500 disabled:opacity-50"
                 >
                   {trancheAnalyzing ? <Loader2 size={13} className="animate-spin" /> : <Brain size={13} />}
-                  Does Wayne approve?
+                  Run Wayne's model
                 </button>
               </div>
               {trancheError && (
@@ -465,8 +569,52 @@ export default function WaynePage() {
         </div>
       </section>
 
-      {/* ─── TRANCHE VERDICT (shown after Does Wayne approve? click) ──── */}
-      {trancheResult && (
+      {/* ─── TRANCHE ANIMATION (while computing) ─────────────────────── */}
+      {trancheAnalyzing && trancheSteps.length > 0 && (
+        <section ref={trancheAnimRef} className="mb-5 slide-up rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-5">
+          <div className="mb-3 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+            <Loader2 size={13} className="animate-spin text-indigo-400" />
+            Running Wayne's tranche model
+          </div>
+
+          {/* Live mathematical formulas floating + progress indicator */}
+          <div className="relative mb-3 h-20 overflow-hidden rounded-lg border border-indigo-500/20 bg-gradient-to-br from-indigo-500/5 via-purple-500/5 to-transparent">
+            <div className="pointer-events-none absolute inset-0 wayne-grid" />
+            <div className="relative flex h-full items-center justify-around px-4 font-mono text-[11px] text-indigo-300">
+              <FormulaFloat text="r = Rf + β·ERP" delay="0s" />
+              <FormulaFloat text="FV = EPS₁ × PE" delay="0.5s" />
+              <FormulaFloat text="IV = Σ FCFₜ / (1+r)ᵗ" delay="1s" />
+              <FormulaFloat text="D/FCF ≤ 3x ?" delay="1.5s" />
+              <FormulaFloat text="EKI < IV ?" delay="2s" />
+            </div>
+          </div>
+
+          {/* Step list with pulsing dot on active step */}
+          <ol className="space-y-1.5 font-mono text-[11.5px]">
+            {trancheSteps.map((s, k) => (
+              <li
+                key={k}
+                className={`flex items-center gap-2 transition-opacity ${k <= trancheStepIdx ? "text-[var(--text)]" : "text-[var(--text-muted)] opacity-40"}`}
+              >
+                <span className={`inline-block h-1.5 w-1.5 shrink-0 rounded-full ${k < trancheStepIdx ? "bg-success" : k === trancheStepIdx ? "bg-indigo-400 brain-glow" : "bg-[var(--line)]"}`} />
+                <span className="truncate">{s}</span>
+                {k < trancheStepIdx && <CheckCircle2 size={11} className="ml-auto shrink-0 text-success" />}
+              </li>
+            ))}
+          </ol>
+
+          {/* Progress bar */}
+          <div className="mt-3 overflow-hidden rounded bg-[var(--surface-2)]">
+            <div
+              className="h-1 bg-gradient-to-r from-indigo-500 via-purple-500 to-sky-500"
+              style={{ width: `${Math.max(0, (trancheStepIdx + 1) / trancheSteps.length) * 100}%`, transition: "width 400ms ease-out" }}
+            />
+          </div>
+        </section>
+      )}
+
+      {/* ─── TRANCHE VERDICT ─────────────────────────────────────────── */}
+      {trancheResult && !trancheAnalyzing && (
         <div ref={trancheResultRef}>
           <TrancheVerdict data={trancheResult} ccy="$" />
         </div>
@@ -1049,6 +1197,17 @@ function TrancheVerdict({ data, ccy }: { data: TrancheAnalysis; ccy: string }) {
         </div>
       </section>
     </section>
+  );
+}
+
+function FormulaFloat({ text, delay }: { text: string; delay: string }) {
+  return (
+    <span
+      className="formula-float select-none"
+      style={{ animationDelay: delay }}
+    >
+      {text}
+    </span>
   );
 }
 
