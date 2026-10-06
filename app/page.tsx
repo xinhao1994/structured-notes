@@ -105,9 +105,19 @@ export default function HomePage() {
     refreshOverrides();
   }
 
-  function handleParsed(r: ParseResult, _rawText: string) {
+  function handleParsed(r: ParseResult, rawText: string) {
     setParsed(r);
     setSaved(false);
+    // Fire-and-forget: feed every Desk-tab parse into the learning layer
+    // so SN Desk can surface trending underlyings across all users.
+    if (r?.tranche?.underlyings?.length) {
+      fetch("/api/learn/tranche", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        keepalive: true,
+        body: JSON.stringify({ tranche: r.tranche, rawText, source: "desk" }),
+      }).catch(() => {});
+    }
   }
 
   function handleSaveToPocket() {

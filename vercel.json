@@ -4,6 +4,10 @@
     {
       "path": "/api/cron/daily-obs-check",
       "schedule": "0 1 * * *"
+    },
+    {
+      "path": "/api/cron/learn-refresh",
+      "schedule": "0 2 * * 1"
     }
   ]
 }

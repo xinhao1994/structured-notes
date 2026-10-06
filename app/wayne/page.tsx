@@ -166,6 +166,20 @@ export default function WaynePage() {
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // ─── Learning layer: trending underlyings aggregated across all parses ─
+  interface PopularStock {
+    symbol: string; market: string;
+    parse_count: number; unique_visitors: number;
+    last_parsed_at: string; raw_name_variants?: string[] | null;
+  }
+  const [popular, setPopular] = useState<PopularStock[] | null>(null);
+  useEffect(() => {
+    fetch("/api/learn/popular?limit=12", { cache: "no-store" })
+      .then((r) => r.ok ? r.json() : { popular: [] })
+      .then((j) => setPopular(Array.isArray(j.popular) ? j.popular : []))
+      .catch(() => setPopular([]));
+  }, []);
+
   // ─── Tranche parser state ─────────────────────────────────────────────
   const [trancheEditOpen, setTrancheEditOpen] = useState(false);
   const [trancheText, setTrancheText] = useState("");
@@ -252,6 +266,15 @@ export default function WaynePage() {
         throw new Error("No underlyings detected in that message. Make sure it includes the stock names.");
       }
       const tranche = parsed.tranche;
+
+      // Fire-and-forget: feed this parse into the learning layer so other
+      // users benefit from trending-underlyings data.
+      fetch("/api/learn/tranche", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        keepalive: true,
+        body: JSON.stringify({ tranche, rawText: text, source: "wayne" }),
+      }).catch(() => {});
 
       // Build dynamic animated steps that call out each underlying by name
       const dynamicSteps: string[] = [
@@ -900,10 +923,57 @@ export default function WaynePage() {
       )}
 
       {!trancheResult && !trancheAnalyzing && !trancheError && (
-        <div className="rounded-2xl border border-dashed border-[var(--line)] bg-[var(--surface)]/40 p-6 text-center text-[12.5px] text-[var(--text-muted)]">
-          Copy your tranche message (same format as the Desk tab) and tap the button above.
-          Wayne auto-detects every underlying, every market, and runs the full DCF.
-        </div>
+        <>
+          <div className="mb-4 rounded-2xl border border-dashed border-[var(--line)] bg-[var(--surface)]/40 p-6 text-center text-[12.5px] text-[var(--text-muted)]">
+            Copy your tranche message (same format as the Desk tab) and tap the button above.
+            Wayne auto-detects every underlying, every market, and runs the full DCF.
+          </div>
+
+          {/* Trending underlyings — learned from every parse across all users */}
+          {popular && popular.length > 0 && (
+            <section className="rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-4">
+              <div className="mb-3 flex items-center justify-between">
+                <div>
+                  <div className="text-[10.5px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+                    📈 Trending across all tranches
+                  </div>
+                  <h2 className="text-[14px] font-bold">Most-parsed underlyings</h2>
+                </div>
+                <span className="text-[10px] text-[var(--text-muted)]">
+                  Learning layer · updates every parse
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+                {popular.slice(0, 12).map((p) => {
+                  const label = p.raw_name_variants?.[0] || p.symbol;
+                  return (
+                    <div
+                      key={`${p.symbol}:${p.market}`}
+                      className="rounded-lg border border-[var(--line)] bg-[var(--surface-2)]/60 p-2.5"
+                    >
+                      <div className="flex items-baseline justify-between gap-2">
+                        <span className="font-mono text-[12px] font-bold">{p.symbol}</span>
+                        <span className="text-[9.5px] text-[var(--text-muted)]">{p.market}</span>
+                      </div>
+                      <div className="truncate text-[10px] text-[var(--text-muted)]">{label}</div>
+                      <div className="mt-1 flex items-center gap-2 text-[10px]">
+                        <span className="rounded bg-indigo-500/15 px-1.5 py-0.5 font-semibold text-indigo-300">
+                          {p.parse_count}× parsed
+                        </span>
+                        <span className="text-[var(--text-muted)]">{p.unique_visitors} user{p.unique_visitors === 1 ? "" : "s"}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="mt-3 text-[10px] text-[var(--text-muted)]">
+                Every tranche parsed on SN Desk — by you, Mei, or anyone else — contributes to this
+                list. The more a stock appears, the higher it ranks. All fundamentals pulled fresh
+                from Yahoo on demand so Wayne's model always uses the latest beta, PE, EPS, FCF.
+              </p>
+            </section>
+          )}
+        </>
       )}
     </div>
   );
