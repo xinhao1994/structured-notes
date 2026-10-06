@@ -84,6 +84,12 @@ const NAME_TO_TICKER: Record<string, Listing> = {
   "marvell technology group": { US: "MRVL", default: "US" },
   "marvell semi": { US: "MRVL", default: "US" },
   "marvell semiconductor": { US: "MRVL", default: "US" },
+
+  // Corning Inc — GLW
+  corning: { US: "GLW", default: "US" },
+  "corning inc": { US: "GLW", default: "US" },
+  "corning incorporated": { US: "GLW", default: "US" },
+  glw: { US: "GLW", default: "US" },
   "applied materials": { US: "AMAT", default: "US" },
   "lam research": { US: "LRCX", default: "US" },
   asml: { US: "ASML", default: "US" },
@@ -923,18 +929,53 @@ function extractTickers(text: string, exclude: Set<string>): Underlying[] {
         // e.g. "Marvell Technology Inc MRVL US" → left="...", lastToken="MRVL"
         // Handle this BEFORE resolveListing so the full left string doesn't fuzzy-
         // match an unrelated entry (e.g. "advanced" → "advantest" JP:6857).
-        // Corporate suffixes (Corp, Inc, Ltd…) are excluded — "Western Digital Corp US"
-        // must NOT treat "CORP" as a ticker (CORP is the PIMCO Bond ETF).
+        //
+        // CRITICAL — Industry-category suffix words (Tech, Technology, Semi, Pharma,
+        // Bio, Energy, Motors, etc.) look like short tickers but are almost always
+        // part of a company name. If we're not careful "Marvell Tech US" treats
+        // "TECH" as the ticker — which is Bio-Techne Corporation on NASDAQ — and
+        // the entire line turns into the wrong company. So:
+        //   1. Try the FULL left phrase in the dictionary FIRST.
+        //   2. Only fall back to last-word-as-ticker if the full phrase doesn't
+        //      resolve AND the last word is a true all-caps ticker-shaped token
+        //      (3+ chars) that isn't a known industry suffix.
         const CORP_SUFFIX_TOKENS = new Set([
+          // Corporate structure suffixes
           "CORP", "INC", "LTD", "CO", "LLC", "PLC", "SA", "AG", "NV", "GRP",
           "HLDG", "HLDGS", "HOLDINGS", "GROUP", "GRPHOLDINGS",
+          // Industry-category words that collide with real NASDAQ tickers
+          "TECH", "TECHNOLOGY", "TECHNOLOGIES",   // TECH = Bio-Techne
+          "SEMI", "SEMICONDUCTOR", "SEMICONDUCTORS",
+          "PHARMA", "PHARMACEUTICAL", "PHARMACEUTICALS",
+          "BIO", "BIOTECH", "BIOSCIENCES", "BIOSCIENCE",
+          "ENERGY", "MOTORS", "AUTO", "STEEL", "RESOURCES", "INDUSTRIES",
+          "DIGITAL", "SYSTEMS", "SOLUTIONS", "NETWORKS", "COMMUNICATIONS",
+          "FINANCIAL", "FINANCE", "BANK", "INSURANCE",
+          "ENTERPRISES", "ENTERTAINMENT", "PICTURES", "MEDIA",
+          "HEALTH", "HEALTHCARE", "MEDICAL",
+          "SOFTWARE", "GAMES", "GAMING",
         ]);
         if (!longName) {
+          // Step 1 — full-phrase dictionary lookup. If the whole left side
+          // ("Marvell Tech") resolves, use it directly.
+          const fullHit = resolveListing(left, market);
+          if (fullHit.resolved) {
+            out.push({ rawName: left, symbol: fullHit.symbol, market: fullHit.market, resolved: true });
+            continue;
+          }
+          // Step 2 — last-word-as-ticker fallback, with stricter guards.
           const leftWords = left.trim().split(/\s+/);
           const lastToken = leftWords[leftWords.length - 1].toUpperCase();
+          const originalLast = leftWords[leftWords.length - 1];
+          // Only trust last-word-as-ticker when it looks EXPLICITLY ticker-like:
+          //   - 3+ chars (so "Co", "Inc" don't trigger)
+          //   - originally all-caps in the user's text (so "Tech" ≠ "AMD")
+          //   - not in the industry/corp suffix list
+          const isAllCapsInSource = originalLast === lastToken;
           if (
             leftWords.length > 1 &&
-            /^[A-Z]{1,6}$/.test(lastToken) &&
+            /^[A-Z]{3,6}$/.test(lastToken) &&
+            isAllCapsInSource &&
             !MARKET_TOKENS[lastToken] &&
             !CORP_SUFFIX_TOKENS.has(lastToken)
           ) {
