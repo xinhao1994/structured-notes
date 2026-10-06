@@ -279,20 +279,38 @@ export default function WaynePage() {
       // Scroll the animation into view
       setTimeout(() => trancheAnimRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
 
-      // Kick off data fetching + minimum animation window IN PARALLEL
+      // Kick off data fetching + minimum animation window IN PARALLEL.
+      // Any underlying marked `resolved: false` by the parser (e.g. the user
+      // pasted "Marvell Technologies" instead of "MRVL") gets upgraded via
+      // /api/symbol-search FIRST so Wayne never hits Yahoo's generic search
+      // and ends up with a random biotech match.
       const minAnimation = new Promise<void>((res) => setTimeout(res, dynamicSteps.length * 420));
       const dataFetch = Promise.all(
         tranche.underlyings.map(async (u) => {
+          let effectiveSymbol = u.symbol;
+          let effectiveMarket = u.market;
+          if (u.resolved === false) {
+            try {
+              const sr = await fetch(`/api/symbol-search?q=${encodeURIComponent(u.rawName)}&market=${u.market}`, { cache: "no-store" });
+              if (sr.ok) {
+                const sj = await sr.json();
+                if (sj?.symbol) {
+                  effectiveSymbol = sj.symbol;
+                  if (sj.market) effectiveMarket = sj.market;
+                }
+              }
+            } catch { /* keep raw symbol */ }
+          }
           try {
-            const r = await fetch(`/api/wayne/analyze?symbol=${encodeURIComponent(u.symbol)}&market=${u.market}`, { cache: "no-store" });
+            const r = await fetch(`/api/wayne/analyze?symbol=${encodeURIComponent(effectiveSymbol)}&market=${effectiveMarket}`, { cache: "no-store" });
             if (!r.ok) {
               const j = await r.json().catch(() => ({}));
-              return { symbol: u.symbol, market: u.market, longName: u.rawName, analysis: null, error: j.error || `HTTP ${r.status}` };
+              return { symbol: effectiveSymbol, market: effectiveMarket, longName: u.rawName, analysis: null, error: j.error || `HTTP ${r.status}` };
             }
             const a = (await r.json()) as Analysis;
-            return { symbol: u.symbol, market: u.market, longName: a.longName ?? u.rawName, analysis: a, error: null };
+            return { symbol: effectiveSymbol, market: effectiveMarket, longName: a.longName ?? u.rawName, analysis: a, error: null };
           } catch (e: any) {
-            return { symbol: u.symbol, market: u.market, longName: u.rawName, analysis: null, error: String(e?.message || e) };
+            return { symbol: effectiveSymbol, market: effectiveMarket, longName: u.rawName, analysis: null, error: String(e?.message || e) };
           }
         })
       );
@@ -1147,10 +1165,93 @@ function TrancheVerdict({ data, ccy }: { data: TrancheAnalysis; ccy: string }) {
         );
       })()}
 
-      {/* Per-underlying breakdown */}
+      {/* Full per-underlying analysis — one detailed card per stock */}
+      <section className="mt-4 space-y-4">
+        {perUnderlying.map((u) => {
+          if (!u.analysis) return (
+            <div key={u.symbol} className="rounded-2xl border border-red-500/30 bg-red-500/5 p-4 text-[11.5px] text-red-400">
+              <b>{u.symbol}</b>: {u.error || "no data"}
+            </div>
+          );
+          const a = u.analysis;
+          const c = a.computed;
+          const i = a.inputs;
+          const stockCcy = a.currency === "USD" ? "$" : a.currency === "HKD" ? "HK$" : "$";
+          return (
+            <div key={u.symbol} className="rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-4">
+              {/* Header: ticker, name, current price */}
+              <div className="mb-3 flex items-center justify-between gap-2 border-b border-[var(--line)] pb-2">
+                <div>
+                  <div className="text-[10.5px] uppercase tracking-wider text-[var(--text-muted)]">{a.ySymbol} · {a.market}</div>
+                  <div className="text-[14px] font-bold">{a.longName || u.symbol}</div>
+                </div>
+                <div className="text-right">
+                  <div className="text-[10px] uppercase tracking-wider text-[var(--text-muted)]">Current</div>
+                  <div className="text-[18px] font-bold tabular">{fmtPrice(a.price, stockCcy)}</div>
+                </div>
+              </div>
+
+              {/* Debt Gate strip */}
+              <div className={`mb-3 rounded-lg border px-3 py-2 text-[11.5px] ${c.banned ? "border-amber-500/40 bg-amber-500/10 text-amber-300" : "border-emerald-500/30 bg-emerald-500/5 text-emerald-300"}`}>
+                <b>{c.banned ? "❌ Debt Gate BANNED" : "✅ Debt Gate PASS"}</b>
+                {" · "}D/FCF: {Number.isFinite(c.debtToFCF ?? NaN) ? `${(c.debtToFCF as number).toFixed(2)}x` : (c.cashRich ? "n/a (net cash)" : "∞")}
+                {" · "}D/E: {c.debtToEquity != null ? `${(c.debtToEquity * 100).toFixed(0)}%` : "—"}
+                {c.banReasons.length > 0 && (
+                  <div className="mt-1 text-[10.5px]">{c.banReasons.join(" · ")}</div>
+                )}
+              </div>
+
+              {/* 2x2 valuation grid */}
+              <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                <MiniValue label="Our IV" value={c.evSalesUsed ? c.ourEvSalesIV : c.ourIntrinsicValue} price={a.price} ccy={stockCcy} />
+                <MiniValue label="Wayne's IV" value={c.evSalesUsed ? c.waynesEvSalesIV : c.waynesIntrinsicValue} price={a.price} ccy={stockCcy} accent />
+                <MiniValue label="Our FV 12M" value={c.ourFutureValue ?? c.ourEvSalesFV} price={a.price} ccy={stockCcy} />
+                <MiniValue label="Wayne's FV 12M" value={c.waynesFutureValue ?? c.waynesEvSalesFV ?? c.waynesTarget} price={a.price} ccy={stockCcy} accent />
+              </div>
+
+              {/* Key inputs row */}
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] sm:grid-cols-4">
+                <KV label="Beta" value={i.beta != null ? i.beta.toFixed(2) : "—"} />
+                <KV label="Forward PE" value={i.forwardPE != null ? `${i.forwardPE.toFixed(1)}x` : "—"} />
+                <KV label="Wayne PE" value={c.waynesPE != null ? `${c.waynesPE.toFixed(1)}x` : (c.evSalesUsed ? `${c.evSalesWayneMultiple.toFixed(1)}x EV/S` : "—")} />
+                <KV label="Fwd EPS" value={i.epsForward != null ? fmtPrice(i.epsForward, "") : "—"} />
+                <KV label="FCF (TTM)" value={i.freeCashFlow != null ? fmtMoney(i.freeCashFlow) : "—"} />
+                <KV label="Net Debt" value={fmtMoney(c.netDebt)} />
+                <KV label="Growth" value={`${(c.growth * 100).toFixed(1)}%`} />
+                <KV label="Discount r" value={`${(c.discountRate * 100).toFixed(1)}%`} />
+              </div>
+
+              {/* ELI level comparison for THIS underlying */}
+              <div className="mt-3 rounded-lg border border-[var(--line)] bg-[var(--surface-2)]/40 p-2 text-[11px]">
+                <div className="mb-1 text-[9.5px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+                  Tranche level checks
+                </div>
+                {(() => {
+                  const strike = a.price * tranche.strikePct;
+                  const eki = a.price * tranche.ekiPct;
+                  const wIV = c.waynesIntrinsicValue ?? c.waynesEvSalesIV;
+                  const wFV = c.waynesTarget;
+                  const koLikely = wFV != null && wFV > a.price;
+                  const ekiSafe = wIV != null && eki < wIV;
+                  return (
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-0.5">
+                      <div>Strike ({(tranche.strikePct * 100).toFixed(0)}%): <b>{fmtPrice(strike, stockCcy)}</b></div>
+                      <div>EKI ({(tranche.ekiPct * 100).toFixed(0)}%): <b>{fmtPrice(eki, stockCcy)}</b></div>
+                      <div>KO likely? <b className={koLikely ? "text-emerald-400" : "text-amber-400"}>{koLikely ? "✅ YES (Wayne FV > current)" : "⚠️ not from current levels"}</b></div>
+                      <div>EKI safe? <b className={ekiSafe ? "text-emerald-400" : "text-amber-400"}>{ekiSafe ? "✅ YES (barrier below Wayne IV)" : "⚠️ barrier above Wayne IV"}</b></div>
+                    </div>
+                  );
+                })()}
+              </div>
+            </div>
+          );
+        })}
+      </section>
+
+      {/* Compact summary table (unchanged, keeps the quick-glance view) */}
       <section className="mt-4 rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-4">
         <h2 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-          Per-underlying Wayne analysis
+          Compact summary
         </h2>
         <div className="overflow-x-auto">
           <table className="w-full text-[11.5px]">
@@ -1207,6 +1308,35 @@ function TrancheVerdict({ data, ccy }: { data: TrancheAnalysis; ccy: string }) {
         </div>
       </section>
     </section>
+  );
+}
+
+function MiniValue({ label, value, price, ccy, accent }: {
+  label: string; value: number | null; price: number; ccy: string; accent?: boolean;
+}) {
+  const upside = value && price ? ((value - price) / price) : null;
+  const hintColor = upside == null ? "" : upside > 0 ? "text-success" : "text-danger";
+  return (
+    <div className={`rounded-md border px-2 py-1.5 ${accent ? "border-indigo-500/40 bg-indigo-500/10" : "border-[var(--line)] bg-[var(--surface-2)]/50"}`}>
+      <div className="text-[9px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">{label}</div>
+      <div className={`tabular text-[14px] font-bold ${accent ? "text-indigo-400" : ""}`}>
+        {value != null ? fmtPrice(value, ccy) : "—"}
+      </div>
+      {upside != null && (
+        <div className={`text-[10px] font-semibold ${hintColor}`}>
+          {upside > 0 ? "+" : ""}{(upside * 100).toFixed(1)}%
+        </div>
+      )}
+    </div>
+  );
+}
+
+function KV({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-baseline justify-between gap-1 border-b border-dashed border-[var(--line)] py-0.5">
+      <span className="text-[var(--text-muted)]">{label}</span>
+      <span className="tabular font-semibold">{value}</span>
+    </div>
   );
 }
 

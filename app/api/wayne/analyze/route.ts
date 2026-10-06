@@ -41,9 +41,25 @@ const DEFAULT_GROWTH = 0.08;
 // $72x = 0.82). Rounded to 0.85 for a cleaner conservative haircut rule.
 const WAYNE_PE_HAIRCUT = 0.85;
 
-// Debt Gate — HARD FILTER (runs first, overrides everything)
-const NET_DEBT_TO_FCF_BAN = 3.0;    // Friday: Net Debt / FCF > 3x → BAN
-const NET_DEBT_TO_EQUITY_BAN = 3.0; // Friday: Net Debt / Equity > 300% → BAN
+// Debt Gate — graduated, calibrated against real-world names:
+//   • ORACLE  Net Debt $135B, FCF −$23B → HARD BAN
+//   • INTEL   Net Debt ~$30B, FCF cyclically near zero → bearable, PASS with caution
+//   • DELL    Net Debt ~$20B, FCF ~$8.5B (D/FCF 2.4x), negative equity → PASS
+//   • MRVL    Net cash → PASS
+//
+// Rules (any ONE triggers the ban):
+//   (a) D/FCF > 5x  (was 3x — too tight, banned DELL/INTEL unnecessarily)
+//   (b) D/E > 500% (was 300% — too tight for buyback-heavy balance sheets)
+//   (c) Negative FCF AND Net Debt > $50B  (Oracle catastrophic case only)
+//   (d) FCF loss > $15B/year AND Net Debt > $30B  (sustained cash burn)
+//
+// The hyper-growth exemption (revenueGrowth > 40%) overrides (c) and (d) —
+// CoreWeave type names where the burn is growth capex, not operating distress.
+const NET_DEBT_TO_FCF_BAN = 5.0;
+const NET_DEBT_TO_EQUITY_BAN = 5.0;
+const CATASTROPHIC_DEBT_USD = 50_000_000_000; // $50B
+const SUSTAINED_FCF_LOSS_USD = -15_000_000_000; // -$15B
+const SIZEABLE_DEBT_USD = 30_000_000_000; // $30B
 
 // ELI structure defaults (90/50 is typical for your tranches)
 const DEFAULT_STRIKE_PCT = 0.90;
@@ -205,22 +221,29 @@ export async function GET(req: NextRequest) {
     // No FCF data at all — can't evaluate this rule; don't ban on absence.
     debtToFCF = null;
   } else if (annualFCF <= 0) {
-    // Positive net debt + negative/zero FCF → normally fail immediately.
-    // BUT the hyper-growth exemption applies: a company growing revenue
-    // > 40% while burning cash is doing growth-capex (CoreWeave spinning
-    // up data centres), not failing — Oracle is NOT a hyper-grower, it's
-    // a mature firm burning cash. The exemption keeps the risk flagged
-    // but doesn't hard-ban such names.
+    // Negative/zero FCF with positive net debt: graduated response.
+    //   • Hyper-growth exemption (revGrowth > 40%): CoreWeave-style
+    //     growth-capex burn — warn but don't ban.
+    //   • Catastrophic case: Net Debt > $50B OR annual FCF loss < −$15B
+    //     with debt > $30B → BAN (Oracle fits here).
+    //   • Otherwise: INTEL-style cyclical dip → bearable WARNING, no ban.
     const hyperGrowth = (f.revenueGrowth ?? 0) > 0.40;
     debtToFCF = Number.POSITIVE_INFINITY;
+    const catastrophic =
+      netDebt > CATASTROPHIC_DEBT_USD ||
+      (annualFCF < SUSTAINED_FCF_LOSS_USD && netDebt > SIZEABLE_DEBT_USD);
+
     if (hyperGrowth) {
-      // Soft warning, no ban — add to warnings so it surfaces in the UI
       fcfGateReason = null;
       warnings.push(`Growth-stage exemption: FCF is negative (${(annualFCF / 1_000_000_000).toFixed(1)}B) but revenue growing ${((f.revenueGrowth ?? 0) * 100).toFixed(0)}% YoY — treated as growth capex, not operating distress. Still risky for ELI exposure.`);
-    } else {
+    } else if (catastrophic) {
       fcfGateReason = annualFCF < 0
-        ? `FCF is ${(annualFCF / 1_000_000_000).toFixed(1)}B (NEGATIVE) with ${(netDebt / 1_000_000_000).toFixed(1)}B of net debt — company burns cash while carrying debt.`
-        : `FCF is zero with ${(netDebt / 1_000_000_000).toFixed(1)}B of net debt — no cashflow to service it.`;
+        ? `Catastrophic: FCF ${(annualFCF / 1_000_000_000).toFixed(1)}B (NEGATIVE) with ${(netDebt / 1_000_000_000).toFixed(0)}B of net debt — company burns cash on a scale debt cannot absorb (Oracle class).`
+        : `Catastrophic: zero FCF with ${(netDebt / 1_000_000_000).toFixed(0)}B of net debt.`;
+    } else {
+      // Bearable — INTEL cyclical dip. Note but no ban.
+      fcfGateReason = null;
+      warnings.push(`FCF cyclically negative (${(annualFCF / 1_000_000_000).toFixed(1)}B) but net debt (${(netDebt / 1_000_000_000).toFixed(1)}B) is manageable — borderline, Wayne tolerates but keep an eye on it.`);
     }
   } else {
     debtToFCF = netDebt / annualFCF;

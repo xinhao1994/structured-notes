@@ -18,17 +18,34 @@ import type { Tranche } from "@/lib/types";
 import { BookmarkPlus, BellRing, AlertTriangle, Wallet, Check } from "lucide-react";
 
 export default function HomePage() {
-  // Don't parse anything during SSR (localStorage isn't there). We hydrate the
-  // parsed tranche on first client render so the latest paste survives
-  // navigating Desk → Pocket → Desk.
-  const [parsed, setParsed] = useState<ParseResult | null>(null);
+  // Lazy state initialiser — runs ONCE on first render per mount. Reading
+  // localStorage synchronously here (instead of in a useEffect) eliminates
+  // the brief flash of the previous tranche the user used to see on return
+  // from Pocket/other tabs, and guarantees the latest paste is what shows.
+  const [parsed, setParsed] = useState<ParseResult | null>(() => {
+    if (typeof window === "undefined") return null; // SSR
+    const t = getCurrentParsedText();
+    const text = t && t.trim() ? t : SAMPLE_TRANCHE_TEXT;
+    return parseTrancheText(text);
+  });
   const [saved, setSaved] = useState(false);
 
+  // Belt-and-braces: on mount AND whenever another tab updates the current
+  // parsed text (via `storage` event), re-sync so navigating Desk → Pocket →
+  // Desk never serves stale data.
   useEffect(() => {
-    const saved = getCurrentParsedText();
-    const text = saved && saved.trim() ? saved : SAMPLE_TRANCHE_TEXT;
-    setParsed(parseTrancheText(text));
-    if (!saved) setCurrentParsedText(text);   // remember the sample so the calc default is consistent
+    const refresh = () => {
+      const t = getCurrentParsedText();
+      const text = t && t.trim() ? t : SAMPLE_TRANCHE_TEXT;
+      setParsed(parseTrancheText(text));
+      if (!t) setCurrentParsedText(text);
+    };
+    refresh();
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === "snd.current.parsedText.v1") refresh();
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
   }, []);
 
   const parsedTranche = parsed?.tranche;
@@ -94,8 +111,13 @@ export default function HomePage() {
   }
 
   function handleSaveToPocket() {
-    if (!trancheWithFixing) return;
-    upsertTranche(trancheWithFixing);
+    // Save the best representation we have — don't silently fail just because
+    // the symbol resolver or price fetch is still pending. The user clicked
+    // save; honour their intent even if enrichment is incomplete.
+    const toSave =
+      trancheWithFixing || baseTranche || tranche || parsedTranche || null;
+    if (!toSave) return;
+    upsertTranche(toSave);
     setSaved(true);
     setTimeout(() => setSaved(false), 6000);
   }
