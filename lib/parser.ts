@@ -1186,10 +1186,17 @@ export function parseTrancheText(input: string): ParseResult {
   // Accept "KO" or "Autocall" as the knock-out/autocall field label.
   const koLine = parseField(text, /(?:KO|Autocall)\s*:?\s+([^\n]+)/i) || "";
   const koStartPct = pct(koLine.match(/([0-9.]+\s*%)/)?.[1]) ?? 1.0;
-  // Stepdown can be written as "stepdown 4%", "4% stepdown", "4% step down", "(3% step down)".
+  // Stepdown can appear in SEVERAL formats:
+  //   • Inline with KO: "KO: 100%, stepdown 3%"
+  //   • Inline reversed: "3% stepdown", "(3% step down)"
+  //   • On its OWN line: "Stepdown: 6%" or "Step down: 6%"
+  // We search the KO line first (preserves old behaviour), then fall back
+  // to a dedicated field label scan across the full text.
   const stepdownPct =
     pct(koLine.match(/step\s*down\s*:?\s+([0-9.]+\s*%)/i)?.[1]) ??
     pct(koLine.match(/([0-9.]+\s*%)\s+step\s*down/i)?.[1]) ??
+    pct(parseField(text, /step\s*down\s*:?\s+([0-9.]+\s*%)/i)) ??
+    pct(text.match(/([0-9.]+\s*%)\s+step\s*down/i)?.[1]) ??
     0;
 
   const koObsFreqMonths = 1;
