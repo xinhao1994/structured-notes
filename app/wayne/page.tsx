@@ -463,74 +463,37 @@ export default function WaynePage() {
         }
       `}</style>
 
-      {/* HERO */}
+      {/* HERO — minimal: just "Ask Wayne" title + ONE centred button */}
       <section className="relative mb-5 overflow-hidden rounded-2xl border border-[var(--line)] bg-gradient-to-br from-indigo-600/10 via-purple-600/5 to-sky-500/10 p-5 sm:p-7">
         <div className="pointer-events-none absolute inset-0 wayne-grid" />
-        <div className="relative">
-          <div className="mb-2 flex items-center gap-2">
-            <Brain size={26} className="brain-glow text-indigo-400" />
-            <h1 className="text-[22px] font-bold tracking-tight">Ask Wayne</h1>
-          </div>
-          <p className="max-w-xl text-[12.5px] leading-relaxed text-[var(--text-muted)]">
-            Two-stage DCF with CAPM-derived discount rate, blended with a forward-earnings multiple
-            and a 5% safety margin. Wayne skips over-leveraged names (D/E &gt; 1.0).
-            Pure Yahoo fundamentals, no analyst sell-side input.
-          </p>
-
-          <div className="mt-4 flex flex-wrap items-center gap-2">
-            <div className="flex items-center gap-1 rounded-lg border border-[var(--line)] bg-[var(--surface)] p-1">
-              {MARKETS.map((m) => (
-                <button
-                  key={m.code}
-                  onClick={() => setMarket(m.code)}
-                  className={`px-2.5 py-1 text-[11px] font-semibold rounded ${market === m.code ? "bg-indigo-600 text-white" : "text-[var(--text-muted)] hover:text-[var(--text)]"}`}
-                >{m.label}</button>
-              ))}
-            </div>
-            <div className="flex min-w-[200px] flex-1 items-center gap-2 rounded-lg border border-[var(--line)] bg-[var(--surface)] px-3 py-2">
-              <Search size={16} className="text-[var(--text-muted)]" />
-              <input
-                ref={inputRef}
-                value={symbol}
-                onChange={(e) => setSymbol(e.target.value)}
-                onKeyDown={onKey}
-                placeholder="e.g. MRVL, NVDA, 9988"
-                className="w-full bg-transparent text-[14px] font-semibold uppercase tracking-wide outline-none placeholder:text-[var(--text-muted)] placeholder:font-normal placeholder:normal-case"
-                autoComplete="off"
-                autoCapitalize="characters"
-              />
-            </div>
-            <button
-              onClick={ask}
-              disabled={analyzing || !symbol.trim()}
-              className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-[12.5px] font-semibold text-white shadow-lg shadow-indigo-500/30 transition hover:bg-indigo-500 disabled:opacity-50"
-            >
-              {analyzing ? <Loader2 size={15} className="animate-spin" /> : <Brain size={15} />}
-              See what Wayne's thinking
-            </button>
+        <div className="relative flex flex-col items-center text-center">
+          <div className="mb-5 flex items-center gap-2">
+            <Brain size={28} className="brain-glow text-indigo-400" />
+            <h1 className="text-[24px] font-bold tracking-tight">Ask Wayne</h1>
           </div>
 
-          {/* ─── ONE-CLICK tranche paste button (modelled on Desk's orb) ─ */}
-          <div className="mt-3 flex items-center gap-2">
+          {/* ONE-CLICK tranche paste button — centred, prominent, auto-detects
+              every market and ticker from the pasted text */}
+          <div className="flex w-full max-w-md flex-col items-center gap-2">
             <button
               onClick={trancheFromClipboard}
               disabled={trancheAnalyzing}
-              className="group flex flex-1 items-center justify-center gap-2.5 rounded-lg border border-indigo-500/40 bg-gradient-to-r from-indigo-600/20 via-purple-600/15 to-sky-500/20 px-4 py-2.5 text-[12.5px] font-semibold text-indigo-200 shadow-md shadow-indigo-500/20 transition hover:border-indigo-400/60 hover:from-indigo-600/30 hover:to-sky-500/30 disabled:opacity-50"
-              title="Reads the tranche from your clipboard and immediately runs Wayne's DCF on every underlying."
+              className="group flex w-full items-center justify-center gap-2.5 rounded-xl border border-indigo-500/50 bg-gradient-to-r from-indigo-600/25 via-purple-600/20 to-sky-500/25 px-5 py-3 text-[13.5px] font-semibold text-indigo-100 shadow-lg shadow-indigo-500/25 transition hover:border-indigo-400/70 hover:from-indigo-600/35 hover:to-sky-500/35 disabled:opacity-50"
+              title="Reads the tranche from your clipboard and runs Wayne's DCF on every underlying — auto-detects US / HK / SG / MY / JP / AU."
             >
               {trancheAnalyzing ? (
-                <Loader2 size={15} className="animate-spin" />
+                <Loader2 size={17} className="animate-spin" />
               ) : (
-                <ClipboardPaste size={15} className="transition group-hover:scale-110" />
+                <ClipboardPaste size={17} className="transition group-hover:scale-110" />
               )}
-              Or parse your tranche here — see what Wayne's thinking
+              Parse your tranche here — see what Wayne's thinking
             </button>
             <button
               onClick={() => setTrancheEditOpen((v) => !v)}
-              className="rounded-lg border border-[var(--line)] bg-[var(--surface)] px-3 py-2.5 text-[11px] font-semibold text-[var(--text-muted)] hover:text-[var(--text)]"
+              className="text-[10.5px] font-semibold text-[var(--text-muted)] underline-offset-2 hover:text-[var(--text)] hover:underline"
               title="Open manual editor as a fallback if clipboard access is blocked."
             >
-              Edit
+              Edit manually
             </button>
           </div>
 
@@ -638,33 +601,10 @@ export default function WaynePage() {
         </div>
       )}
 
-      {/* THEATRICAL CALCULATION STREAM */}
-      {analyzing && (
-        <section className="mb-5 slide-up rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-5">
-          <div className="mb-3 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-            <Loader2 size={13} className="animate-spin text-indigo-400" />
-            Running Wayne's model
-          </div>
-          <ol className="space-y-1.5 font-mono text-[11.5px]">
-            {STEPS.map((s, k) => (
-              <li
-                key={k}
-                className={`flex items-center gap-2 ${k <= stepIdx ? "text-[var(--text)]" : "text-[var(--text-muted)] opacity-40"}`}
-              >
-                <span className={`inline-block h-1.5 w-1.5 rounded-full ${k < stepIdx ? "bg-success" : k === stepIdx ? "bg-indigo-400 brain-glow" : "bg-[var(--line)]"}`} />
-                <span className="truncate">{s}</span>
-                {k < stepIdx && <CheckCircle2 size={11} className="ml-auto text-success" />}
-              </li>
-            ))}
-          </ol>
-          <div className="mt-3 overflow-hidden rounded bg-[var(--surface-2)]">
-            <div className="h-1 bg-indigo-500 line-grow" style={{ width: `${Math.max(0, (stepIdx + 1) / STEPS.length) * 100}%`, transition: "width 480ms ease-out" }} />
-          </div>
-        </section>
-      )}
-
-      {/* RESULTS */}
-      {result && !analyzing && c && i && a && (
+      {/* RESULTS (preserved for programmatic single-stock use; UI entry
+          point for individual lookups was removed per user request — the
+          tranche parser is now the sole entry point.) */}
+      {false && result && !analyzing && c && i && a && (
         <>
           {/* 1. DEBT GATE — runs first, visible first */}
           <DebtGate
@@ -959,9 +899,10 @@ export default function WaynePage() {
         </>
       )}
 
-      {!result && !analyzing && !error && (
+      {!trancheResult && !trancheAnalyzing && !trancheError && (
         <div className="rounded-2xl border border-dashed border-[var(--line)] bg-[var(--surface)]/40 p-6 text-center text-[12.5px] text-[var(--text-muted)]">
-          Enter a ticker above. Try <span className="font-mono font-semibold text-[var(--text)]">MRVL</span> — Marvell Tech, Wayne's recent 220-230 target.
+          Copy your tranche message (same format as the Desk tab) and tap the button above.
+          Wayne auto-detects every underlying, every market, and runs the full DCF.
         </div>
       )}
     </div>

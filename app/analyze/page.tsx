@@ -81,6 +81,11 @@ interface Profile {
   analystRec: { period: string | null; strongBuy: number; buy: number; hold: number; sell: number; strongSell: number } | null;
   nextEarnings: { date: string | null; epsEstimate: number | null; epsLow: number | null; epsHigh: number | null; revenueEstimate: number | null; revenueLow: number | null; revenueHigh: number | null } | null;
   upgrades: Array<{ firm: string | null; toGrade: string | null; fromGrade: string | null; action: string | null; date: string | null }>;
+  // Recent company news from Finnhub (last 7 days). Refreshed on every lookup
+  // so the Analyze tab always reflects the latest headlines, customer wins,
+  // competitor moves, product launches — not stale, cached text.
+  news?: Array<{ datetime: number; headline: string; source: string; summary?: string; url: string; image?: string; category?: string }>;
+  newsFetchedAt?: string;
 }
 
 // Next 14 requires useSearchParams() to be inside a Suspense boundary at
@@ -268,13 +273,16 @@ function AnalyzePageContent() {
           <AnalystRecCard data={data} />
           <NextEarningsCard data={data} />
           <UpgradesCard data={data} />
+          <RecentNewsCard data={data} />
           <ScenariosCard data={data} />
           <CompareCard a={data} b={compareData} loading={compareLoading} sectionRef={compareRef} />
         </>
       )}
 
       <p className="mt-3 text-[11px] text-[var(--text-muted)]">
-        Data from Yahoo Finance and Finnhub (fallback). Fundamentals refresh quarterly; price history is weekly over 5 years.
+        Data from Yahoo Finance and Finnhub (fallback). Fundamentals refresh on every lookup — beta,
+        forward PE, EPS, FCF, debt all live. Recent news pulls fresh headlines from the last 7 days
+        each time this tab opens. Price history is weekly over 5 years.
         The verdicts and scenarios are heuristics — review the wording before sending to a real client.
       </p>
     </>
@@ -908,6 +916,67 @@ function NextEarningsCard({ data }: { data: Profile }) {
         )}
         <Num label="Days to report" big={daysAway >= 0 ? `${daysAway} days` : "passed"} tone={daysAway >= 0 && daysAway <= 14 ? "pos" : "neutral"} />
       </div>
+    </section>
+  );
+}
+
+/* ───────────── RECENT COMPANY NEWS (last 7 days, Finnhub) ─────────────
+   Shows up-to-date headlines about the stock. Pulls fresh on every lookup
+   so the Analyze tab never feels static — reflects customer wins,
+   competitor moves, product launches, earnings commentary as they happen. */
+function RecentNewsCard({ data }: { data: Profile }) {
+  if (!data.news || data.news.length === 0) return null;
+  const fmtDate = (ts: number) => {
+    const d = new Date(ts * 1000);
+    const now = Date.now();
+    const diffH = (now - d.getTime()) / 3_600_000;
+    if (diffH < 1) return `${Math.round(diffH * 60)}m ago`;
+    if (diffH < 24) return `${Math.round(diffH)}h ago`;
+    return `${Math.round(diffH / 24)}d ago`;
+  };
+  return (
+    <section className="card mb-3 p-4">
+      <header className="mb-3 flex items-center justify-between">
+        <div>
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+            📰 Last 7 days
+          </div>
+          <h2 className="text-lg font-semibold">Recent news</h2>
+        </div>
+        {data.newsFetchedAt && (
+          <span className="text-[10px] text-[var(--text-muted)]">
+            Refreshed {new Date(data.newsFetchedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+          </span>
+        )}
+      </header>
+      <ul className="divide-y divide-[var(--line)]">
+        {data.news.slice(0, 8).map((n, i) => (
+          <li key={i} className="py-2">
+            <a href={n.url} target="_blank" rel="noopener noreferrer" className="group block">
+              <div className="flex items-baseline justify-between gap-3">
+                <span className="text-[12.5px] font-semibold leading-snug text-[var(--text)] group-hover:text-accent">
+                  {n.headline}
+                </span>
+                <span className="shrink-0 text-[10px] tabular text-[var(--text-muted)]">
+                  {fmtDate(n.datetime)}
+                </span>
+              </div>
+              <div className="mt-0.5 flex items-center gap-2 text-[10.5px] text-[var(--text-muted)]">
+                <span className="truncate">{n.source}</span>
+                {n.category && <span>· {n.category}</span>}
+              </div>
+              {n.summary && (
+                <p className="mt-1 line-clamp-2 text-[11px] leading-snug text-[var(--text-muted)]">
+                  {n.summary}
+                </p>
+              )}
+            </a>
+          </li>
+        ))}
+      </ul>
+      <p className="mt-3 text-[10px] text-[var(--text-muted)]">
+        Pulled live from Finnhub each time you open this page — never cached. Click any headline to open the full article.
+      </p>
     </section>
   );
 }

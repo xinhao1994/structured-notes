@@ -375,6 +375,41 @@ export async function GET(req: NextRequest) {
     }, { status: 502 });
   }
 
+  // Step 3b: company news (last 7 days from Finnhub) — gives the Analyze
+  // tab a continuously fresh view of what the market is saying about this
+  // name, which stops the page from feeling "static". Runs in parallel so
+  // it doesn't slow down the main response; errors are swallowed silently.
+  let recentNews: Array<{ datetime: number; headline: string; source: string; summary?: string; url: string; image?: string; category?: string }> = [];
+  try {
+    const now = new Date();
+    const from = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const fmt = (d: Date) => d.toISOString().slice(0, 10);
+    const newsSym = (resolvedSym || candidates[0] || "").replace(/\..*$/, "");
+    if (newsSym && FINNHUB_KEY()) {
+      const raw = await finnhubGet<Array<any>>("/company-news", {
+        symbol: newsSym, from: fmt(from), to: fmt(now),
+      });
+      if (Array.isArray(raw)) {
+        // Dedupe by headline, take latest 10
+        const seen = new Set<string>();
+        recentNews = raw
+          .filter((n) => n && n.headline && n.url)
+          .sort((a, b) => (b.datetime ?? 0) - (a.datetime ?? 0))
+          .filter((n) => { const k = String(n.headline).toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; })
+          .slice(0, 10)
+          .map((n) => ({
+            datetime: Number(n.datetime) || 0,
+            headline: String(n.headline),
+            source: String(n.source || "Finnhub"),
+            summary: n.summary ? String(n.summary).slice(0, 400) : undefined,
+            url: String(n.url),
+            image: n.image ? String(n.image) : undefined,
+            category: n.category ? String(n.category) : undefined,
+          }));
+      }
+    }
+  } catch { /* news is best-effort */ }
+
   // Step 4: price history
   let priceHistory: { t: number; c: number }[] = [];
   let perf30d: number | null = null;
@@ -564,6 +599,8 @@ export async function GET(req: NextRequest) {
       analystRec,
       nextEarnings,
       upgrades,
+      news: recentNews,
+      newsFetchedAt: new Date().toISOString(),
     }),
     {
       status: 200,
