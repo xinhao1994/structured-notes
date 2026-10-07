@@ -668,11 +668,6 @@ export default function WaynePage() {
                   );
                 })}
               </div>
-              <p className="mt-3 text-[10px] text-[var(--text-muted)]">
-                Every tranche parsed on SN Desk — by you, Mei, or anyone else — contributes to this
-                list. The more a stock appears, the higher it ranks. All fundamentals pulled fresh
-                from Yahoo on demand so Wayne's model always uses the latest beta, PE, EPS, FCF.
-              </p>
             </section>
           )}
         </>
