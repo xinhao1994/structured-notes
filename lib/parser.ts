@@ -471,8 +471,8 @@ const NAME_TO_TICKER: Record<string, Listing> = {
   "nomura holdings": { JP: "8604", default: "JP" },
   "daiwa": { JP: "8601", default: "JP" },
   "daiwa securities": { JP: "8601", default: "JP" },
-  "kioxia": { JP: "6600", default: "JP" },
-  "kioxia holdings": { JP: "6600", default: "JP" },
+  "kioxia": { JP: "285A", default: "JP" },
+  "kioxia holdings": { JP: "285A", default: "JP" },
 
   // ─── Australia ──────────────────────────────────────────────────────────
   bhp: { AU: "BHP", default: "AU" },
