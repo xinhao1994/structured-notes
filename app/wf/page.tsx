@@ -12,7 +12,7 @@
 // walk through it on an iPhone and export the summary panel as a PNG to
 // WhatsApp directly to the client.
 
-import { useRef, useState } from "react";
+import { Fragment, forwardRef, useRef, useState } from "react";
 import {
   Banknote, Download, Share2, Plus, Trash2, Users, AlertTriangle,
   TrendingUp, Wallet, PiggyBank, FileSpreadsheet, Zap,
@@ -86,18 +86,26 @@ function allInRate(ccy: string, tenor: "1" | "3" | "6" | "12"): number {
   return cof / 100 + COF_SPREAD;
 }
 
-/* Colours for the chart segments */
+/* Colour palette — each investment class owns ONE colour. WF-financed
+   lines share the same colour as their base counterpart so the client
+   immediately sees "this unit-trust row is unit-trust money". The palette
+   is deliberately soft and print-friendly. */
 const COLORS = {
-  fd:    "#60a5fa", // blue-400
-  ut:    "#a78bfa", // purple-400
-  bond:  "#34d399", // emerald-400
-  si:    "#f59e0b", // amber-500
-  "ut-wf":   "#c084fc",
-  "bond-wf": "#6ee7b7",
-  "si-wf":   "#fbbf24",
-  before: "#64748b",
-  after:  "#6366f1",
-  uplift: "#10b981",
+  fd:        "#3B82F6", // blue   — Savings & FD
+  ut:        "#8B5CF6", // violet — Unit Trust (base + WF)
+  bond:      "#10B981", // emerald — Retail Bond (base + WF)
+  si:        "#F59E0B", // amber  — Structured Investment (base + WF)
+  "ut-wf":   "#8B5CF6",
+  "bond-wf": "#10B981",
+  "si-wf":   "#F59E0B",
+  before:    "#64748B", // slate — Before series
+  after:     "#6366F1", // indigo — After series
+  uplift:    "#10B981", // emerald uplift
+  wfTint:    "#EEF2FF", // subtle wash for WF-added rows in slides
+};
+const COLOR_LABEL: Record<string, string> = {
+  fd: "Savings & FD", ut: "Unit Trust", bond: "Retail Bond", si: "Structured Investment",
+  "ut-wf": "Unit Trust (WF)", "bond-wf": "Retail Bond (WF)", "si-wf": "Structured Investment (WF)",
 };
 
 export default function WFPage() {
@@ -174,25 +182,25 @@ export default function WFPage() {
   };
   const removeWf = (id: string) => setWfs((prev) => prev.filter((r) => r.id !== id));
 
-  // ─── Export (PNG) ───────────────────────────────────────────────────
-  const summaryRef = useRef<HTMLDivElement>(null);
-  const beforeRef  = useRef<HTMLDivElement>(null);
-  const afterRef   = useRef<HTMLDivElement>(null);
+  // ─── Export (PNG) — captures the dedicated hidden slide templates,
+  // NOT the live form. Slides are formatted as proper client-facing
+  // presentation pages with branding, colour-coded sections and charts.
+  const beforeSlideRef  = useRef<HTMLDivElement>(null);
+  const afterSlideRef   = useRef<HTMLDivElement>(null);
+  const summarySlideRef = useRef<HTMLDivElement>(null);
   const [exporting, setExporting] = useState<"none" | "summary" | "before" | "after">("none");
 
   async function exportPng(which: "summary" | "before" | "after") {
-    const el = which === "summary" ? summaryRef.current : which === "before" ? beforeRef.current : afterRef.current;
+    const el = which === "summary" ? summarySlideRef.current
+             : which === "before" ? beforeSlideRef.current
+             : afterSlideRef.current;
     if (!el) return;
     setExporting(which);
     try {
-      // Pick a solid background that always renders — getComputedStyle on a
-      // CSS variable is unreliable across browsers. Match the user's theme.
-      const isDark = document.documentElement.classList.contains("dark")
-        || !document.documentElement.classList.contains("light");
-      const bg = isDark ? "#0d111c" : "#ffffff";
+      // Slides have their own white background baked in — no theme guesswork.
       const dataUrl = await htmlToImage.toPng(el, {
         pixelRatio: 2,
-        backgroundColor: bg,
+        backgroundColor: "#ffffff",
         cacheBust: true,
       });
       const label = clientName ? clientName.replace(/[^A-Za-z0-9_-]/g, "_") : "WF";
@@ -234,20 +242,62 @@ export default function WFPage() {
       <style>{`
         .wf-input {
           width: 100%; min-width: 0;
-          padding: 6px 8px;
-          border-radius: 6px;
+          padding: 9px 11px;
+          border-radius: 8px;
           background: var(--surface-2);
-          border: 1px solid var(--line);
-          font-size: 13px;
+          border: 1.5px solid var(--line);
+          font-size: 15px;
+          font-weight: 600;
+          color: var(--text);
           font-variant-numeric: tabular-nums;
         }
-        .wf-input:focus { outline: 2px solid rgb(99 102 241 / .4); outline-offset: -1px; }
-        .wf-input-sm { font-size: 12px; padding: 4px 6px; }
+        .wf-input:focus { outline: 2px solid rgb(99 102 241 / .5); outline-offset: -1px; border-color: rgb(99 102 241 / .5); }
+        .wf-input::placeholder { color: var(--text-muted); font-weight: 400; }
+        .wf-input-sm { font-size: 14px; padding: 7px 9px; }
+        .wf-input-label {
+          font-size: 11px; font-weight: 600; text-transform: uppercase;
+          letter-spacing: 0.05em; color: var(--text-muted);
+        }
         .wf-card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px; }
         .wf-metric { font-variant-numeric: tabular-nums; }
+        .wf-chip { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 999px; letter-spacing: 0.02em; }
         @keyframes wf-rise { from { opacity:0; transform: translateY(8px); } to { opacity:1; transform: translateY(0); } }
         .wf-rise { animation: wf-rise .4s ease-out both; }
       `}</style>
+
+      {/* ─── HIDDEN PRESENTATION SLIDES (off-screen render targets) ───
+          These exist only to be captured by html-to-image. They look
+          like proper single-page client slides — not a screenshot of
+          the form. White backgrounds, big typography, colour-coded. */}
+      <div style={{ position: "fixed", top: 0, left: "-9999px", opacity: 1, pointerEvents: "none" }}>
+        <BeforeSlide
+          ref={beforeSlideRef}
+          clientName={clientName}
+          proposalDate={proposalDate}
+          base={base}
+          totals={{ invest: beforeTotalInvest, collat: totalCollateral, monthly: baseMonthly, annual: base12M, roc: baseReturnOnCapital }}
+        />
+        <AfterSlide
+          ref={afterSlideRef}
+          clientName={clientName}
+          proposalDate={proposalDate}
+          base={base}
+          wfs={wfs}
+          wfTotalAmount={wfTotalAmount}
+          wfMonthlyNet={wfMonthlyNet}
+          totals={{ invest: afterTotalInvest, monthly: afterMonthly, annual: after12M, roc: returnOnCapital, baseMonthly }}
+        />
+        <SummarySlide
+          ref={summarySlideRef}
+          clientName={clientName}
+          proposalDate={proposalDate}
+          base={base}
+          wfs={wfs}
+          before={{ invest: beforeTotalInvest, monthly: baseMonthly, m6: base6M, annual: base12M, roc: baseReturnOnCapital }}
+          after={{ invest: afterTotalInvest, monthly: afterMonthly, m6: after6M, annual: after12M, roc: returnOnCapital }}
+          uplift={{ monthly: monthlyUplift, pct: upliftPct }}
+        />
+      </div>
 
       {/* HERO */}
       <section className="mb-4 rounded-2xl border border-[var(--line)] bg-gradient-to-br from-emerald-500/10 via-sky-500/5 to-indigo-500/10 p-4">
@@ -285,7 +335,7 @@ export default function WFPage() {
       </section>
 
       {/* ─── BEFORE WF ─── */}
-      <section ref={beforeRef} className="wf-card mb-4">
+      <section className="wf-card mb-4">
         <div className="mb-3 flex items-center justify-between">
           <div>
             <div className="text-[10.5px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
@@ -300,20 +350,25 @@ export default function WFPage() {
           {base.map((r, i) => {
             const monthly = (r.investment * r.returnPa) / 12;
             const collat = r.investment * r.ar;
+            const colour = COLORS[r.type];
             return (
-              <div key={r.type} className="rounded-lg border border-[var(--line)] bg-[var(--surface-2)]/40 p-2.5">
-                <div className="mb-1.5 flex items-center justify-between gap-2">
-                  <span className="flex items-center gap-1.5 text-[12.5px] font-semibold">
-                    <span className="h-2 w-2 rounded-full" style={{ background: COLORS[r.type] }} />
+              <div
+                key={r.type}
+                className="rounded-lg border border-[var(--line)] bg-[var(--surface-2)]/40 p-3"
+                style={{ borderLeft: `4px solid ${colour}` }}
+              >
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <span className="flex items-center gap-2 text-[14px] font-bold" style={{ color: colour }}>
+                    <span className="h-3 w-3 rounded-full" style={{ background: colour }} />
                     {r.label}
                   </span>
-                  <span className="rounded bg-[var(--surface)] px-1.5 py-0.5 text-[9.5px] font-mono text-[var(--text-muted)]">
+                  <span className="wf-chip text-white" style={{ background: colour }}>
                     AR {pct(r.ar, 0)}
                   </span>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   <label className="block">
-                    <span className="text-[9.5px] uppercase tracking-wider text-[var(--text-muted)]">Investment (RM)</span>
+                    <span className="wf-input-label">Investment (RM)</span>
                     <input
                       className="wf-input wf-input-sm mt-0.5"
                       type="number" inputMode="decimal" min={0}
@@ -326,10 +381,10 @@ export default function WFPage() {
                     />
                   </label>
                   <label className="block">
-                    <span className="text-[9.5px] uppercase tracking-wider text-[var(--text-muted)]">Return p.a.</span>
+                    <span className="wf-input-label">Return p.a.</span>
                     <div className="relative">
                       <input
-                        className="wf-input wf-input-sm mt-0.5 pr-6"
+                        className="wf-input wf-input-sm mt-0.5 pr-7"
                         type="text" inputMode="decimal"
                         value={baseReturnDrafts[i] ?? (r.returnPa * 100).toString()}
                         onChange={(e) => {
@@ -342,19 +397,14 @@ export default function WFPage() {
                         }}
                         onBlur={() => setBaseReturnDrafts((d) => { const { [i]: _, ...rest } = d; return rest; })}
                       />
-                      <span className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 text-[10px] text-[var(--text-muted)]">%</span>
+                      <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[12px] font-semibold text-[var(--text-muted)]">%</span>
                     </div>
                   </label>
                 </div>
-                <div className="mt-2 flex flex-wrap items-center justify-between gap-1 text-[10.5px]">
-                  <span className="text-[var(--text-muted)]">Collateral</span>
-                  <span className="wf-metric font-semibold">{fmt0(collat)}</span>
-                  <span className="text-[var(--text-muted)]">·</span>
-                  <span className="text-[var(--text-muted)]">Monthly</span>
-                  <span className="wf-metric font-semibold text-emerald-400">{fmt0(monthly)}</span>
-                  <span className="text-[var(--text-muted)]">·</span>
-                  <span className="text-[var(--text-muted)]">12M</span>
-                  <span className="wf-metric font-semibold text-emerald-400">{fmt0(monthly * 12)}</span>
+                <div className="mt-2.5 grid grid-cols-3 gap-2 rounded-md bg-[var(--surface)] p-2 text-[11px]">
+                  <MiniStat label="Collateral" value={fmt0(collat)} />
+                  <MiniStat label="Monthly" value={fmt0(monthly)} tone="green" />
+                  <MiniStat label="12 months" value={fmt0(monthly * 12)} tone="green" />
                 </div>
               </div>
             );
@@ -398,13 +448,13 @@ export default function WFPage() {
       </section>
 
       {/* ─── AFTER WF ─── */}
-      <section ref={afterRef} className="wf-card mb-4">
+      <section className="wf-card mb-4">
         <div className="mb-3 flex items-center justify-between">
           <div>
             <div className="text-[10.5px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
               B · After wealth financing
             </div>
-            <h2 className="text-[15px] font-bold">With WF drawdowns reinvested</h2>
+            <h2 className="text-[15px] font-bold">With WF drawdowns</h2>
           </div>
           <Zap size={18} className="text-indigo-400" />
         </div>
@@ -415,18 +465,24 @@ export default function WFPage() {
           monthly <b className="text-emerald-400">{fmt0(baseMonthly)}</b>.
         </div>
 
-        {/* WF additions */}
+        {/* WF additions — same colour as their base counterpart */}
         <div className="space-y-2">
           {wfs.map((r) => {
             const monthlyGross = (r.wfAmount * r.returnPa) / 12;
             const rate = allInRate(r.currency, r.tenor);
             const monthlyCost = (r.wfAmount * rate) / 12;
             const monthlyNet = monthlyGross - monthlyCost;
+            const colour = COLORS[r.type];
             return (
-              <div key={r.id} className="rounded-lg border border-indigo-500/30 bg-indigo-500/5 p-2.5 wf-rise">
-                <div className="mb-1.5 flex items-center justify-between gap-2">
+              <div
+                key={r.id}
+                className="rounded-lg border border-[var(--line)] p-3 wf-rise"
+                style={{ borderLeft: `4px solid ${colour}`, background: `${colour}0D` }}
+              >
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <span className="wf-chip text-white" style={{ background: colour }}>+ WF</span>
                   <select
-                    className="wf-input wf-input-sm max-w-[180px]"
+                    className="wf-input wf-input-sm flex-1 max-w-[220px]"
                     value={r.type}
                     onChange={(e) => {
                       const preset = WF_PRESETS.find((p) => p.type === e.target.value);
@@ -440,12 +496,12 @@ export default function WFPage() {
                     className="rounded-md p-1.5 text-[var(--text-muted)] hover:bg-[var(--surface-2)] hover:text-danger"
                     title="Remove"
                   >
-                    <Trash2 size={13} />
+                    <Trash2 size={14} />
                   </button>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   <label className="block">
-                    <span className="text-[9.5px] uppercase tracking-wider text-[var(--text-muted)]">WF amount (RM-eq.)</span>
+                    <span className="wf-input-label">WF amount (RM-eq.)</span>
                     <input
                       className="wf-input wf-input-sm mt-0.5"
                       type="number" inputMode="decimal" min={0}
@@ -458,10 +514,10 @@ export default function WFPage() {
                     />
                   </label>
                   <label className="block">
-                    <span className="text-[9.5px] uppercase tracking-wider text-[var(--text-muted)]">Return p.a.</span>
+                    <span className="wf-input-label">Return p.a.</span>
                     <div className="relative">
                       <input
-                        className="wf-input wf-input-sm mt-0.5 pr-6"
+                        className="wf-input wf-input-sm mt-0.5 pr-7"
                         type="text" inputMode="decimal"
                         value={wfReturnDrafts[r.id] ?? (r.returnPa * 100).toString()}
                         onChange={(e) => {
@@ -474,11 +530,11 @@ export default function WFPage() {
                         }}
                         onBlur={() => setWfReturnDrafts((d) => { const { [r.id]: _, ...rest } = d; return rest; })}
                       />
-                      <span className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 text-[10px] text-[var(--text-muted)]">%</span>
+                      <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[12px] font-semibold text-[var(--text-muted)]">%</span>
                     </div>
                   </label>
                   <label className="block">
-                    <span className="text-[9.5px] uppercase tracking-wider text-[var(--text-muted)]">Drawdown currency</span>
+                    <span className="wf-input-label">Drawdown currency</span>
                     <select
                       className="wf-input wf-input-sm mt-0.5"
                       value={r.currency}
@@ -488,7 +544,7 @@ export default function WFPage() {
                     </select>
                   </label>
                   <label className="block">
-                    <span className="text-[9.5px] uppercase tracking-wider text-[var(--text-muted)]">Tenor</span>
+                    <span className="wf-input-label">Tenor</span>
                     <select
                       className="wf-input wf-input-sm mt-0.5"
                       value={r.tenor}
@@ -501,21 +557,23 @@ export default function WFPage() {
                     </select>
                   </label>
                 </div>
-                <div className="mt-2 rounded bg-[var(--surface)] p-2 text-[10.5px]">
+                <div className="mt-2.5 rounded-md border border-[var(--line)] bg-[var(--surface)] p-2.5 text-[12px]">
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-[var(--text-muted)]">All-in cost ({r.currency} {r.tenor}M)</span>
-                    <span className="wf-metric font-semibold">{pct(rate)}</span>
+                    <span className="wf-metric font-bold">{pct(rate)}</span>
+                  </div>
+                  <div className="mt-1 flex items-center justify-between gap-2">
+                    <span className="text-[var(--text-muted)]">Gross / mo</span>
+                    <span className="wf-metric font-semibold">{fmt0(monthlyGross)}</span>
                   </div>
                   <div className="mt-0.5 flex items-center justify-between gap-2">
-                    <span className="text-[var(--text-muted)]">Gross / mo · Cost / mo</span>
-                    <span className="wf-metric">
-                      {fmt0(monthlyGross)} <span className="text-[var(--text-muted)]">·</span> <span className="text-danger">−{fmt0(monthlyCost)}</span>
-                    </span>
+                    <span className="text-[var(--text-muted)]">Cost / mo</span>
+                    <span className="wf-metric font-semibold text-danger">−{fmt0(monthlyCost)}</span>
                   </div>
-                  <div className="mt-0.5 flex items-center justify-between gap-2 border-t border-dashed border-[var(--line)] pt-1">
-                    <span className="font-semibold">Net monthly</span>
-                    <span className={`wf-metric font-bold ${monthlyNet >= 0 ? "text-emerald-400" : "text-danger"}`}>
-                      {fmt0(monthlyNet)}
+                  <div className="mt-1 flex items-center justify-between gap-2 border-t border-dashed border-[var(--line)] pt-1.5">
+                    <span className="text-[12.5px] font-bold">Net monthly</span>
+                    <span className={`wf-metric text-[15px] font-extrabold ${monthlyNet >= 0 ? "text-emerald-400" : "text-danger"}`}>
+                      {monthlyNet >= 0 ? "+" : ""}{fmt0(monthlyNet)}
                     </span>
                   </div>
                 </div>
@@ -577,7 +635,7 @@ export default function WFPage() {
       </section>
 
       {/* ─── SUMMARY + CHARTS ─── */}
-      <section ref={summaryRef} className="wf-card mb-4">
+      <section className="wf-card mb-4">
         <div className="mb-3 flex items-center justify-between">
           <div>
             <div className="text-[10.5px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
@@ -754,6 +812,373 @@ function SummaryKV({ label, before, after, asPct }: {
           +RM {fmt0(diff)}
         </div>
       )}
+    </div>
+  );
+}
+
+function MiniStat({ label, value, tone }: { label: string; value: string; tone?: "green" | "red" | "default" }) {
+  const colour = tone === "green" ? "text-emerald-400" : tone === "red" ? "text-danger" : "text-[var(--text)]";
+  return (
+    <div className="text-center">
+      <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">{label}</div>
+      <div className={`mt-0.5 text-[14px] font-bold tabular ${colour}`}>{value}</div>
+    </div>
+  );
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   PRESENTATION SLIDES — rendered off-screen, captured by html-to-image
+   Each is a self-contained portrait page meant to look like a polished
+   client deliverable. White background, large type, colour-coded.
+   ──────────────────────────────────────────────────────────────────── */
+
+const SLIDE_W = 540; // px — portrait phone-friendly
+const slideWrap: React.CSSProperties = {
+  width: SLIDE_W,
+  background: "#ffffff",
+  color: "#0f172a",
+  fontFamily: "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
+  padding: 28,
+  boxSizing: "border-box",
+};
+const slideHeader = (clientName: string, proposalDate: string, kicker: string) => (
+  <div style={{ borderBottom: "3px solid #0f172a", paddingBottom: 10, marginBottom: 18 }}>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ width: 28, height: 28, borderRadius: 7, background: "linear-gradient(135deg, #10b981, #6366f1)" }} />
+        <div>
+          <div style={{ fontSize: 15, fontWeight: 800, letterSpacing: 0.4 }}>SN Desk</div>
+          <div style={{ fontSize: 10, color: "#64748b", textTransform: "uppercase", letterSpacing: 1 }}>Wealth Financing</div>
+        </div>
+      </div>
+      <div style={{ textAlign: "right" }}>
+        <div style={{ fontSize: 11, color: "#64748b" }}>{proposalDate}</div>
+        <div style={{ fontSize: 13, fontWeight: 700 }}>{clientName || "Client"}</div>
+      </div>
+    </div>
+    <div style={{ marginTop: 10, fontSize: 10, fontWeight: 700, color: "#6366f1", letterSpacing: 2, textTransform: "uppercase" }}>
+      {kicker}
+    </div>
+  </div>
+);
+const slideFooter = (
+  <div style={{ marginTop: 18, paddingTop: 10, borderTop: "1px solid #e2e8f0", fontSize: 9, color: "#94a3b8", lineHeight: 1.5 }}>
+    IMPORTANT: Returns are illustrative, not guaranteed. Actual financing availability,
+    collateral recognition, FX impact and prevailing rates remain subject to bank approval
+    and documentation. COF rate card as of {COF_AS_OF}; all-in = COF + 1% spread.
+  </div>
+);
+
+interface BaseRowProp { type: BaseType; label: string; investment: number; returnPa: number; ar: number; }
+interface TotalsProp { invest: number; collat?: number; monthly: number; annual: number; roc: number; baseMonthly?: number; }
+
+const BeforeSlide = forwardRef<HTMLDivElement, { clientName: string; proposalDate: string; base: BaseRowProp[]; totals: TotalsProp }>(
+  ({ clientName, proposalDate, base, totals }, ref) => (
+    <div ref={ref} style={slideWrap}>
+      {slideHeader(clientName, proposalDate, "A · Current Portfolio")}
+      <div style={{ fontSize: 20, fontWeight: 800, marginBottom: 4 }}>Before Wealth Financing</div>
+      <div style={{ fontSize: 12, color: "#64748b", marginBottom: 16 }}>
+        Snapshot of today's holdings and the income they generate on their own.
+      </div>
+
+      {base.map((r) => {
+        const monthly = (r.investment * r.returnPa) / 12;
+        const collat = r.investment * r.ar;
+        const colour = COLORS[r.type];
+        return (
+          <div key={r.type} style={{
+            borderLeft: `5px solid ${colour}`,
+            background: `${colour}0F`,
+            padding: "10px 12px",
+            borderRadius: 8,
+            marginBottom: 8,
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+              <div style={{ fontSize: 13, fontWeight: 800, color: colour }}>{r.label}</div>
+              <div style={{ fontSize: 10, fontWeight: 700, background: colour, color: "#fff", padding: "2px 7px", borderRadius: 999 }}>
+                AR {pct(r.ar, 0)}
+              </div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8, fontSize: 11 }}>
+              <SlideKV label="Invested" value={`RM ${fmt0(r.investment)}`} />
+              <SlideKV label="Return" value={pct(r.returnPa)} />
+              <SlideKV label="Monthly" value={`RM ${fmt0(monthly)}`} accent={colour} />
+              <SlideKV label="Collateral" value={`RM ${fmt0(collat)}`} />
+            </div>
+          </div>
+        );
+      })}
+
+      <div style={{ marginTop: 16, padding: 14, background: "#f8fafc", borderRadius: 10, border: "1px solid #e2e8f0" }}>
+        <div style={{ fontSize: 10, color: "#64748b", textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>Portfolio totals</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+          <SlideBigStat label="Total invested" value={`RM ${fmt0(totals.invest)}`} />
+          <SlideBigStat label="Recognised collateral" value={`RM ${fmt0(totals.collat ?? 0)}`} />
+          <SlideBigStat label="Monthly income" value={`RM ${fmt0(totals.monthly)}`} tone="#10b981" />
+          <SlideBigStat label="12-month income" value={`RM ${fmt0(totals.annual)}`} tone="#10b981" />
+        </div>
+        <div style={{ marginTop: 10, textAlign: "center", fontSize: 11, color: "#334155" }}>
+          Return on capital <b style={{ color: "#10b981", fontSize: 13 }}>{pct(totals.roc)}</b> p.a.
+        </div>
+      </div>
+      {slideFooter}
+    </div>
+  ));
+BeforeSlide.displayName = "BeforeSlide";
+
+const AfterSlide = forwardRef<HTMLDivElement, { clientName: string; proposalDate: string; base: BaseRowProp[]; wfs: WfRow[]; wfTotalAmount: number; wfMonthlyNet: number; totals: TotalsProp }>(
+  ({ clientName, proposalDate, base, wfs, wfTotalAmount, wfMonthlyNet, totals }, ref) => (
+    <div ref={ref} style={slideWrap}>
+      {slideHeader(clientName, proposalDate, "B · With Wealth Financing")}
+      <div style={{ fontSize: 20, fontWeight: 800, marginBottom: 4 }}>With WF Drawdowns</div>
+      <div style={{ fontSize: 12, color: "#64748b", marginBottom: 16 }}>
+        Existing portfolio stays; collateral unlocks additional investment capacity.
+      </div>
+
+      {/* Base compact strip */}
+      <div style={{
+        padding: 10, borderRadius: 8, border: "1px dashed #cbd5e1", background: "#f8fafc", marginBottom: 10,
+      }}>
+        <div style={{ fontSize: 10, color: "#64748b", textTransform: "uppercase", letterSpacing: 1 }}>Base portfolio (unchanged)</div>
+        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4, fontSize: 12 }}>
+          <span>Invested: <b>RM {fmt0(totals.invest - wfTotalAmount)}</b></span>
+          <span>Monthly: <b style={{ color: "#10b981" }}>RM {fmt0(totals.baseMonthly ?? 0)}</b></span>
+        </div>
+      </div>
+
+      {/* WF rows */}
+      {wfs.length === 0 ? (
+        <div style={{ padding: 14, textAlign: "center", border: "1px dashed #e2e8f0", borderRadius: 8, color: "#94a3b8", fontSize: 12 }}>
+          No WF drawdowns yet.
+        </div>
+      ) : wfs.map((r) => {
+        const monthlyGross = (r.wfAmount * r.returnPa) / 12;
+        const rate = allInRate(r.currency, r.tenor);
+        const monthlyCost = (r.wfAmount * rate) / 12;
+        const monthlyNet = monthlyGross - monthlyCost;
+        const colour = COLORS[r.type];
+        return (
+          <div key={r.id} style={{
+            borderLeft: `5px solid ${colour}`,
+            background: `${colour}14`,
+            padding: "10px 12px",
+            borderRadius: 8,
+            marginBottom: 8,
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+              <div style={{ fontSize: 13, fontWeight: 800, color: colour }}>
+                + {r.label}
+              </div>
+              <div style={{ fontSize: 10, fontWeight: 700, background: colour, color: "#fff", padding: "2px 7px", borderRadius: 999 }}>
+                {r.currency} · {r.tenor}M
+              </div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, fontSize: 11 }}>
+              <SlideKV label="WF amount" value={`RM ${fmt0(r.wfAmount)}`} />
+              <SlideKV label="Return" value={pct(r.returnPa)} />
+              <SlideKV label="All-in cost" value={pct(rate)} tone="#ef4444" />
+            </div>
+            <div style={{
+              marginTop: 8, padding: 8, background: "#fff", borderRadius: 6,
+              display: "flex", justifyContent: "space-between", alignItems: "baseline",
+              border: `1px solid ${colour}40`,
+            }}>
+              <span style={{ fontSize: 11, color: "#64748b" }}>Net monthly income</span>
+              <span style={{ fontSize: 16, fontWeight: 800, color: monthlyNet >= 0 ? "#10b981" : "#ef4444" }}>
+                {monthlyNet >= 0 ? "+" : ""}RM {fmt0(monthlyNet)}
+              </span>
+            </div>
+          </div>
+        );
+      })}
+
+      <div style={{ marginTop: 16, padding: 14, background: "#eef2ff", borderRadius: 10, border: "1px solid #c7d2fe" }}>
+        <div style={{ fontSize: 10, color: "#4f46e5", textTransform: "uppercase", letterSpacing: 1, marginBottom: 6, fontWeight: 700 }}>After WF totals</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+          <SlideBigStat label="Total invested" value={`RM ${fmt0(totals.invest)}`} />
+          <SlideBigStat label="WF drawdown" value={`RM ${fmt0(wfTotalAmount)}`} tone="#6366f1" />
+          <SlideBigStat label="Monthly income" value={`RM ${fmt0(totals.monthly)}`} tone="#10b981" />
+          <SlideBigStat label="12-month income" value={`RM ${fmt0(totals.annual)}`} tone="#10b981" />
+        </div>
+        <div style={{ marginTop: 10, textAlign: "center", fontSize: 11, color: "#334155" }}>
+          Return on capital <b style={{ color: "#6366f1", fontSize: 13 }}>{pct(totals.roc)}</b> p.a. — uplift from WF: <b style={{ color: "#10b981" }}>RM {fmt0(wfMonthlyNet)}/mo</b>
+        </div>
+      </div>
+      {slideFooter}
+    </div>
+  ));
+AfterSlide.displayName = "AfterSlide";
+
+const SummarySlide = forwardRef<HTMLDivElement, {
+  clientName: string; proposalDate: string;
+  base: BaseRowProp[]; wfs: WfRow[];
+  before: { invest: number; monthly: number; m6: number; annual: number; roc: number };
+  after:  { invest: number; monthly: number; m6: number; annual: number; roc: number };
+  uplift: { monthly: number; pct: number };
+}>(
+  ({ clientName, proposalDate, base, wfs, before, after, uplift }, ref) => {
+    // Bar chart scale (horizontal bars)
+    const maxVal = Math.max(before.annual, after.annual, 1);
+    const scaleW = (v: number) => (v / maxVal) * 100;
+    return (
+      <div ref={ref} style={{ ...slideWrap, width: 560 }}>
+        {slideHeader(clientName, proposalDate, "C · Wealth Financing Proposal")}
+        <div style={{ fontSize: 22, fontWeight: 800, marginBottom: 4 }}>Before vs After</div>
+        <div style={{ fontSize: 12, color: "#64748b", marginBottom: 14 }}>
+          Projected income uplift from pledging the portfolio as collateral to invest further.
+        </div>
+
+        {/* Big uplift */}
+        <div style={{
+          padding: 18, borderRadius: 12, textAlign: "center",
+          background: "linear-gradient(135deg, #ecfdf5, #eef2ff)",
+          border: "1px solid #d1fae5", marginBottom: 16,
+        }}>
+          <div style={{ fontSize: 10, color: "#64748b", textTransform: "uppercase", letterSpacing: 1.5 }}>Monthly income uplift</div>
+          <div style={{ marginTop: 6, display: "flex", alignItems: "baseline", justifyContent: "center", gap: 8 }}>
+            <span style={{ fontSize: 36, fontWeight: 900, color: "#10b981" }}>
+              +RM {fmt0(uplift.monthly)}
+            </span>
+            <span style={{ fontSize: 16, fontWeight: 800, color: "#10b981" }}>
+              ({uplift.monthly >= 0 ? "+" : ""}{pct(uplift.pct)})
+            </span>
+          </div>
+          <div style={{ marginTop: 6, fontSize: 12, color: "#334155" }}>
+            RM {fmt0(before.monthly)} / month → RM {fmt0(after.monthly)} / month
+          </div>
+        </div>
+
+        {/* Horizontal bar comparison */}
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 10, color: "#64748b", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8, fontWeight: 700 }}>Income comparison</div>
+          {[
+            { label: "Monthly", before: before.monthly, after: after.monthly },
+            { label: "6 months", before: before.m6,     after: after.m6     },
+            { label: "12 months", before: before.annual, after: after.annual },
+          ].map((row) => (
+            <div key={row.label} style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#334155", marginBottom: 4 }}>{row.label}</div>
+              <SlideBar label="Before" value={row.before} widthPct={scaleW(row.before)} colour="#64748b" />
+              <SlideBar label="After"  value={row.after}  widthPct={scaleW(row.after)}  colour="#6366f1" />
+            </div>
+          ))}
+        </div>
+
+        {/* Numeric comparison table */}
+        <div style={{ padding: 14, background: "#f8fafc", borderRadius: 10, border: "1px solid #e2e8f0", marginBottom: 14 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr 1fr 1fr", gap: 6, fontSize: 11 }}>
+            <div style={{ fontWeight: 800 }}>Metric</div>
+            <div style={{ fontWeight: 800, textAlign: "right", color: "#64748b" }}>Before</div>
+            <div style={{ fontWeight: 800, textAlign: "right", color: "#6366f1" }}>After</div>
+            <div style={{ fontWeight: 800, textAlign: "right", color: "#10b981" }}>Uplift</div>
+
+            {[
+              { k: "Total invested",  b: before.invest,  a: after.invest },
+              { k: "Monthly income",  b: before.monthly, a: after.monthly },
+              { k: "6M income",       b: before.m6,      a: after.m6 },
+              { k: "12M income",      b: before.annual,  a: after.annual },
+            ].map((row) => (
+              <Fragment key={row.k}>
+                <div style={{ fontWeight: 600, color: "#334155" }}>{row.k}</div>
+                <div style={{ textAlign: "right", color: "#64748b", fontWeight: 600 }}>RM {fmt0(row.b)}</div>
+                <div style={{ textAlign: "right", color: "#1e293b", fontWeight: 700 }}>RM {fmt0(row.a)}</div>
+                <div style={{ textAlign: "right", color: row.a - row.b > 0 ? "#10b981" : "#94a3b8", fontWeight: 700 }}>
+                  {row.a - row.b > 0 ? "+" : ""}RM {fmt0(row.a - row.b)}
+                </div>
+              </Fragment>
+            ))}
+            <div style={{ fontWeight: 600, color: "#334155", borderTop: "1px solid #e2e8f0", paddingTop: 4 }}>Return on capital</div>
+            <div style={{ textAlign: "right", color: "#64748b", fontWeight: 600, borderTop: "1px solid #e2e8f0", paddingTop: 4 }}>{pct(before.roc)}</div>
+            <div style={{ textAlign: "right", color: "#6366f1", fontWeight: 800, borderTop: "1px solid #e2e8f0", paddingTop: 4 }}>{pct(after.roc)}</div>
+            <div style={{ textAlign: "right", color: "#10b981", fontWeight: 700, borderTop: "1px solid #e2e8f0", paddingTop: 4 }}>
+              +{pct(after.roc - before.roc)}
+            </div>
+          </div>
+        </div>
+
+        {/* Portfolio composition — stacked bars */}
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 10, color: "#64748b", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8, fontWeight: 700 }}>Portfolio composition</div>
+          <SlideStackBar
+            label="Before"
+            total={before.invest}
+            segs={base.filter((r) => r.investment > 0).map((r) => ({ value: r.investment, colour: COLORS[r.type], label: r.label }))}
+          />
+          <SlideStackBar
+            label="After"
+            total={after.invest}
+            segs={[
+              ...base.filter((r) => r.investment > 0).map((r) => ({ value: r.investment, colour: COLORS[r.type], label: r.label })),
+              ...wfs.filter((r) => r.wfAmount > 0).map((r) => ({ value: r.wfAmount, colour: COLORS[r.type], label: COLOR_LABEL[r.type] })),
+            ]}
+          />
+        </div>
+
+        {/* Legend */}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, fontSize: 10, color: "#334155" }}>
+          {Object.entries(COLOR_LABEL).slice(0, 4).map(([k, l]) => (
+            <div key={k} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              <span style={{ width: 10, height: 10, borderRadius: 2, background: COLORS[k as keyof typeof COLORS] }} />
+              {l}
+            </div>
+          ))}
+        </div>
+
+        {slideFooter}
+      </div>
+    );
+  });
+SummarySlide.displayName = "SummarySlide";
+
+function SlideKV({ label, value, accent, tone }: { label: string; value: string; accent?: string; tone?: string }) {
+  return (
+    <div>
+      <div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: 0.8, color: "#94a3b8", fontWeight: 700 }}>{label}</div>
+      <div style={{ fontSize: 12, fontWeight: 800, color: tone || accent || "#1e293b", fontVariantNumeric: "tabular-nums" }}>{value}</div>
+    </div>
+  );
+}
+function SlideBigStat({ label, value, tone }: { label: string; value: string; tone?: string }) {
+  return (
+    <div>
+      <div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: 1, color: "#64748b", fontWeight: 700 }}>{label}</div>
+      <div style={{ fontSize: 16, fontWeight: 800, color: tone || "#0f172a", fontVariantNumeric: "tabular-nums" }}>{value}</div>
+    </div>
+  );
+}
+function SlideBar({ label, value, widthPct, colour }: { label: string; value: number; widthPct: number; colour: string }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 3 }}>
+      <div style={{ width: 48, fontSize: 10, color: "#64748b", fontWeight: 700 }}>{label}</div>
+      <div style={{ flex: 1, position: "relative", height: 20, background: "#f1f5f9", borderRadius: 4, overflow: "hidden" }}>
+        <div style={{ width: `${Math.max(1, widthPct)}%`, height: "100%", background: colour, borderRadius: 4, transition: "width .3s" }} />
+      </div>
+      <div style={{ width: 100, fontSize: 11, textAlign: "right", color: "#0f172a", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>
+        RM {fmt0(value)}
+      </div>
+    </div>
+  );
+}
+function SlideStackBar({ label, total, segs }: { label: string; total: number; segs: Array<{ value: number; colour: string; label: string }> }) {
+  if (total === 0) return null;
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "#64748b", fontWeight: 700, marginBottom: 3 }}>
+        <span>{label}</span>
+        <span style={{ fontVariantNumeric: "tabular-nums", color: "#0f172a" }}>RM {fmt0(total)}</span>
+      </div>
+      <div style={{ display: "flex", height: 24, borderRadius: 6, overflow: "hidden", border: "1px solid #e2e8f0" }}>
+        {segs.map((s, i) => (
+          <div
+            key={i}
+            title={`${s.label} RM ${fmt0(s.value)}`}
+            style={{
+              width: `${(s.value / total) * 100}%`,
+              background: s.colour, borderRight: i < segs.length - 1 ? "1px solid #ffffff80" : "none",
+            }}
+          />
+        ))}
+      </div>
     </div>
   );
 }
