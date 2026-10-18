@@ -46,6 +46,13 @@ const MARGIN_WARN_THRESHOLD = 0.80; // warn at > 80% collateral utilisation
 const STAMP_DUTY_RATE = 0.005;      // 0.5% of credit-limit facility
 const DEFAULT_CREDIT_LIMIT = 0;     // RM — client sets based on bank sanction
 
+/* Bank-wide concentration limit: Structured Investment holdings (base SI
+   plus every SI-WF drawdown converted to MYR) cannot exceed 30% of the
+   client's total portfolio value (base + WF). Enforced at the Add-WF
+   button for SI, and surfaced as an on-screen breach otherwise.         */
+const SI_CONCENTRATION_LIMIT = 0.30;
+const SI_CONCENTRATION_WARN  = 0.25; // amber band — approaching the cap
+
 /* ────────────────────────────────────────────────────────────────────
    FX SPOT — live, refreshed from /api/fx-spot (Yahoo Finance pairs
    {CCY}MYR=X cached 5 min server-side). Hardcoded FALLBACK is only used
@@ -109,7 +116,7 @@ const WF_BENEFITS: string[] = [
   "Interest is deducted from gross income before you take profit, so you always see the real net number.",
   "Draw down flexibly in the currency that best matches your target investment or payout.",
   "Interest paid may qualify for tax deductibility — speak to your tax adviser for specifics.",
-  "The facility is revolving — repay and re-use any time within the sanctioned limit.",
+  "The facility is revolving — repay and re-use any time within the agreed limit.",
   "Lock in short-tenor cost of funds (1 / 3 / 6 / 12 months) to match your view on rate direction.",
   "If markets correct, your existing investments continue to pay income and recover over time.",
   "Diversifying across currencies with cheaper funding (e.g. CHF, JPY) can lift net yield meaningfully.",
@@ -310,7 +317,7 @@ export default function WFPage() {
   // ─── Validation + margin call ─────────────────────────────────────
   // Two hard limits — EITHER triggers a breach:
   //   (a) Drawdown > effective collateral       (margin / LTV breach)
-  //   (b) Drawdown > sanctioned credit limit    (over-facility breach)
+  //   (b) Drawdown > credit facility taken up    (over-facility breach)
   // Utilisation shown as % of effective collateral (the margin-desk view).
   const underMin             = beforeTotalInvest > 0 && beforeTotalInvest < MIN_PORTFOLIO;
   const utilisation          = effectiveCollateral > 0 ? wfTotalAmountMYR / effectiveCollateral : 0;
@@ -320,6 +327,22 @@ export default function WFPage() {
   const nearMarginCall       = !marginBreached && utilisation > MARGIN_WARN_THRESHOLD;
   const availableCollateral  = Math.max(0, effectiveCollateral - wfTotalAmountMYR);
   const facilityUtilPct      = creditLimit > 0 ? wfTotalAmountMYR / creditLimit : 0;
+
+  // ─── Structured-Investment concentration cap (bank rule: ≤ 30%) ─────
+  // Total SI = base SI holding + every SI-WF drawdown (MYR-equivalent).
+  // Measured against the client's total portfolio (base + WF).
+  const baseSI               = base.find((r) => r.type === "si")?.investment ?? 0;
+  const wfSITotalMYR         = wfRowCalcs.filter((c) => c.row.type === "si-wf").reduce((s, c) => s + c.wfAmountMYR, 0);
+  const totalSIMYR           = baseSI + wfSITotalMYR;
+  const siConcentration      = afterTotalInvest > 0 ? totalSIMYR / afterTotalInvest : 0;
+  const siBreach             = siConcentration > SI_CONCENTRATION_LIMIT;
+  const siNearCap            = !siBreach && siConcentration > SI_CONCENTRATION_WARN;
+  // Headroom in MYR for ADDITIONAL SI exposure. Solve for X:
+  //   (totalSI + X) / (afterTotalInvest + X) <= 0.30
+  //   totalSI + X <= 0.30·(afterTotalInvest + X)
+  //   X·(1 − 0.30) <= 0.30·afterTotalInvest − totalSI
+  //   X <= (0.30·afterTotalInvest − totalSI) / 0.70
+  const siCapacityRemaining  = Math.max(0, (SI_CONCENTRATION_LIMIT * afterTotalInvest - totalSIMYR) / (1 - SI_CONCENTRATION_LIMIT));
 
   // ─── Chart data ─────────────────────────────────────────────────────
   const comparisonBarData = [
@@ -471,6 +494,7 @@ export default function WFPage() {
           wfs={wfs}
           fxSpot={fxSpot}
           facility={{ creditLimit, stampDuty, maxDrawable, drawn: wfTotalAmountMYR }}
+          concentration={{ si: siConcentration, cap: SI_CONCENTRATION_LIMIT, breached: siBreach }}
           benefits={benefits}
           before={{ invest: beforeTotalInvest, monthly: baseMonthly, m6: base6M, annual: base12M, roc: baseReturnOnCapital }}
           after={{ invest: afterTotalInvest, monthly: afterMonthly, m6: after6M, annual: after12M, roc: returnOnCapital }}
@@ -510,7 +534,7 @@ export default function WFPage() {
           </div>
           <div className="col-span-2">
             <label className="wf-input-label">
-              💳 Credit limit sanctioned by bank (RM)
+              💳 Credit facility client takes up (RM)
             </label>
             <input
               className="wf-input mt-1"
@@ -523,7 +547,7 @@ export default function WFPage() {
               }}
             />
             <p className="mt-1 text-[10.5px] text-[var(--text-muted)]">
-              Facility size approved. Can exceed portfolio value — client only draws up to the collateral available.
+              Facility size the client signs up for. Can exceed portfolio value — client only draws up to the collateral available.
             </p>
           </div>
         </div>
@@ -821,13 +845,18 @@ export default function WFPage() {
         {/* Add WF button(s) */}
         <div className="mt-3 flex flex-wrap gap-1.5">
           {WF_PRESETS.map((p) => {
-            const blocked = underMin || marginBreached;
+            const isSi = p.type === "si-wf";
+            // SI gets an extra concentration gate on top of the shared ones
+            const siAtCap = isSi && siConcentration >= SI_CONCENTRATION_LIMIT;
+            const blocked = underMin || marginBreached || siAtCap;
             const tip = underMin
               ? "Portfolio under RM 1M — WF not available"
               : overCollateral
               ? "Margin breached — reduce an existing WF line first"
               : overCreditLimit
-              ? "Over sanctioned credit limit — raise facility or reduce drawdowns"
+              ? "Over the facility amount — raise the limit or reduce drawdowns"
+              : siAtCap
+              ? `Structured Investment at ${(siConcentration * 100).toFixed(1)}% of portfolio — cap is ${(SI_CONCENTRATION_LIMIT * 100).toFixed(0)}%. Pick Unit Trust or Retail Bond instead.`
               : `Add ${p.label}`;
             return (
               <button
@@ -867,6 +896,9 @@ export default function WFPage() {
                 {pct(facilityUtilPct)} of RM {fmt0(creditLimit)}
               </b></span>
             )}
+            <span>· SI concentration: <b className={`${siBreach ? "text-danger" : siNearCap ? "text-warning" : "text-[var(--text)]"}`}>
+              {pct(siConcentration)} <span className="opacity-70">/ cap {pct(SI_CONCENTRATION_LIMIT, 0)}</span>
+            </b></span>
           </div>
           {/* Utilisation bar */}
           <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-[var(--surface)]">
@@ -898,9 +930,33 @@ export default function WFPage() {
           <div className="mt-3 flex items-start gap-2 rounded-lg border border-danger/40 bg-danger/10 p-2.5 text-[11.5px] text-danger wf-rise">
             <AlertTriangle size={14} className="mt-0.5 shrink-0" />
             <div>
-              <b>Over sanctioned facility.</b><br />
-              Drawdown (RM {fmt0(wfTotalAmountMYR)}) exceeds the credit limit set at the top (RM {fmt0(creditLimit)}).
-              Either reduce drawdowns by RM {fmt0(wfTotalAmountMYR - creditLimit)}, or request a facility increase from the bank.
+              <b>Over the facility amount.</b><br />
+              Drawdown (RM {fmt0(wfTotalAmountMYR)}) exceeds the credit facility set at the top (RM {fmt0(creditLimit)}).
+              Either reduce drawdowns by RM {fmt0(wfTotalAmountMYR - creditLimit)}, or ask the client to take up a larger facility.
+            </div>
+          </div>
+        )}
+
+        {/* STRUCTURED INVESTMENT CONCENTRATION BREACH */}
+        {siBreach && (
+          <div className="mt-3 flex items-start gap-2 rounded-lg border border-danger/40 bg-danger/10 p-2.5 text-[11.5px] text-danger wf-rise">
+            <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+            <div>
+              <b>Structured Investment concentration breached.</b><br />
+              Total SI exposure is RM {fmt0(totalSIMYR)} ({pct(siConcentration)} of portfolio) — bank cap is {pct(SI_CONCENTRATION_LIMIT, 0)}.
+              Reduce base SI or SI-WF holdings by at least RM {fmt0(totalSIMYR - SI_CONCENTRATION_LIMIT * afterTotalInvest)} to clear.
+              Pivot further drawdowns into Unit Trust or Retail Bond.
+            </div>
+          </div>
+        )}
+
+        {/* NEAR SI CAP — amber heads-up */}
+        {siNearCap && (
+          <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-2.5 text-[11.5px] text-amber-200 wf-rise">
+            <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+            <div>
+              <b>SI concentration {pct(siConcentration)} — approaching the {pct(SI_CONCENTRATION_LIMIT, 0)} cap.</b><br />
+              Remaining room for additional SI exposure: RM {fmt0(siCapacityRemaining)}.
             </div>
           </div>
         )}
@@ -1390,12 +1446,13 @@ const SummarySlide = forwardRef<HTMLDivElement, {
   clientName: string; proposalDate: string;
   base: BaseRowProp[]; wfs: WfRow[]; fxSpot: Record<string, number>;
   facility: { creditLimit: number; stampDuty: number; maxDrawable: number; drawn: number };
+  concentration: { si: number; cap: number; breached: boolean };
   benefits: string[];
   before: { invest: number; monthly: number; m6: number; annual: number; roc: number };
   after:  { invest: number; monthly: number; m6: number; annual: number; roc: number };
   uplift: { monthly: number; pct: number };
 }>(
-  ({ clientName, proposalDate, base, wfs, fxSpot, facility, benefits, before, after, uplift }, ref) => {
+  ({ clientName, proposalDate, base, wfs, fxSpot, facility, concentration, benefits, before, after, uplift }, ref) => {
     // Bar chart scale (horizontal bars)
     const maxVal = Math.max(before.annual, after.annual, 1);
     const scaleW = (v: number) => (v / maxVal) * 100;
@@ -1498,13 +1555,32 @@ const SummarySlide = forwardRef<HTMLDivElement, {
         </div>
 
         {/* Legend */}
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, fontSize: 10, color: "#334155", marginBottom: 14 }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, fontSize: 10, color: "#334155", marginBottom: 8 }}>
           {Object.entries(COLOR_LABEL).slice(0, 4).map(([k, l]) => (
             <div key={k} style={{ display: "flex", alignItems: "center", gap: 4 }}>
               <span style={{ width: 10, height: 10, borderRadius: 2, background: COLORS[k as keyof typeof COLORS] }} />
               {l}
             </div>
           ))}
+        </div>
+
+        {/* Structured-Investment concentration compliance strip */}
+        <div style={{
+          padding: "8px 10px", borderRadius: 8, marginBottom: 14,
+          background: concentration.breached ? "#fef2f2" : concentration.si > 0.25 ? "#fffbeb" : "#f8fafc",
+          border: `1px solid ${concentration.breached ? "#fecaca" : concentration.si > 0.25 ? "#fde68a" : "#e2e8f0"}`,
+          display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 10.5,
+        }}>
+          <span style={{ color: "#334155", fontWeight: 700 }}>
+            Structured Investment concentration
+          </span>
+          <span style={{
+            fontWeight: 800, fontVariantNumeric: "tabular-nums",
+            color: concentration.breached ? "#b91c1c" : concentration.si > 0.25 ? "#b45309" : "#0f172a",
+          }}>
+            {(concentration.si * 100).toFixed(1)}%  /  cap {(concentration.cap * 100).toFixed(0)}%
+            {" "}{concentration.breached ? "⚠ BREACHED" : concentration.si > 0.25 ? "⚠ NEAR CAP" : "✓ WITHIN LIMIT"}
+          </span>
         </div>
 
         {/* FACILITY PANEL — credit limit, stamp duty, drawn, headroom */}
