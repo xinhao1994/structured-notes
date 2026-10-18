@@ -43,6 +43,8 @@ const COF_SPREAD = 0.01; // 1% p.a. bank spread → all-in = COF/100 + 1%
 const COF_AS_OF = "16 Oct 2026";
 const MIN_PORTFOLIO = 1_000_000; // RM — minimum to qualify for WF
 const MARGIN_WARN_THRESHOLD = 0.80; // warn at > 80% collateral utilisation
+const STAMP_DUTY_RATE = 0.005;      // 0.5% of credit-limit facility
+const DEFAULT_CREDIT_LIMIT = 0;     // RM — client sets based on bank sanction
 
 /* ────────────────────────────────────────────────────────────────────
    FX SPOT — live, refreshed from /api/fx-spot (Yahoo Finance pairs
@@ -80,11 +82,77 @@ interface WfRow {
   returnPa: number;
   currency: string;   // key into COF_TABLE
   tenor: "1" | "3" | "6" | "12";
+  ar: number;         // AR of the newly-purchased asset — mirrors the base
+                      // bucket (UT 60%, Bond 75%, SI 0%). Each WF line that
+                      // buys collateral-eligible paper CASCADES extra
+                      // recognised collateral into the pool, lowering the
+                      // margin utilisation.
 }
-const WF_PRESETS: Array<{ type: WfType; label: string; returnPa: number }> = [
-  { type: "ut-wf",   label: "Unit Trust (WF)",            returnPa: 0.06 },
-  { type: "bond-wf", label: "Retail Bond (WF)",           returnPa: 0.05 },
-  { type: "si-wf",   label: "Structured Investment (WF)", returnPa: 0.08 },
+const WF_PRESETS: Array<{ type: WfType; label: string; returnPa: number; ar: number }> = [
+  { type: "ut-wf",   label: "Unit Trust (WF)",            returnPa: 0.06, ar: 0.60 },
+  { type: "bond-wf", label: "Retail Bond (WF)",           returnPa: 0.05, ar: 0.75 },
+  { type: "si-wf",   label: "Structured Investment (WF)", returnPa: 0.08, ar: 0.00 },
+];
+
+/* ────────────────────────────────────────────────────────────────────
+   WEALTH-FINANCING BENEFITS LIBRARY — 50+ layman-friendly talking
+   points. 5 are randomly shown on each Summary slide so the client
+   message stays fresh across proposals.
+   ──────────────────────────────────────────────────────────────────── */
+const WF_BENEFITS: string[] = [
+  "Keep your existing portfolio intact — no need to sell down investments to free up capital.",
+  "Use the bank's money at low cost to work alongside your own, amplifying your monthly cash flow.",
+  "Your assets stay invested and continue to grow while they double as collateral.",
+  "Diversify into multiple currencies and asset classes without touching a single existing holding.",
+  "A low-cost loan secured by your own portfolio typically costs far less than other personal credit.",
+  "Pay interest only on what you actually draw down — no penalty on the unused facility headroom.",
+  "Interest is deducted from gross income before you take profit, so you always see the real net number.",
+  "Draw down flexibly in the currency that best matches your target investment or payout.",
+  "Interest paid may qualify for tax deductibility — speak to your tax adviser for specifics.",
+  "The facility is revolving — repay and re-use any time within the sanctioned limit.",
+  "Lock in short-tenor cost of funds (1 / 3 / 6 / 12 months) to match your view on rate direction.",
+  "If markets correct, your existing investments continue to pay income and recover over time.",
+  "Diversifying across currencies with cheaper funding (e.g. CHF, JPY) can lift net yield meaningfully.",
+  "Unlike selling to reinvest, there's no capital-gains event triggered by using the WF facility.",
+  "Monthly cash flow uplift can fund lifestyle, premiums, education or further compounding.",
+  "You retain full ownership of every underlying holding — the bank only takes a pledge.",
+  "The structure is designed for the long-term wealth builder, not short-term speculation.",
+  "Access to institutional-grade cost of funds that retail borrowers simply don't get.",
+  "Rebalance your portfolio tactically without liquidating what's already working.",
+  "Hedge your foreign-currency liabilities (overseas property, children's tuition) by matching currency drawdown.",
+  "The additional investment, once pledged, adds back to your collateral pool — compounding capacity.",
+  "Simple, transparent cost structure: Cost of Funds plus a fixed spread. No hidden charges.",
+  "Match the drawdown tenor to your investment horizon — short-dated for structured notes, longer for bonds.",
+  "Stamp duty of just 0.5% is a one-off cost; the recurring benefit lasts the life of each investment.",
+  "Protect your emergency liquidity — borrow against your portfolio instead of breaking fixed deposits.",
+  "Treat your portfolio like a productive balance sheet, not just a passive savings account.",
+  "The bank's conservative lending ratios keep you comfortably within prudent risk limits.",
+  "You decide which assets to pledge — tailored to your personal comfort level.",
+  "Scale up or down anytime: top up a drawdown as new assets are added, pay down when markets rally.",
+  "Reduce your overall portfolio volatility by diversifying funding sources, not just investments.",
+  "Interest costs are usually lower than the yield on the reinvested asset — producing positive carry.",
+  "Avoid the opportunity cost of leaving idle cash in low-yield current accounts.",
+  "Build a layered income stream: base portfolio income + WF-amplified income + residual gains.",
+  "Fits naturally with multi-generational wealth plans — the facility passes with the pledged assets.",
+  "No tedious paperwork each time you re-draw — the facility is set up once and used as needed.",
+  "The 1% all-in spread is fixed; you benefit directly if interest rates fall at renewal.",
+  "Currency choice gives you a built-in natural hedge for your personal and family cash flows.",
+  "Enhanced returns don't require higher-risk investments — just smarter capital structuring.",
+  "The margin desk monitors your utilisation daily so you're alerted long before any issue arises.",
+  "A healthy headroom above 20% of collateral keeps you safe from short-term valuation dips.",
+  "Allocated to higher-yielding structured notes or bonds, WF can lift portfolio IRR 100-300 bps.",
+  "Interest cost is paid in the drawdown currency — simple matching when you also receive income there.",
+  "Keeps retirement planning on track by boosting income without eating into capital.",
+  "A proven solution used by high-net-worth clients globally — not an exotic experiment.",
+  "Transparent reporting: your monthly statement shows exactly how much is drawn, cost, and net.",
+  "You can request a currency switch at rollover if your view changes mid-facility.",
+  "Keep your cash buffer intact for lifestyle needs while still participating in market upside.",
+  "The uplift in return on client capital typically ranges 150-350 bps — meaningful on million-ringgit portfolios.",
+  "Simple, bankable, and reversible — if you want out, pay down and the pledge is released.",
+  "Positions you to deploy capital opportunistically when markets dip — without needing fresh cash.",
+  "Converts a static balance sheet into a working one — your assets work twice as hard.",
+  "Hedge FX risk and generate yield in a single transaction by borrowing in a lower-rate currency.",
+  "Access to institutional funding without going through a wholesale banking relationship.",
 ];
 
 /* Helpers */
@@ -125,6 +193,28 @@ export default function WFPage() {
   const [base, setBase] = useState<BaseRow[]>(BASE_DEFAULTS);
   const [wfs, setWfs] = useState<WfRow[]>([]);
   const [proposalDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [creditLimit, setCreditLimit] = useState<number>(DEFAULT_CREDIT_LIMIT);
+  // Deterministic 5-point shuffle. Re-rolled whenever the user hits a
+  // "regenerate talking points" button so each proposal reads differently.
+  const [benefitsSeed, setBenefitsSeed] = useState<number>(() => Date.now());
+  const pickBenefits = (seed: number, n = 5): string[] => {
+    // Simple deterministic PRNG over the library so slides are stable
+    // while the component re-renders — only changes when `seed` changes.
+    const picked = new Set<number>();
+    const out: string[] = [];
+    let x = seed % 2147483647;
+    if (x <= 0) x += 2147483646;
+    while (out.length < n && picked.size < WF_BENEFITS.length) {
+      x = (x * 48271) % 2147483647;
+      const idx = x % WF_BENEFITS.length;
+      if (!picked.has(idx)) {
+        picked.add(idx);
+        out.push(WF_BENEFITS[idx]);
+      }
+    }
+    return out;
+  };
+  const benefits = pickBenefits(benefitsSeed);
   // Raw string state for the return-% inputs so typing "7.5" or "0.25" feels
   // natural (the auto-formatter was overwriting mid-typing). We sync to the
   // numeric model on blur / commit.
@@ -177,20 +267,26 @@ export default function WFPage() {
     const costCCY  = (r.wfAmount * rate) / 12;
     const netCCY   = grossCCY - costCCY;
     const fx       = fxOf(r.currency);
+    const amountMYR = r.wfAmount * fx;
     return {
       row: r, rate, fx,
       wfAmountCCY: r.wfAmount,
-      wfAmountMYR: r.wfAmount * fx,
+      wfAmountMYR: amountMYR,
       grossCCY, grossMYR: grossCCY * fx,
       costCCY,  costMYR:  costCCY  * fx,
       netCCY,   netMYR:   netCCY   * fx,
+      // Cascaded collateral — the asset bought with WF money is itself
+      // eligible for AR recognition, so it recycles into the pool.
+      collateralMYR: amountMYR * r.ar,
     };
   });
 
-  const wfTotalAmountMYR  = wfRowCalcs.reduce((s, c) => s + c.wfAmountMYR, 0);
-  const wfMonthlyGrossMYR = wfRowCalcs.reduce((s, c) => s + c.grossMYR, 0);
-  const wfMonthlyCostMYR  = wfRowCalcs.reduce((s, c) => s + c.costMYR, 0);
-  const wfMonthlyNetMYR   = wfRowCalcs.reduce((s, c) => s + c.netMYR, 0);
+  const wfTotalAmountMYR     = wfRowCalcs.reduce((s, c) => s + c.wfAmountMYR, 0);
+  const wfMonthlyGrossMYR    = wfRowCalcs.reduce((s, c) => s + c.grossMYR, 0);
+  const wfMonthlyCostMYR     = wfRowCalcs.reduce((s, c) => s + c.costMYR, 0);
+  const wfMonthlyNetMYR      = wfRowCalcs.reduce((s, c) => s + c.netMYR, 0);
+  const wfExtraCollateralMYR = wfRowCalcs.reduce((s, c) => s + c.collateralMYR, 0);
+  const effectiveCollateral  = totalCollateral + wfExtraCollateralMYR;
 
   const afterTotalInvest = beforeTotalInvest + wfTotalAmountMYR;
   const afterMonthly     = baseMonthly + wfMonthlyNetMYR;
@@ -202,12 +298,28 @@ export default function WFPage() {
   const returnOnCapital = beforeTotalInvest > 0 ? after12M / beforeTotalInvest : 0;
   const baseReturnOnCapital = beforeTotalInvest > 0 ? base12M / beforeTotalInvest : 0;
 
+  // ─── Facility, stamp duty, max drawable ─────────────────────────────
+  // Credit limit is the SANCTIONED facility — the bank may grant more
+  // than 100% of pledgeable collateral. Stamp duty is a one-off charge
+  // on the FULL limit (0.5%), paid regardless of how much is actually
+  // drawn down. Max drawable = min(credit limit, effective collateral).
+  const stampDuty    = creditLimit * STAMP_DUTY_RATE;
+  const maxDrawable  = Math.min(creditLimit || 0, effectiveCollateral);
+  const facilityUnused = Math.max(0, (creditLimit || 0) - wfTotalAmountMYR);
+
   // ─── Validation + margin call ─────────────────────────────────────
-  const underMin           = beforeTotalInvest > 0 && beforeTotalInvest < MIN_PORTFOLIO;
-  const utilisation        = totalCollateral > 0 ? wfTotalAmountMYR / totalCollateral : 0;
-  const overCollateral     = wfTotalAmountMYR > totalCollateral; // margin breach
-  const nearMarginCall     = !overCollateral && utilisation > MARGIN_WARN_THRESHOLD;
-  const availableCollateral = Math.max(0, totalCollateral - wfTotalAmountMYR);
+  // Two hard limits — EITHER triggers a breach:
+  //   (a) Drawdown > effective collateral       (margin / LTV breach)
+  //   (b) Drawdown > sanctioned credit limit    (over-facility breach)
+  // Utilisation shown as % of effective collateral (the margin-desk view).
+  const underMin             = beforeTotalInvest > 0 && beforeTotalInvest < MIN_PORTFOLIO;
+  const utilisation          = effectiveCollateral > 0 ? wfTotalAmountMYR / effectiveCollateral : 0;
+  const overCollateral       = wfTotalAmountMYR > effectiveCollateral;
+  const overCreditLimit      = creditLimit > 0 && wfTotalAmountMYR > creditLimit;
+  const marginBreached       = overCollateral || overCreditLimit;
+  const nearMarginCall       = !marginBreached && utilisation > MARGIN_WARN_THRESHOLD;
+  const availableCollateral  = Math.max(0, effectiveCollateral - wfTotalAmountMYR);
+  const facilityUtilPct      = creditLimit > 0 ? wfTotalAmountMYR / creditLimit : 0;
 
   // ─── Chart data ─────────────────────────────────────────────────────
   const comparisonBarData = [
@@ -232,11 +344,11 @@ export default function WFPage() {
   const updateBase = (idx: number, patch: Partial<BaseRow>) => {
     setBase((prev) => prev.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
   };
-  const addWf = (preset?: { type: WfType; label: string; returnPa: number }) => {
+  const addWf = (preset?: { type: WfType; label: string; returnPa: number; ar: number }) => {
     const p = preset ?? WF_PRESETS[0];
     setWfs((prev) => [...prev, {
       id: uid(), type: p.type, label: p.label,
-      wfAmount: 0, returnPa: p.returnPa,
+      wfAmount: 0, returnPa: p.returnPa, ar: p.ar,
       currency: "USD", tenor: "12",
     }]);
   };
@@ -358,6 +470,8 @@ export default function WFPage() {
           base={base}
           wfs={wfs}
           fxSpot={fxSpot}
+          facility={{ creditLimit, stampDuty, maxDrawable, drawn: wfTotalAmountMYR }}
+          benefits={benefits}
           before={{ invest: beforeTotalInvest, monthly: baseMonthly, m6: base6M, annual: base12M, roc: baseReturnOnCapital }}
           after={{ invest: afterTotalInvest, monthly: afterMonthly, m6: after6M, annual: after12M, roc: returnOnCapital }}
           uplift={{ monthly: monthlyUplift, pct: upliftPct }}
@@ -376,11 +490,11 @@ export default function WFPage() {
         </p>
       </section>
 
-      {/* CLIENT NAME + DATE */}
+      {/* CLIENT NAME + DATE + CREDIT LIMIT */}
       <section className="wf-card mb-4">
         <div className="grid grid-cols-2 gap-2">
           <div>
-            <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+            <label className="wf-input-label">
               <Users size={10} className="mr-1 inline" /> Client name
             </label>
             <input
@@ -391,12 +505,46 @@ export default function WFPage() {
             />
           </div>
           <div>
-            <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-              Proposal date
-            </label>
+            <label className="wf-input-label">Proposal date</label>
             <input className="wf-input mt-1" value={proposalDate} readOnly />
           </div>
+          <div className="col-span-2">
+            <label className="wf-input-label">
+              💳 Credit limit sanctioned by bank (RM)
+            </label>
+            <input
+              className="wf-input mt-1"
+              type="number" inputMode="decimal" min={0}
+              placeholder="e.g. 2,000,000"
+              value={creditLimit === 0 ? "" : creditLimit}
+              onChange={(e) => {
+                const v = e.target.value;
+                setCreditLimit(v === "" ? 0 : Math.max(0, Number(v) || 0));
+              }}
+            />
+            <p className="mt-1 text-[10.5px] text-[var(--text-muted)]">
+              Facility size approved. Can exceed portfolio value — client only draws up to the collateral available.
+            </p>
+          </div>
         </div>
+
+        {/* Facility snapshot panel */}
+        {creditLimit > 0 && (
+          <div className="mt-3 rounded-lg border border-[var(--line)] bg-[var(--surface-2)]/60 p-3">
+            <div className="mb-2 text-[10.5px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+              Facility snapshot
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-[11.5px] sm:grid-cols-4">
+              <TotalCell label="Credit limit" value={fmt0(creditLimit)} />
+              <TotalCell label="Stamp duty (0.5%)" value={fmt0(stampDuty)} />
+              <TotalCell label="Max drawable" value={fmt0(maxDrawable)} accent />
+              <TotalCell label="Facility headroom" value={fmt0(facilityUnused)} />
+            </div>
+            <div className="mt-2 text-[10px] text-[var(--text-muted)]">
+              Max drawable = min(credit limit, effective collateral). Stamp duty is charged on the full facility, payable once at setup, regardless of actual drawdown.
+            </div>
+          </div>
+        )}
       </section>
 
       {/* ─── BEFORE WF ─── */}
@@ -548,13 +696,13 @@ export default function WFPage() {
                 style={{ borderLeft: `4px solid ${colour}`, background: `${colour}0D` }}
               >
                 <div className="mb-2 flex items-center justify-between gap-2">
-                  <span className="wf-chip text-white" style={{ background: colour }}>+ WF</span>
+                  <span className="wf-chip text-white" style={{ background: colour }}>+ WF · AR {pct(r.ar, 0)}</span>
                   <select
                     className="wf-input wf-input-sm flex-1 max-w-[220px]"
                     value={r.type}
                     onChange={(e) => {
                       const preset = WF_PRESETS.find((p) => p.type === e.target.value);
-                      if (preset) updateWf(r.id, { type: preset.type, label: preset.label, returnPa: preset.returnPa });
+                      if (preset) updateWf(r.id, { type: preset.type, label: preset.label, returnPa: preset.returnPa, ar: preset.ar });
                     }}
                   >
                     {WF_PRESETS.map((p) => <option key={p.type} value={p.type}>{p.label}</option>)}
@@ -658,6 +806,12 @@ export default function WFPage() {
                       </div>
                     </span>
                   </div>
+                  <div className="mt-1 flex items-center justify-between gap-2 border-t border-dashed border-[var(--line)] pt-1.5">
+                    <span className="text-[11.5px] text-[var(--text-muted)]">+ Adds collateral (AR {pct(r.ar, 0)})</span>
+                    <span className="wf-metric font-semibold" style={{ color: colour }}>
+                      +RM {fmt0(calc.collateralMYR)}
+                    </span>
+                  </div>
                 </div>
               </div>
             );
@@ -667,11 +821,13 @@ export default function WFPage() {
         {/* Add WF button(s) */}
         <div className="mt-3 flex flex-wrap gap-1.5">
           {WF_PRESETS.map((p) => {
-            const blocked = underMin || overCollateral;
+            const blocked = underMin || marginBreached;
             const tip = underMin
               ? "Portfolio under RM 1M — WF not available"
               : overCollateral
               ? "Margin breached — reduce an existing WF line first"
+              : overCreditLimit
+              ? "Over sanctioned credit limit — raise facility or reduce drawdowns"
               : `Add ${p.label}`;
             return (
               <button
@@ -697,12 +853,20 @@ export default function WFPage() {
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-x-3 text-[10px] text-[var(--text-muted)]">
             <span>Return on capital: <b className="text-[var(--text)]">{pct(returnOnCapital)}</b> p.a.</span>
-            <span>· Collateral available: <b className={`${overCollateral ? "text-danger" : nearMarginCall ? "text-warning" : "text-[var(--text)]"}`}>
+            <span>· Effective collateral: <b className="text-[var(--text)]">RM {fmt0(effectiveCollateral)}</b>
+              {" "}<span className="opacity-70">(base {fmt0(totalCollateral)} + WF {fmt0(wfExtraCollateralMYR)})</span>
+            </span>
+            <span>· Available: <b className={`${marginBreached ? "text-danger" : nearMarginCall ? "text-warning" : "text-[var(--text)]"}`}>
               RM {fmt0(availableCollateral)}
             </b></span>
-            <span>· Utilisation: <b className={`${overCollateral ? "text-danger" : nearMarginCall ? "text-warning" : "text-[var(--text)]"}`}>
+            <span>· Utilisation: <b className={`${marginBreached ? "text-danger" : nearMarginCall ? "text-warning" : "text-[var(--text)]"}`}>
               {pct(utilisation)}
             </b></span>
+            {creditLimit > 0 && (
+              <span>· Facility used: <b className={`${overCreditLimit ? "text-danger" : "text-[var(--text)]"}`}>
+                {pct(facilityUtilPct)} of RM {fmt0(creditLimit)}
+              </b></span>
+            )}
           </div>
           {/* Utilisation bar */}
           <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-[var(--surface)]">
@@ -710,7 +874,7 @@ export default function WFPage() {
               className="h-full transition-all"
               style={{
                 width: `${Math.min(100, utilisation * 100)}%`,
-                background: overCollateral ? "#ef4444" : nearMarginCall ? "#f59e0b" : "#10b981",
+                background: marginBreached ? "#ef4444" : nearMarginCall ? "#f59e0b" : "#10b981",
               }}
             />
           </div>
@@ -722,8 +886,21 @@ export default function WFPage() {
             <AlertTriangle size={14} className="mt-0.5 shrink-0" />
             <div>
               <b>MARGIN CALL — drawdown rejected.</b><br />
-              WF drawdown (RM {fmt0(wfTotalAmountMYR)}) exceeds recognised collateral (RM {fmt0(totalCollateral)}).
-              Reduce by at least RM {fmt0(wfTotalAmountMYR - totalCollateral)} to proceed.
+              WF drawdown (RM {fmt0(wfTotalAmountMYR)}) exceeds effective collateral
+              (RM {fmt0(effectiveCollateral)} = base {fmt0(totalCollateral)} + WF-recycled {fmt0(wfExtraCollateralMYR)}).
+              Reduce drawdown by at least RM {fmt0(wfTotalAmountMYR - effectiveCollateral)} to proceed.
+            </div>
+          </div>
+        )}
+
+        {/* OVER CREDIT LIMIT — second kind of hard breach */}
+        {overCreditLimit && !overCollateral && (
+          <div className="mt-3 flex items-start gap-2 rounded-lg border border-danger/40 bg-danger/10 p-2.5 text-[11.5px] text-danger wf-rise">
+            <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+            <div>
+              <b>Over sanctioned facility.</b><br />
+              Drawdown (RM {fmt0(wfTotalAmountMYR)}) exceeds the credit limit set at the top (RM {fmt0(creditLimit)}).
+              Either reduce drawdowns by RM {fmt0(wfTotalAmountMYR - creditLimit)}, or request a facility increase from the bank.
             </div>
           </div>
         )}
@@ -842,6 +1019,45 @@ export default function WFPage() {
           IMPORTANT: Returns are illustrative, not guaranteed. Actual financing availability,
           collateral recognition, FX impact and prevailing rates remain subject to bank approval
           and documentation. COF rate card as of {COF_AS_OF}; all-in = COF + {pct(COF_SPREAD, 0)} spread.
+        </p>
+      </section>
+
+      {/* ─── FACILITY COSTS BAR (visible version of what goes on the slide) ─── */}
+      {creditLimit > 0 && (
+        <section className="wf-card mb-4" style={{ borderLeft: "4px solid #f59e0b" }}>
+          <div className="mb-2 flex items-center justify-between">
+            <h2 className="text-[14px] font-bold">💳 Facility cost summary</h2>
+            <span className="wf-chip bg-amber-500 text-white">one-off</span>
+          </div>
+          <div className="grid grid-cols-2 gap-2 text-[11.5px]">
+            <TotalCell label="Credit limit" value={fmt0(creditLimit)} />
+            <TotalCell label="Stamp duty (0.5%)" value={fmt0(stampDuty)} />
+          </div>
+          <div className="mt-2 rounded-md bg-[var(--surface-2)]/60 p-2 text-[11px] text-[var(--text-muted)]">
+            Payback: at the current monthly uplift of RM {fmt0(monthlyUplift)}, the stamp duty of RM {fmt0(stampDuty)} is recovered in <b className="text-emerald-400">
+              {monthlyUplift > 0 ? `${Math.ceil(stampDuty / monthlyUplift)} month${Math.ceil(stampDuty / monthlyUplift) === 1 ? "" : "s"}` : "—"}
+            </b> of extra income. 12-month net gain after stamp duty: <b className="text-emerald-400">RM {fmt0(monthlyUplift * 12 - stampDuty)}</b>.
+          </div>
+        </section>
+      )}
+
+      {/* ─── CLIENT TALKING POINTS (shows in Summary slide too) ─── */}
+      <section className="wf-card mb-4" style={{ borderLeft: "4px solid #10b981" }}>
+        <div className="mb-2 flex items-center justify-between">
+          <h2 className="text-[14px] font-bold">✨ Why this makes sense for the client</h2>
+          <button
+            onClick={() => setBenefitsSeed(Date.now())}
+            className="rounded-md border border-[var(--line)] px-2 py-1 text-[10.5px] font-semibold text-[var(--text-muted)] hover:text-[var(--text)]"
+            title="Re-roll 5 fresh talking points"
+          >
+            🔄 Re-roll
+          </button>
+        </div>
+        <ul className="list-disc space-y-1.5 pl-5 text-[12px] leading-snug text-[var(--text)]">
+          {benefits.map((b, i) => <li key={i}>{b}</li>)}
+        </ul>
+        <p className="mt-2 text-[10px] italic text-[var(--text-muted)]">
+          Library of {WF_BENEFITS.length}+ talking points. Each generation picks 5 at random so every proposal reads differently.
         </p>
       </section>
 
@@ -1173,11 +1389,13 @@ AfterSlide.displayName = "AfterSlide";
 const SummarySlide = forwardRef<HTMLDivElement, {
   clientName: string; proposalDate: string;
   base: BaseRowProp[]; wfs: WfRow[]; fxSpot: Record<string, number>;
+  facility: { creditLimit: number; stampDuty: number; maxDrawable: number; drawn: number };
+  benefits: string[];
   before: { invest: number; monthly: number; m6: number; annual: number; roc: number };
   after:  { invest: number; monthly: number; m6: number; annual: number; roc: number };
   uplift: { monthly: number; pct: number };
 }>(
-  ({ clientName, proposalDate, base, wfs, fxSpot, before, after, uplift }, ref) => {
+  ({ clientName, proposalDate, base, wfs, fxSpot, facility, benefits, before, after, uplift }, ref) => {
     // Bar chart scale (horizontal bars)
     const maxVal = Math.max(before.annual, after.annual, 1);
     const scaleW = (v: number) => (v / maxVal) * 100;
@@ -1280,7 +1498,7 @@ const SummarySlide = forwardRef<HTMLDivElement, {
         </div>
 
         {/* Legend */}
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, fontSize: 10, color: "#334155" }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, fontSize: 10, color: "#334155", marginBottom: 14 }}>
           {Object.entries(COLOR_LABEL).slice(0, 4).map(([k, l]) => (
             <div key={k} style={{ display: "flex", alignItems: "center", gap: 4 }}>
               <span style={{ width: 10, height: 10, borderRadius: 2, background: COLORS[k as keyof typeof COLORS] }} />
@@ -1288,6 +1506,47 @@ const SummarySlide = forwardRef<HTMLDivElement, {
             </div>
           ))}
         </div>
+
+        {/* FACILITY PANEL — credit limit, stamp duty, drawn, headroom */}
+        {facility.creditLimit > 0 && (
+          <div style={{
+            marginTop: 4, padding: 14, borderRadius: 10,
+            background: "linear-gradient(135deg, #fef3c7, #fde68a)",
+            border: "1px solid #fcd34d", marginBottom: 14,
+          }}>
+            <div style={{ fontSize: 10, color: "#92400e", textTransform: "uppercase", letterSpacing: 1.3, fontWeight: 800, marginBottom: 6 }}>
+              💳 Facility structure & one-off costs
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              <SlideBigStat label="Credit limit granted" value={`RM ${fmt0(facility.creditLimit)}`} tone="#78350f" />
+              <SlideBigStat label="Stamp duty (0.5%)"    value={`RM ${fmt0(facility.stampDuty)}`}   tone="#b45309" />
+              <SlideBigStat label="Max drawable today"   value={`RM ${fmt0(facility.maxDrawable)}`} tone="#0f172a" />
+              <SlideBigStat label="Facility drawn"       value={`RM ${fmt0(facility.drawn)}`}       tone="#6366f1" />
+            </div>
+            <div style={{ marginTop: 8, fontSize: 10, color: "#78350f", lineHeight: 1.5 }}>
+              Stamp duty is a one-off government levy on the full facility (RM {fmt0(facility.creditLimit)} × 0.5%),
+              payable at setup regardless of utilisation. Max drawable is capped at the lower of credit limit
+              and recognised collateral.
+            </div>
+          </div>
+        )}
+
+        {/* BENEFITS — 5 rotating talking points */}
+        {benefits.length > 0 && (
+          <div style={{
+            padding: 14, borderRadius: 10, background: "#f0fdf4",
+            border: "1px solid #bbf7d0", marginBottom: 14,
+          }}>
+            <div style={{ fontSize: 10, color: "#065f46", textTransform: "uppercase", letterSpacing: 1.3, fontWeight: 800, marginBottom: 8 }}>
+              ✨ Why wealth financing works for {clientName || "this client"}
+            </div>
+            <ul style={{ margin: 0, paddingLeft: 18, color: "#166534", fontSize: 11.5, lineHeight: 1.55 }}>
+              {benefits.map((b, i) => (
+                <li key={i} style={{ marginBottom: 5 }}>{b}</li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         {slideFooter}
       </div>
