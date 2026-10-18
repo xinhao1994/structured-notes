@@ -2,7 +2,9 @@
 
 import { forwardRef, useImperativeHandle, useRef, useState } from "react";
 import Link from "next/link";
-import { Copy, FileImage, FileText, Pencil, Check, X, RotateCcw, LineChart } from "lucide-react";
+import { Copy, FileImage, FileText, Pencil, Check, X, RotateCcw, LineChart, Send } from "lucide-react";
+import { getSupabaseBrowser } from "@/lib/supabaseClient";
+import { encodeTranche } from "@/lib/trancheShare";
 import * as htmlToImage from "html-to-image";
 import jsPDF from "jspdf";
 import type { Tranche, PriceQuote } from "@/lib/types";
@@ -113,6 +115,41 @@ export const ProductTable = forwardRef<ProductTableHandle, Props>(function Produ
     pdf.addImage(dataUrl, "PNG", offX, margin + titleH, drawW, drawH);
     pdf.save(`${tranche.trancheCode}.pdf`);
   }
+  // ─── Share directly to in-app Chat (no need to save to Pocket first) ──
+  // Encodes the current tranche + posts into chat_messages with
+  // attachment_type = "tranche". The chat renderer picks it up and shows
+  // the TrancheCard — same experience as sharing from Pocket.
+  const [shareStatus, setShareStatus] = useState<"idle" | "sending" | "ok" | "fail">("idle");
+  async function doShareToChat() {
+    if (shareStatus === "sending") return;
+    const supa = getSupabaseBrowser();
+    if (!supa) { alert("Chat not configured (NEXT_PUBLIC_SUPABASE_ANON_KEY missing)."); return; }
+    let senderName = "";
+    try { senderName = localStorage.getItem("snd.chat.senderName.v1") || ""; } catch {}
+    if (!senderName) {
+      senderName = prompt("Your name (shown to chat readers):") || "";
+      if (!senderName.trim()) return;
+      try { localStorage.setItem("snd.chat.senderName.v1", senderName.trim()); } catch {}
+    }
+    const encoded = encodeTranche(tranche);
+    if (encoded.length > 2000) { alert("Tranche too large to share."); return; }
+    setShareStatus("sending");
+    const { error } = await supa.from("chat_messages").insert({
+      sender_name: senderName.trim().slice(0, 32),
+      body: encoded,
+      attachment_url: null,
+      attachment_type: "tranche",
+    });
+    if (error) {
+      setShareStatus("fail");
+      alert("Share failed: " + error.message);
+      setTimeout(() => setShareStatus("idle"), 2500);
+    } else {
+      setShareStatus("ok");
+      setTimeout(() => setShareStatus("idle"), 2500);
+    }
+  }
+
   async function doCopyTsv() {
     const header = ["Stock", "Initial Fixing", "Live Price", "Δ vs Initial", "52W High", "52W Low", "EKI Price", "Strike Price"].join("\t");
     const lines = rows.map((r) => {
@@ -127,7 +164,7 @@ export const ProductTable = forwardRef<ProductTableHandle, Props>(function Produ
   }
 
   useImperativeHandle(ref, () => ({
-    exportPng: doExportPng, exportPdf: doExportPdf, copyTsv: doCopyTsv,
+    exportPng: doExportPng, exportPdf: doExportPdf, copyTsv: doCopyTsv, shareToChat: doShareToChat,
   }));
 
   function startEdit(sym: string, current: number | undefined) {
@@ -153,10 +190,21 @@ export const ProductTable = forwardRef<ProductTableHandle, Props>(function Produ
           </div>
           <h3 className="text-base font-semibold">Underlying basket</h3>
         </div>
-        <div className="no-print flex gap-2">
+        <div className="no-print flex gap-2 flex-wrap">
           <button onClick={doExportPng} className="btn h-9 px-3 text-xs" title="Export full table as PNG"><FileImage size={14} /> PNG</button>
           <button onClick={doExportPdf} className="btn h-9 px-3 text-xs" title="Export full table as PDF"><FileText size={14} /> PDF</button>
           <button onClick={doCopyTsv} className="btn h-9 px-3 text-xs" title="Copy table as TSV"><Copy size={14} /> Copy</button>
+          <button
+            onClick={doShareToChat}
+            disabled={shareStatus === "sending"}
+            className={`btn h-9 px-3 text-xs ${shareStatus === "ok" ? "border-success text-success" : shareStatus === "fail" ? "border-danger text-danger" : ""}`}
+            title="Share this tranche to the team chat (no need to save to Pocket first)"
+          >
+            {shareStatus === "sending" ? (<><Send size={14} className="animate-pulse" /> Sending…</>)
+              : shareStatus === "ok" ? (<><Check size={14} /> Shared!</>)
+              : shareStatus === "fail" ? (<><X size={14} /> Failed</>)
+              : (<><Send size={14} /> Share</>)}
+          </button>
         </div>
       </header>
 
