@@ -471,6 +471,8 @@ const NAME_TO_TICKER: Record<string, Listing> = {
   "nomura holdings": { JP: "8604", default: "JP" },
   "daiwa": { JP: "8601", default: "JP" },
   "daiwa securities": { JP: "8601", default: "JP" },
+  "kioxia": { JP: "285A", default: "JP" },
+  "kioxia holdings": { JP: "285A", default: "JP" },
 
   // ─── Australia ──────────────────────────────────────────────────────────
   bhp: { AU: "BHP", default: "AU" },
@@ -1213,10 +1215,10 @@ export function parseTrancheText(input: string): ParseResult {
   if (!underlyings.length) {
     warnings.push({ field: "underlyings", message: "No underlyings detected — please verify." });
   }
-  // Bank's autocallable product offers 1–3 underlyings. If the parser
-  // surfaced more than 3, almost certainly one is a label/header that
-  // slipped through. Keep the first 3 and warn so the user can spot it.
-  const MAX_UNDERLYINGS = 3;
+  // Bank's autocallable product offers 1–4 underlyings. If the parser
+  // surfaced more than 4, almost certainly one is a label/header that
+  // slipped through. Keep the first 4 and warn so the user can spot it.
+  const MAX_UNDERLYINGS = 4;
   if (underlyings.length > MAX_UNDERLYINGS) {
     const dropped = underlyings.slice(MAX_UNDERLYINGS).map((u) => u.rawName || u.symbol).join(", ");
     warnings.push({

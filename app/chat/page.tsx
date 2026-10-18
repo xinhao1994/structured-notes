@@ -131,6 +131,10 @@ export default function ChatPage() {
   const [sending, setSending] = useState(false);
   const [typingUsers, setTypingUsers] = useState<Record<string, number>>({});
   const [onlineUsers, setOnlineUsers] = useState<string[]>([]);
+  const [nameConfirmed, setNameConfirmed] = useState(false);
+  const [nameInput, setNameInput] = useState("");
+  const [nameChecking, setNameChecking] = useState(false);
+  const [nameError, setNameError] = useState<string | null>(null);
   // Reactions are held purely in client memory + synced across viewers via
   // a Supabase Realtime BROADCAST channel — no database column needed. They
   // are ephemeral: a page refresh clears them. Trade-off for zero-SQL setup.
@@ -217,19 +221,18 @@ export default function ChatPage() {
       const saved = localStorage.getItem(NAME_KEY);
       if (saved) {
         setName(saved);
-        // Mirror the saved name into a cookie so Edge Middleware can read it
-        // for admin-dashboard visit tagging. Harmless if already set.
+        setNameInput(saved);
+        setNameConfirmed(true);
         try {
-          const encoded = encodeURIComponent(saved);
-          document.cookie = `snd_name=${encoded}; path=/; max-age=${60*60*24*365}; samesite=lax`;
+          document.cookie = `snd_name=${encodeURIComponent(saved)}; path=/; max-age=${60*60*24*365}; samesite=lax`;
         } catch {}
-      } else setEditingName(true);
+      }
     } catch {}
   }, []);
 
   // ─── Initial message load ───
   useEffect(() => {
-    if (!supa) { setLoading(false); return; }
+    if (!supa || !nameConfirmed) { setLoading(false); return; }
     let cancelled = false;
     (async () => {
       setLoading(true); setError(null);
@@ -245,7 +248,7 @@ export default function ChatPage() {
       setTimeout(() => { const el = listEndRef.current?.parentElement; if (el) el.scrollTop = el.scrollHeight; }, 50);
     })();
     return () => { cancelled = true; };
-  }, [supa]);
+  }, [supa, nameConfirmed]);
 
   // ─── Realtime: new messages + delete sync + typing broadcasts ───
   useEffect(() => {
@@ -309,19 +312,57 @@ export default function ChatPage() {
 
   // ─── Presence: who's currently on this page right now ───
   useEffect(() => {
-    if (!supa || !name.trim()) return;
+    if (!supa || !name.trim() || !nameConfirmed) return;
     const ch = supa.channel("chat_presence", { config: { presence: { key: name.trim() } } });
-    ch.on("presence", { event: "sync" }, () => {
-      const state = ch.presenceState() as Record<string, unknown>;
-      setOnlineUsers(Object.keys(state));
-    });
-    ch.subscribe(async (status) => {
-      if (status === "SUBSCRIBED") {
-        await ch.track({ at: Date.now() });
-      }
-    });
+    const updateUsers = () => setOnlineUsers(Object.keys(ch.presenceState() as Record<string, unknown>));
+    ch.on("presence", { event: "sync" }, updateUsers)
+      .on("presence", { event: "join" }, updateUsers)
+      .on("presence", { event: "leave" }, updateUsers)
+      .subscribe(async (status) => {
+        if (status === "SUBSCRIBED") await ch.track({ at: Date.now() });
+      });
     return () => { supa.removeChannel(ch); };
-  }, [supa, name]);
+  }, [supa, name, nameConfirmed]);
+
+  // ─── Name gate: check for duplicates before confirming ───
+  async function checkAndConfirmName(v: string) {
+    const trimmed = v.trim();
+    if (!trimmed) return;
+
+    function doCommit(n: string) {
+      try { localStorage.setItem(NAME_KEY, n); } catch {}
+      try {
+        document.cookie = `snd_name=${encodeURIComponent(n)}; path=/; max-age=${60*60*24*365}; samesite=lax`;
+      } catch {}
+      setName(n);
+      setNameInput(n);
+      setNameError(null);
+      setNameConfirmed(true);
+    }
+
+    if (!supa) { doCommit(trimmed); return; }
+
+    setNameChecking(true);
+    setNameError(null);
+
+    const taken = await new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => resolve(false), 4000);
+      const ch = supa.channel("chat_presence");
+      ch.on("presence", { event: "sync" }, () => {
+        clearTimeout(timer);
+        const keys = Object.keys(ch.presenceState() as Record<string, unknown>).map((k) => k.toLowerCase());
+        supa.removeChannel(ch);
+        resolve(keys.includes(trimmed.toLowerCase()));
+      }).subscribe();
+    });
+
+    setNameChecking(false);
+    if (taken) {
+      setNameError("Name not available. Please choose a different one.");
+      return;
+    }
+    doCommit(trimmed);
+  }
 
   const broadcastTyping = useCallback(() => {
     const ch = typingChannelRef.current;
@@ -332,16 +373,12 @@ export default function ChatPage() {
     ch.send({ type: "broadcast", event: "typing", payload: { name } });
   }, [name]);
 
-  function saveName() {
+  async function saveName() {
     const v = name.trim();
     if (!v) return;
-    try { localStorage.setItem(NAME_KEY, v); } catch {}
-    // Also set a cookie so Edge Middleware (middleware.ts) can tag future
-    // visits with this name in the admin dashboard. 1-year TTL.
-    try {
-      const encoded = encodeURIComponent(v);
-      document.cookie = `snd_name=${encoded}; path=/; max-age=${60*60*24*365}; samesite=lax`;
-    } catch {}
+    const current = (() => { try { return localStorage.getItem(NAME_KEY) ?? ""; } catch { return ""; } })();
+    if (v.toLowerCase() === current.toLowerCase()) { setEditingName(false); return; }
+    await checkAndConfirmName(v);
     setEditingName(false);
   }
 
@@ -497,6 +534,40 @@ export default function ChatPage() {
           </p>
         </div>
       </>
+    );
+  }
+
+  // ─── Name gate: block all chat content until a unique name is set ───
+  if (!nameConfirmed) {
+    return (
+      <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-[var(--background)] px-6">
+        <MessageCircle size={36} className="mb-4 text-[var(--text-muted)] opacity-60" />
+        <h2 className="mb-1 text-[15px] font-semibold">Choose a name to join</h2>
+        <p className="mb-6 text-center text-[12px] text-[var(--text-muted)]">
+          Pick a unique name. You must enter a name before you can view or send messages.
+        </p>
+        <div className="w-full max-w-xs">
+          <input
+            autoFocus
+            value={nameInput}
+            onChange={(e) => { setNameInput(e.target.value); setNameError(null); }}
+            onKeyDown={(e) => { if (e.key === "Enter") void checkAndConfirmName(nameInput); }}
+            placeholder="Your name"
+            maxLength={32}
+            className="input mb-2 h-11 w-full text-[14px]"
+          />
+          {nameError && (
+            <p className="mb-2 text-center text-[11.5px] text-danger">{nameError}</p>
+          )}
+          <button
+            onClick={() => void checkAndConfirmName(nameInput)}
+            disabled={!nameInput.trim() || nameChecking}
+            className="btn btn-primary h-11 w-full text-[13px]"
+          >
+            {nameChecking ? "Checking..." : "Enter Chat"}
+          </button>
+        </div>
+      </div>
     );
   }
 
