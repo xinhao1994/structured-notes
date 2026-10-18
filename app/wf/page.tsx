@@ -12,7 +12,7 @@
 // walk through it on an iPhone and export the summary panel as a PNG to
 // WhatsApp directly to the client.
 
-import { Fragment, forwardRef, useRef, useState } from "react";
+import { Fragment, forwardRef, useEffect, useRef, useState } from "react";
 import {
   Banknote, Download, Share2, Plus, Trash2, Users, AlertTriangle,
   TrendingUp, Wallet, PiggyBank, FileSpreadsheet, Zap,
@@ -42,6 +42,18 @@ const COF_TABLE: Record<string, { "1": number; "3": number; "6": number; "12": n
 const COF_SPREAD = 0.01; // 1% p.a. bank spread → all-in = COF/100 + 1%
 const COF_AS_OF = "16 Oct 2026";
 const MIN_PORTFOLIO = 1_000_000; // RM — minimum to qualify for WF
+const MARGIN_WARN_THRESHOLD = 0.80; // warn at > 80% collateral utilisation
+
+/* ────────────────────────────────────────────────────────────────────
+   FX SPOT — live, refreshed from /api/fx-spot (Yahoo Finance pairs
+   {CCY}MYR=X cached 5 min server-side). Hardcoded FALLBACK is only used
+   if the API fails before any live fetch completes.
+   ──────────────────────────────────────────────────────────────────── */
+const FX_FALLBACK: Record<string, number> = {
+  MYR: 1.000,
+  USD: 4.200, AUD: 2.800, NZD: 2.500, GBP: 5.600, EUR: 4.700,
+  CHF: 5.000, CAD: 3.100, JPY: 0.028, SGD: 3.200, HKD: 0.540,
+};
 
 /* Base component defaults (RM). AR = recognised-as-collateral %. */
 type BaseType = "fd" | "ut" | "bond" | "si";
@@ -119,6 +131,35 @@ export default function WFPage() {
   const [baseReturnDrafts, setBaseReturnDrafts] = useState<Record<number, string>>({});
   const [wfReturnDrafts, setWfReturnDrafts] = useState<Record<string, string>>({});
 
+  // ─── LIVE FX SPOT ──────────────────────────────────────────────────
+  // Fetched from /api/fx-spot on mount and every 5 minutes while the page
+  // is open. Falls back to hardcoded rates only if the API fails before
+  // the first fetch returns.
+  const [fxSpot, setFxSpot] = useState<Record<string, number>>(FX_FALLBACK);
+  const [fxFetchedAt, setFxFetchedAt] = useState<string | null>(null);
+  const [fxSource, setFxSource] = useState<"loading" | "yahoo" | "cache" | "fallback">("loading");
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const r = await fetch("/api/fx-spot", { cache: "no-store" });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const j = await r.json();
+        if (cancelled || !j?.rates) return;
+        setFxSpot({ MYR: 1.0, ...j.rates });
+        setFxFetchedAt(j.fetchedAt || new Date().toISOString());
+        setFxSource(j.source === "fallback" ? "fallback" : j.source === "cache" ? "cache" : "yahoo");
+      } catch {
+        if (!cancelled) setFxSource("fallback");
+      }
+    };
+    load();
+    const id = window.setInterval(load, 5 * 60_000); // refresh every 5 min
+    return () => { cancelled = true; window.clearInterval(id); };
+  }, []);
+  // Resolve a currency to its live MYR rate (fallback-safe).
+  const fxOf = (ccy: string) => fxSpot[ccy] ?? FX_FALLBACK[ccy] ?? 1;
+
   // ─── Derived numbers ────────────────────────────────────────────────
   const beforeTotalInvest = base.reduce((s, r) => s + r.investment, 0);
   const totalCollateral   = base.reduce((s, r) => s + r.investment * r.ar, 0);
@@ -126,13 +167,33 @@ export default function WFPage() {
   const base12M           = baseMonthly * 12;
   const base6M            = baseMonthly * 6;
 
-  const wfTotalAmount = wfs.reduce((s, r) => s + r.wfAmount, 0);
-  const wfMonthlyGross = wfs.reduce((s, r) => s + (r.wfAmount * r.returnPa) / 12, 0);
-  const wfMonthlyCost  = wfs.reduce((s, r) => s + (r.wfAmount * allInRate(r.currency, r.tenor)) / 12, 0);
-  const wfMonthlyNet   = wfMonthlyGross - wfMonthlyCost;
+  // Per-WF-row MYR-converted figures. Each drawdown is entered in its
+  // native currency (e.g. "CHF 100,000"), interest + return accrue in
+  // native currency, and we convert to MYR via the spot table for the
+  // consolidated client view.
+  const wfRowCalcs = wfs.map((r) => {
+    const rate = allInRate(r.currency, r.tenor);
+    const grossCCY = (r.wfAmount * r.returnPa) / 12;
+    const costCCY  = (r.wfAmount * rate) / 12;
+    const netCCY   = grossCCY - costCCY;
+    const fx       = fxOf(r.currency);
+    return {
+      row: r, rate, fx,
+      wfAmountCCY: r.wfAmount,
+      wfAmountMYR: r.wfAmount * fx,
+      grossCCY, grossMYR: grossCCY * fx,
+      costCCY,  costMYR:  costCCY  * fx,
+      netCCY,   netMYR:   netCCY   * fx,
+    };
+  });
 
-  const afterTotalInvest = beforeTotalInvest + wfTotalAmount;
-  const afterMonthly     = baseMonthly + wfMonthlyNet;
+  const wfTotalAmountMYR  = wfRowCalcs.reduce((s, c) => s + c.wfAmountMYR, 0);
+  const wfMonthlyGrossMYR = wfRowCalcs.reduce((s, c) => s + c.grossMYR, 0);
+  const wfMonthlyCostMYR  = wfRowCalcs.reduce((s, c) => s + c.costMYR, 0);
+  const wfMonthlyNetMYR   = wfRowCalcs.reduce((s, c) => s + c.netMYR, 0);
+
+  const afterTotalInvest = beforeTotalInvest + wfTotalAmountMYR;
+  const afterMonthly     = baseMonthly + wfMonthlyNetMYR;
   const after12M         = afterMonthly * 12;
   const after6M          = afterMonthly * 6;
 
@@ -141,10 +202,12 @@ export default function WFPage() {
   const returnOnCapital = beforeTotalInvest > 0 ? after12M / beforeTotalInvest : 0;
   const baseReturnOnCapital = beforeTotalInvest > 0 ? base12M / beforeTotalInvest : 0;
 
-  // Validation
-  const underMin = beforeTotalInvest > 0 && beforeTotalInvest < MIN_PORTFOLIO;
-  const overCollateral = wfTotalAmount > totalCollateral;
-  const availableCollateral = Math.max(0, totalCollateral - wfTotalAmount);
+  // ─── Validation + margin call ─────────────────────────────────────
+  const underMin           = beforeTotalInvest > 0 && beforeTotalInvest < MIN_PORTFOLIO;
+  const utilisation        = totalCollateral > 0 ? wfTotalAmountMYR / totalCollateral : 0;
+  const overCollateral     = wfTotalAmountMYR > totalCollateral; // margin breach
+  const nearMarginCall     = !overCollateral && utilisation > MARGIN_WARN_THRESHOLD;
+  const availableCollateral = Math.max(0, totalCollateral - wfTotalAmountMYR);
 
   // ─── Chart data ─────────────────────────────────────────────────────
   const comparisonBarData = [
@@ -283,8 +346,9 @@ export default function WFPage() {
           proposalDate={proposalDate}
           base={base}
           wfs={wfs}
-          wfTotalAmount={wfTotalAmount}
-          wfMonthlyNet={wfMonthlyNet}
+          fxSpot={fxSpot}
+          wfTotalAmount={wfTotalAmountMYR}
+          wfMonthlyNet={wfMonthlyNetMYR}
           totals={{ invest: afterTotalInvest, monthly: afterMonthly, annual: after12M, roc: returnOnCapital, baseMonthly }}
         />
         <SummarySlide
@@ -293,6 +357,7 @@ export default function WFPage() {
           proposalDate={proposalDate}
           base={base}
           wfs={wfs}
+          fxSpot={fxSpot}
           before={{ invest: beforeTotalInvest, monthly: baseMonthly, m6: base6M, annual: base12M, roc: baseReturnOnCapital }}
           after={{ invest: afterTotalInvest, monthly: afterMonthly, m6: after6M, annual: after12M, roc: returnOnCapital }}
           uplift={{ monthly: monthlyUplift, pct: upliftPct }}
@@ -467,12 +532,15 @@ export default function WFPage() {
 
         {/* WF additions — same colour as their base counterpart */}
         <div className="space-y-2">
-          {wfs.map((r) => {
-            const monthlyGross = (r.wfAmount * r.returnPa) / 12;
-            const rate = allInRate(r.currency, r.tenor);
-            const monthlyCost = (r.wfAmount * rate) / 12;
-            const monthlyNet = monthlyGross - monthlyCost;
+          {wfRowCalcs.map((calc) => {
+            const r = calc.row;
             const colour = COLORS[r.type];
+            const ccyPrefix = r.currency;
+            // Use calc.* for the dual-currency display
+            const monthlyGross = calc.grossCCY;
+            const monthlyCost  = calc.costCCY;
+            const monthlyNet   = calc.netCCY;
+            const rate = calc.rate;
             return (
               <div
                 key={r.id}
@@ -501,7 +569,7 @@ export default function WFPage() {
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   <label className="block">
-                    <span className="wf-input-label">WF amount (RM-eq.)</span>
+                    <span className="wf-input-label">WF amount ({ccyPrefix})</span>
                     <input
                       className="wf-input wf-input-sm mt-0.5"
                       type="number" inputMode="decimal" min={0}
@@ -512,6 +580,9 @@ export default function WFPage() {
                         updateWf(r.id, { wfAmount: v === "" ? 0 : Math.max(0, Number(v) || 0) });
                       }}
                     />
+                    <span className="mt-0.5 block text-[10.5px] text-[var(--text-muted)]">
+                      ≈ RM {fmt0(calc.wfAmountMYR)} <span className="opacity-60">(live spot {ccyPrefix}/MYR {fxOf(r.currency).toFixed(4)})</span>
+                    </span>
                   </label>
                   <label className="block">
                     <span className="wf-input-label">Return p.a.</span>
@@ -564,16 +635,27 @@ export default function WFPage() {
                   </div>
                   <div className="mt-1 flex items-center justify-between gap-2">
                     <span className="text-[var(--text-muted)]">Gross / mo</span>
-                    <span className="wf-metric font-semibold">{fmt0(monthlyGross)}</span>
+                    <span className="wf-metric text-right font-semibold">
+                      {ccyPrefix} {fmt0(monthlyGross)}
+                      <div className="text-[10px] font-normal text-[var(--text-muted)]">≈ RM {fmt0(calc.grossMYR)}</div>
+                    </span>
                   </div>
                   <div className="mt-0.5 flex items-center justify-between gap-2">
                     <span className="text-[var(--text-muted)]">Cost / mo</span>
-                    <span className="wf-metric font-semibold text-danger">−{fmt0(monthlyCost)}</span>
+                    <span className="wf-metric text-right font-semibold text-danger">
+                      −{ccyPrefix} {fmt0(monthlyCost)}
+                      <div className="text-[10px] font-normal opacity-80">≈ −RM {fmt0(calc.costMYR)}</div>
+                    </span>
                   </div>
                   <div className="mt-1 flex items-center justify-between gap-2 border-t border-dashed border-[var(--line)] pt-1.5">
                     <span className="text-[12.5px] font-bold">Net monthly</span>
-                    <span className={`wf-metric text-[15px] font-extrabold ${monthlyNet >= 0 ? "text-emerald-400" : "text-danger"}`}>
-                      {monthlyNet >= 0 ? "+" : ""}{fmt0(monthlyNet)}
+                    <span className={`wf-metric text-right ${monthlyNet >= 0 ? "text-emerald-400" : "text-danger"}`}>
+                      <span className="text-[15px] font-extrabold">
+                        {monthlyNet >= 0 ? "+" : ""}{ccyPrefix} {fmt0(monthlyNet)}
+                      </span>
+                      <div className="text-[11px] font-semibold">
+                        ≈ {monthlyNet >= 0 ? "+" : ""}RM {fmt0(calc.netMYR)}
+                      </div>
                     </span>
                   </div>
                 </div>
@@ -584,41 +666,77 @@ export default function WFPage() {
 
         {/* Add WF button(s) */}
         <div className="mt-3 flex flex-wrap gap-1.5">
-          {WF_PRESETS.map((p) => (
-            <button
-              key={p.type}
-              onClick={() => addWf(p)}
-              className="flex items-center gap-1 rounded-lg border border-indigo-500/40 bg-indigo-500/10 px-2 py-1.5 text-[11px] font-semibold text-indigo-200 hover:bg-indigo-500/20"
-              disabled={underMin}
-              title={underMin ? "Portfolio under RM 1M — WF not available" : `Add ${p.label}`}
-            >
-              <Plus size={11} /> {p.label.replace(" (WF)", "")}
-            </button>
-          ))}
+          {WF_PRESETS.map((p) => {
+            const blocked = underMin || overCollateral;
+            const tip = underMin
+              ? "Portfolio under RM 1M — WF not available"
+              : overCollateral
+              ? "Margin breached — reduce an existing WF line first"
+              : `Add ${p.label}`;
+            return (
+              <button
+                key={p.type}
+                onClick={() => addWf(p)}
+                className="flex items-center gap-1 rounded-lg border border-indigo-500/40 bg-indigo-500/10 px-2 py-1.5 text-[11px] font-semibold text-indigo-200 hover:bg-indigo-500/20 disabled:opacity-40 disabled:cursor-not-allowed"
+                disabled={blocked}
+                title={tip}
+              >
+                <Plus size={11} /> {p.label.replace(" (WF)", "")}
+              </button>
+            );
+          })}
         </div>
 
-        {/* After totals */}
+        {/* After totals (all in MYR) */}
         <div className="mt-3 rounded-lg bg-[var(--surface-2)] p-3">
           <div className="grid grid-cols-2 gap-2 text-[11.5px] sm:grid-cols-4">
             <TotalCell label="Total invested" value={fmt0(afterTotalInvest)} />
-            <TotalCell label="WF drawdown" value={fmt0(wfTotalAmount)} />
+            <TotalCell label="WF drawdown (MYR eq.)" value={fmt0(wfTotalAmountMYR)} />
             <TotalCell label="Monthly income" value={fmt0(afterMonthly)} accent />
             <TotalCell label="12M income" value={fmt0(after12M)} accent />
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-x-3 text-[10px] text-[var(--text-muted)]">
             <span>Return on capital: <b className="text-[var(--text)]">{pct(returnOnCapital)}</b> p.a.</span>
-            <span>· Collateral available: <b className={`text-[var(--text)] ${overCollateral ? "text-danger" : ""}`}>{fmt0(availableCollateral)}</b></span>
+            <span>· Collateral available: <b className={`${overCollateral ? "text-danger" : nearMarginCall ? "text-warning" : "text-[var(--text)]"}`}>
+              RM {fmt0(availableCollateral)}
+            </b></span>
+            <span>· Utilisation: <b className={`${overCollateral ? "text-danger" : nearMarginCall ? "text-warning" : "text-[var(--text)]"}`}>
+              {pct(utilisation)}
+            </b></span>
+          </div>
+          {/* Utilisation bar */}
+          <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-[var(--surface)]">
+            <div
+              className="h-full transition-all"
+              style={{
+                width: `${Math.min(100, utilisation * 100)}%`,
+                background: overCollateral ? "#ef4444" : nearMarginCall ? "#f59e0b" : "#10b981",
+              }}
+            />
           </div>
         </div>
 
-        {/* Over-collateral warning */}
+        {/* MARGIN BREACH — blocks drawdown */}
         {overCollateral && (
-          <div className="mt-3 flex items-start gap-2 rounded-lg border border-danger/40 bg-danger/10 p-2.5 text-[11px] text-danger wf-rise">
-            <AlertTriangle size={13} className="mt-0.5 shrink-0" />
-            <span>
-              WF drawdown ({fmt0(wfTotalAmount)}) exceeds recognised collateral ({fmt0(totalCollateral)}).
-              Reduce WF amount by RM {fmt0(wfTotalAmount - totalCollateral)}.
-            </span>
+          <div className="mt-3 flex items-start gap-2 rounded-lg border border-danger/40 bg-danger/10 p-2.5 text-[11.5px] text-danger wf-rise">
+            <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+            <div>
+              <b>MARGIN CALL — drawdown rejected.</b><br />
+              WF drawdown (RM {fmt0(wfTotalAmountMYR)}) exceeds recognised collateral (RM {fmt0(totalCollateral)}).
+              Reduce by at least RM {fmt0(wfTotalAmountMYR - totalCollateral)} to proceed.
+            </div>
+          </div>
+        )}
+
+        {/* NEAR MARGIN CALL — warning only */}
+        {nearMarginCall && (
+          <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-2.5 text-[11.5px] text-amber-200 wf-rise">
+            <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+            <div>
+              <b>High utilisation ({pct(utilisation)}).</b><br />
+              A small FX move or valuation drop could trigger a margin call. Keep headroom —
+              typically Wayne wouldn't take utilisation above 70-75%.
+            </div>
           </div>
         )}
 
@@ -744,6 +862,41 @@ export default function WFPage() {
           <Download size={14} /> After PNG
         </button>
       </section>
+
+      {/* FX spot rate card reference — LIVE from Yahoo via /api/fx-spot */}
+      <details className="wf-card mb-3" open>
+        <summary className="cursor-pointer text-[11.5px] font-semibold">
+          💱 Live FX spot rates vs MYR
+          <span className={`ml-2 wf-chip text-white ${
+            fxSource === "yahoo" ? "bg-emerald-500"
+            : fxSource === "cache" ? "bg-sky-500"
+            : fxSource === "loading" ? "bg-slate-400"
+            : "bg-amber-500"
+          }`}>
+            {fxSource === "loading" ? "loading…"
+             : fxSource === "yahoo" ? "live"
+             : fxSource === "cache" ? "cached"
+             : "fallback"}
+          </span>
+          {fxFetchedAt && (
+            <span className="ml-2 text-[10px] font-normal text-[var(--text-muted)]">
+              as of {new Date(fxFetchedAt).toLocaleString([], { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "short" })}
+            </span>
+          )}
+        </summary>
+        <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] sm:grid-cols-5">
+          {Object.entries(fxSpot).filter(([k]) => k !== "MYR").map(([ccy, r]) => (
+            <div key={ccy} className="flex items-baseline justify-between border-b border-dashed border-[var(--line)] py-1">
+              <span className="font-mono font-semibold">1 {ccy}</span>
+              <span className="tabular text-[var(--text-muted)]">RM {r.toFixed(4)}</span>
+            </div>
+          ))}
+        </div>
+        <p className="mt-2 text-[9.5px] text-[var(--text-muted)]">
+          Pulled from Yahoo Finance ({`{CCY}MYR=X`}) every 5 minutes while this page is open.
+          If Yahoo is unreachable, hardcoded fallback rates are used (shown as "fallback" above).
+        </p>
+      </details>
 
       {/* COF rate card reference */}
       <details className="wf-card">
@@ -926,8 +1079,8 @@ const BeforeSlide = forwardRef<HTMLDivElement, { clientName: string; proposalDat
   ));
 BeforeSlide.displayName = "BeforeSlide";
 
-const AfterSlide = forwardRef<HTMLDivElement, { clientName: string; proposalDate: string; base: BaseRowProp[]; wfs: WfRow[]; wfTotalAmount: number; wfMonthlyNet: number; totals: TotalsProp }>(
-  ({ clientName, proposalDate, base, wfs, wfTotalAmount, wfMonthlyNet, totals }, ref) => (
+const AfterSlide = forwardRef<HTMLDivElement, { clientName: string; proposalDate: string; base: BaseRowProp[]; wfs: WfRow[]; fxSpot: Record<string, number>; wfTotalAmount: number; wfMonthlyNet: number; totals: TotalsProp }>(
+  ({ clientName, proposalDate, base, wfs, fxSpot, wfTotalAmount, wfMonthlyNet, totals }, ref) => (
     <div ref={ref} style={slideWrap}>
       {slideHeader(clientName, proposalDate, "B · With Wealth Financing")}
       <div style={{ fontSize: 20, fontWeight: 800, marginBottom: 4 }}>With WF Drawdowns</div>
@@ -952,10 +1105,13 @@ const AfterSlide = forwardRef<HTMLDivElement, { clientName: string; proposalDate
           No WF drawdowns yet.
         </div>
       ) : wfs.map((r) => {
-        const monthlyGross = (r.wfAmount * r.returnPa) / 12;
         const rate = allInRate(r.currency, r.tenor);
-        const monthlyCost = (r.wfAmount * rate) / 12;
-        const monthlyNet = monthlyGross - monthlyCost;
+        const fx = fxSpot[r.currency] ?? FX_FALLBACK[r.currency] ?? 1;
+        const grossCCY = (r.wfAmount * r.returnPa) / 12;
+        const costCCY  = (r.wfAmount * rate) / 12;
+        const netCCY   = grossCCY - costCCY;
+        const wfMYR    = r.wfAmount * fx;
+        const netMYR   = netCCY * fx;
         const colour = COLORS[r.type];
         return (
           <div key={r.id} style={{
@@ -973,9 +1129,9 @@ const AfterSlide = forwardRef<HTMLDivElement, { clientName: string; proposalDate
                 {r.currency} · {r.tenor}M
               </div>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, fontSize: 11 }}>
-              <SlideKV label="WF amount" value={`RM ${fmt0(r.wfAmount)}`} />
-              <SlideKV label="Return" value={pct(r.returnPa)} />
+            <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr", gap: 8, fontSize: 11 }}>
+              <SlideKV label="WF amount" value={`${r.currency} ${fmt0(r.wfAmount)}  ·  ≈ RM ${fmt0(wfMYR)}`} />
+              <SlideKV label={`Return (in ${r.currency})`} value={pct(r.returnPa)} />
               <SlideKV label="All-in cost" value={pct(rate)} tone="#ef4444" />
             </div>
             <div style={{
@@ -984,8 +1140,13 @@ const AfterSlide = forwardRef<HTMLDivElement, { clientName: string; proposalDate
               border: `1px solid ${colour}40`,
             }}>
               <span style={{ fontSize: 11, color: "#64748b" }}>Net monthly income</span>
-              <span style={{ fontSize: 16, fontWeight: 800, color: monthlyNet >= 0 ? "#10b981" : "#ef4444" }}>
-                {monthlyNet >= 0 ? "+" : ""}RM {fmt0(monthlyNet)}
+              <span style={{ textAlign: "right" }}>
+                <div style={{ fontSize: 15, fontWeight: 800, color: netCCY >= 0 ? "#10b981" : "#ef4444" }}>
+                  {netCCY >= 0 ? "+" : ""}{r.currency} {fmt0(netCCY)}
+                </div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: netMYR >= 0 ? "#10b981" : "#ef4444" }}>
+                  ≈ {netMYR >= 0 ? "+" : ""}RM {fmt0(netMYR)}
+                </div>
               </span>
             </div>
           </div>
@@ -1011,12 +1172,12 @@ AfterSlide.displayName = "AfterSlide";
 
 const SummarySlide = forwardRef<HTMLDivElement, {
   clientName: string; proposalDate: string;
-  base: BaseRowProp[]; wfs: WfRow[];
+  base: BaseRowProp[]; wfs: WfRow[]; fxSpot: Record<string, number>;
   before: { invest: number; monthly: number; m6: number; annual: number; roc: number };
   after:  { invest: number; monthly: number; m6: number; annual: number; roc: number };
   uplift: { monthly: number; pct: number };
 }>(
-  ({ clientName, proposalDate, base, wfs, before, after, uplift }, ref) => {
+  ({ clientName, proposalDate, base, wfs, fxSpot, before, after, uplift }, ref) => {
     // Bar chart scale (horizontal bars)
     const maxVal = Math.max(before.annual, after.annual, 1);
     const scaleW = (v: number) => (v / maxVal) * 100;
@@ -1109,7 +1270,11 @@ const SummarySlide = forwardRef<HTMLDivElement, {
             total={after.invest}
             segs={[
               ...base.filter((r) => r.investment > 0).map((r) => ({ value: r.investment, colour: COLORS[r.type], label: r.label })),
-              ...wfs.filter((r) => r.wfAmount > 0).map((r) => ({ value: r.wfAmount, colour: COLORS[r.type], label: COLOR_LABEL[r.type] })),
+              ...wfs.filter((r) => r.wfAmount > 0).map((r) => ({
+                value: r.wfAmount * (fxSpot[r.currency] ?? FX_FALLBACK[r.currency] ?? 1), // live CCY → MYR
+                colour: COLORS[r.type],
+                label: `${COLOR_LABEL[r.type]} · ${r.currency}`,
+              })),
             ]}
           />
         </div>
