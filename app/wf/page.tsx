@@ -12,7 +12,7 @@
 // walk through it on an iPhone and export the summary panel as a PNG to
 // WhatsApp directly to the client.
 
-import { useMemo, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import {
   Banknote, Download, Share2, Plus, Trash2, Users, AlertTriangle,
   TrendingUp, Wallet, PiggyBank, FileSpreadsheet, Zap,
@@ -105,6 +105,11 @@ export default function WFPage() {
   const [base, setBase] = useState<BaseRow[]>(BASE_DEFAULTS);
   const [wfs, setWfs] = useState<WfRow[]>([]);
   const [proposalDate] = useState(() => new Date().toISOString().slice(0, 10));
+  // Raw string state for the return-% inputs so typing "7.5" or "0.25" feels
+  // natural (the auto-formatter was overwriting mid-typing). We sync to the
+  // numeric model on blur / commit.
+  const [baseReturnDrafts, setBaseReturnDrafts] = useState<Record<number, string>>({});
+  const [wfReturnDrafts, setWfReturnDrafts] = useState<Record<string, string>>({});
 
   // ─── Derived numbers ────────────────────────────────────────────────
   const beforeTotalInvest = base.reduce((s, r) => s + r.investment, 0);
@@ -180,9 +185,15 @@ export default function WFPage() {
     if (!el) return;
     setExporting(which);
     try {
+      // Pick a solid background that always renders — getComputedStyle on a
+      // CSS variable is unreliable across browsers. Match the user's theme.
+      const isDark = document.documentElement.classList.contains("dark")
+        || !document.documentElement.classList.contains("light");
+      const bg = isDark ? "#0d111c" : "#ffffff";
       const dataUrl = await htmlToImage.toPng(el, {
         pixelRatio: 2,
-        backgroundColor: getComputedStyle(document.documentElement).getPropertyValue("--bg") || "#0d111c",
+        backgroundColor: bg,
+        cacheBust: true,
       });
       const label = clientName ? clientName.replace(/[^A-Za-z0-9_-]/g, "_") : "WF";
       const filename = `WF-${label}-${which}-${proposalDate}.png`;
@@ -306,9 +317,12 @@ export default function WFPage() {
                     <input
                       className="wf-input wf-input-sm mt-0.5"
                       type="number" inputMode="decimal" min={0}
-                      value={r.investment || ""}
+                      value={r.investment === 0 ? "" : r.investment}
                       placeholder="0"
-                      onChange={(e) => updateBase(i, { investment: Math.max(0, Number(e.target.value) || 0) })}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        updateBase(i, { investment: v === "" ? 0 : Math.max(0, Number(v) || 0) });
+                      }}
                     />
                   </label>
                   <label className="block">
@@ -316,9 +330,17 @@ export default function WFPage() {
                     <div className="relative">
                       <input
                         className="wf-input wf-input-sm mt-0.5 pr-6"
-                        type="number" inputMode="decimal" step="0.1" min={0}
-                        value={(r.returnPa * 100).toFixed(2)}
-                        onChange={(e) => updateBase(i, { returnPa: Math.max(0, (Number(e.target.value) || 0) / 100) })}
+                        type="text" inputMode="decimal"
+                        value={baseReturnDrafts[i] ?? (r.returnPa * 100).toString()}
+                        onChange={(e) => {
+                          const raw = e.target.value;
+                          setBaseReturnDrafts((d) => ({ ...d, [i]: raw }));
+                          const n = Number(raw);
+                          if (Number.isFinite(n) && n >= 0) {
+                            updateBase(i, { returnPa: n / 100 });
+                          }
+                        }}
+                        onBlur={() => setBaseReturnDrafts((d) => { const { [i]: _, ...rest } = d; return rest; })}
                       />
                       <span className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 text-[10px] text-[var(--text-muted)]">%</span>
                     </div>
@@ -427,9 +449,12 @@ export default function WFPage() {
                     <input
                       className="wf-input wf-input-sm mt-0.5"
                       type="number" inputMode="decimal" min={0}
-                      value={r.wfAmount || ""}
+                      value={r.wfAmount === 0 ? "" : r.wfAmount}
                       placeholder="0"
-                      onChange={(e) => updateWf(r.id, { wfAmount: Math.max(0, Number(e.target.value) || 0) })}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        updateWf(r.id, { wfAmount: v === "" ? 0 : Math.max(0, Number(v) || 0) });
+                      }}
                     />
                   </label>
                   <label className="block">
@@ -437,9 +462,17 @@ export default function WFPage() {
                     <div className="relative">
                       <input
                         className="wf-input wf-input-sm mt-0.5 pr-6"
-                        type="number" inputMode="decimal" step="0.1" min={0}
-                        value={(r.returnPa * 100).toFixed(2)}
-                        onChange={(e) => updateWf(r.id, { returnPa: Math.max(0, (Number(e.target.value) || 0) / 100) })}
+                        type="text" inputMode="decimal"
+                        value={wfReturnDrafts[r.id] ?? (r.returnPa * 100).toString()}
+                        onChange={(e) => {
+                          const raw = e.target.value;
+                          setWfReturnDrafts((d) => ({ ...d, [r.id]: raw }));
+                          const n = Number(raw);
+                          if (Number.isFinite(n) && n >= 0) {
+                            updateWf(r.id, { returnPa: n / 100 });
+                          }
+                        }}
+                        onBlur={() => setWfReturnDrafts((d) => { const { [r.id]: _, ...rest } = d; return rest; })}
                       />
                       <span className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 text-[10px] text-[var(--text-muted)]">%</span>
                     </div>
