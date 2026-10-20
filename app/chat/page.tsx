@@ -13,11 +13,12 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom";
 import {
   MessageCircle, Send, AlertTriangle, Pencil, Image as ImageIcon,
-  Trash2, Briefcase, BookmarkPlus, Check, Copy,
+  Trash2, Briefcase, BookmarkPlus, Check, Copy, TrendingUp, ExternalLink,
 } from "lucide-react";
 import { getSupabaseBrowser } from "@/lib/supabaseClient";
 import { upsertTranche } from "@/lib/storage";
 import { decodeTranche } from "@/lib/trancheShare";
+import { decodeStock, type StockSnap } from "@/lib/stockShare";
 import { PixelTim } from "@/components/PixelTim";
 import type { Tranche } from "@/lib/types";
 
@@ -31,7 +32,7 @@ interface ChatMessage {
   sender_name: string;
   body: string;
   attachment_url: string | null;
-  attachment_type: "image" | "audio" | "tranche" | null;
+  attachment_type: "image" | "audio" | "tranche" | "stock" | null;
   created_at: string;
 }
 
@@ -677,6 +678,17 @@ export default function ChatPage() {
                       >
                         <TrancheCard tranche={trancheData} />
                       </div>
+                    ) : m.attachment_type === "stock" && decodeStock(m.body) ? (
+                      <div
+                        className={`msg-bubble select-none ${isMenuTarget ? "chat-press-target" : ""}`}
+                        onPointerDown={(e) => startLongPress(e, m.id, isMe)}
+                        onPointerUp={cancelLongPress}
+                        onPointerLeave={cancelLongPress}
+                        onPointerCancel={cancelLongPress}
+                        onContextMenu={(e) => e.preventDefault()}
+                      >
+                        <StockCard stock={decodeStock(m.body)!} />
+                      </div>
                     ) : (
                       <div
                         className={`msg-bubble select-none rounded-2xl px-3 py-2 text-[13px] leading-relaxed ${isMe ? "rounded-br-md" : "bg-[var(--surface-2)] rounded-bl-md"} ${isMenuTarget ? "chat-press-target" : ""}`}
@@ -943,6 +955,69 @@ function Cell({ label, value }: { label: string; value: string }) {
     <div className="rounded bg-[var(--surface)] py-1 px-0.5">
       <div className="text-[9px] uppercase tracking-wider text-[var(--text-muted)]">{label}</div>
       <div className="tabular text-[11px] font-semibold">{value}</div>
+    </div>
+  );
+}
+
+/* ─────────────── Stock share card ───────────────
+   Rendered when attachment_type === "stock". Tapping "Open in Analyze"
+   deep-links to the Analyze tab with the symbol pre-loaded. */
+function StockCard({ stock }: { stock: StockSnap }) {
+  const fmtPrice = (n: number | null, ccy: string | null) =>
+    n == null ? "—" : `${ccy || ""} ${n.toFixed(2)}`;
+  const fmtBig = (n: number | null) => {
+    if (n == null) return "—";
+    const abs = Math.abs(n);
+    if (abs >= 1e12) return `${(n / 1e12).toFixed(1)}T`;
+    if (abs >= 1e9) return `${(n / 1e9).toFixed(1)}B`;
+    if (abs >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
+    return n.toFixed(0);
+  };
+  const perf = stock.perf30d != null
+    ? `${stock.perf30d >= 0 ? "+" : ""}${stock.perf30d.toFixed(1)}%`
+    : "—";
+  const perfColor = stock.perf30d != null
+    ? (stock.perf30d >= 0 ? "#7CC09E" : "#E0857D")
+    : undefined;
+
+  return (
+    <div className="rounded-xl border border-[var(--line)] bg-[var(--surface-2)] p-2.5 text-[11.5px] w-[260px] max-w-full">
+      <header className="mb-1.5 flex items-center justify-between gap-2 border-b border-[var(--line)] pb-1.5">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <TrendingUp size={12} className="flex-shrink-0 text-accent" />
+          <span className="font-mono text-[12.5px] font-semibold">{stock.symbol}</span>
+          <span className="text-[10px] text-[var(--text-muted)]">· {stock.market}</span>
+        </div>
+        {stock.sector && (
+          <span className="rounded bg-[var(--surface)] border border-[var(--line)] px-1.5 py-0.5 text-[9.5px] font-semibold uppercase tracking-wider text-[var(--text-muted)] truncate max-w-[90px]">
+            {stock.sector.split(" ")[0]}
+          </span>
+        )}
+      </header>
+      <div className="mb-2 text-[12px] font-semibold leading-tight truncate">
+        {stock.longName}
+      </div>
+      <div className="grid grid-cols-3 gap-1 text-center mb-2.5">
+        <StockMetric label="Price" value={fmtPrice(stock.price, stock.currency)} />
+        <StockMetric label="30d" value={perf} valueStyle={perfColor ? { color: perfColor } : undefined} />
+        <StockMetric label="Mkt Cap" value={fmtBig(stock.marketCap)} />
+      </div>
+      <a
+        href={`/analyze?symbol=${encodeURIComponent(stock.symbol)}&market=${encodeURIComponent(stock.market)}`}
+        className="flex items-center justify-center gap-1.5 w-full rounded-lg border border-accent/30 bg-accent/10 py-1.5 text-[11px] font-semibold text-accent transition-colors hover:bg-accent/20"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <ExternalLink size={11} /> Open in Analyze
+      </a>
+    </div>
+  );
+}
+
+function StockMetric({ label, value, valueStyle }: { label: string; value: string; valueStyle?: React.CSSProperties }) {
+  return (
+    <div className="rounded bg-[var(--surface)] py-1 px-0.5">
+      <div className="text-[9px] uppercase tracking-wider text-[var(--text-muted)]">{label}</div>
+      <div className="tabular text-[11px] font-semibold" style={valueStyle}>{value}</div>
     </div>
   );
 }

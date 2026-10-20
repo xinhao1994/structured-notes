@@ -24,7 +24,7 @@ import {
   LineChart, Search, AlertTriangle, Copy, Check, Download,
   Building2, TrendingUp, BarChart3, Target, Sparkles, MapPin,
   ExternalLink, PieChart, Activity, Calendar, ArrowUpRight, ArrowDownRight,
-  Users, DollarSign, Swords, ArrowRight,
+  Users, DollarSign, Swords, ArrowRight, Share2,
 } from "lucide-react";
 import {
   LineChart as RLineChart, Line, ResponsiveContainer, XAxis, YAxis, Tooltip,
@@ -34,6 +34,8 @@ import {
 import * as htmlToImage from "html-to-image";
 import { STOCK_HOOKS, genericHook } from "@/lib/stockHooks";
 import type { MarketCode } from "@/lib/types";
+import { getSupabaseBrowser } from "@/lib/supabaseClient";
+import { encodeStock, type StockSnap } from "@/lib/stockShare";
 
 // ────────────────────────────────────────────────────────────────────────
 // SOFT CHART PALETTE — easy on the eyes for a dark-themed app. Avoids
@@ -262,6 +264,17 @@ function AnalyzePageContent() {
               {data.warnings.map((w, i) => <div key={i}>⚠ {w}</div>)}
             </div>
           )}
+          {/* Share bar — one-tap to post this stock as a card in Chat */}
+          <div className="card mb-3 flex items-center justify-between gap-2 p-2.5">
+            <div className="min-w-0 flex items-center gap-2">
+              <TrendingUp size={13} className="flex-shrink-0 text-accent" />
+              <div className="min-w-0">
+                <span className="font-mono font-semibold text-[13px]">{data.symbol}</span>
+                <span className="ml-1.5 text-[11px] text-[var(--text-muted)] truncate">{data.snapshot.longName}</span>
+              </div>
+            </div>
+            <ShareToChatButton data={data} />
+          </div>
           <BackgroundCard data={data} />
           <CompetitorsCard data={data} onCompare={loadCompare} />
           <FundamentalsCard data={data} />
@@ -1184,6 +1197,63 @@ function CopyButton({ text, label }: { text: string; label: string }) {
       title="Copy to WhatsApp"
     >
       {copied ? <Check size={12} /> : <Copy size={12} />} {copied ? "Copied" : label}
+    </button>
+  );
+}
+
+const CHAT_NAME_KEY = "snd.chat.senderName.v1";
+
+function ShareToChatButton({ data }: { data: Profile }) {
+  const [state, setState] = useState<"idle" | "sharing" | "done" | "error">("idle");
+
+  async function share() {
+    setState("sharing");
+    try {
+      const supa = getSupabaseBrowser();
+      if (!supa) throw new Error("Supabase not configured");
+
+      let senderName = "Analyze";
+      try { senderName = localStorage.getItem(CHAT_NAME_KEY) || "Analyze"; } catch {}
+
+      const snap: StockSnap = {
+        symbol: data.symbol,
+        market: data.market,
+        longName: data.snapshot.longName,
+        price: data.snapshot.price,
+        currency: data.snapshot.currency,
+        marketCap: data.snapshot.marketCap,
+        perf30d: data.snapshot.perf30d,
+        forwardPE: data.fundamentals.forwardPE,
+        sector: data.profile.sector,
+      };
+
+      const { error } = await supa.from("chat_messages").insert({
+        sender_name: senderName.slice(0, 32),
+        body: encodeStock(snap),
+        attachment_url: null,
+        attachment_type: "stock",
+      });
+      if (error) throw error;
+      setState("done");
+      setTimeout(() => setState("idle"), 2500);
+    } catch {
+      setState("error");
+      setTimeout(() => setState("idle"), 2000);
+    }
+  }
+
+  return (
+    <button
+      onClick={share}
+      disabled={state === "sharing"}
+      className="btn h-8 px-3 text-[11px] flex items-center gap-1.5"
+      style={state === "done" ? { color: "var(--color-success, #7CC09E)" } : undefined}
+      title="Share this stock as a card in Chat"
+    >
+      {state === "idle" && <><Share2 size={12} /> Share to Chat</>}
+      {state === "sharing" && <>Sharing...</>}
+      {state === "done" && <><Check size={12} /> Shared!</>}
+      {state === "error" && <>Try again</>}
     </button>
   );
 }
