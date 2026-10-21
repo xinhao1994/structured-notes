@@ -1192,11 +1192,15 @@ export function parseTrancheText(input: string): ParseResult {
   //   • Inline with KO: "KO: 100%, stepdown 3%"
   //   • Inline reversed: "3% stepdown", "(3% step down)"
   //   • On its OWN line: "Stepdown: 6%" or "Step down: 6%"
+  //   • SD abbreviation: "KO: 100% SD 5%" (bank blotter shorthand)
   // We search the KO line first (preserves old behaviour), then fall back
   // to a dedicated field label scan across the full text.
   const stepdownPct =
     pct(koLine.match(/step\s*down\s*:?\s+([0-9.]+\s*%)/i)?.[1]) ??
     pct(koLine.match(/([0-9.]+\s*%)\s+step\s*down/i)?.[1]) ??
+    // "SD 5%" or "5% SD" — short abbreviation used in bank blotters
+    pct(koLine.match(/\bSD\s+([0-9.]+\s*%)/i)?.[1]) ??
+    pct(koLine.match(/([0-9.]+\s*%)\s+SD\b/i)?.[1]) ??
     pct(parseField(text, /step\s*down\s*:?\s+([0-9.]+\s*%)/i)) ??
     pct(text.match(/([0-9.]+\s*%)\s+step\s*down/i)?.[1]) ??
     0;

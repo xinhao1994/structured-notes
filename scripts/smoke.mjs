@@ -155,6 +155,21 @@ eq(r2.tranche.underlyings.length, 2, "v2: 2 underlyings (parens-suffixed)");
 eq(r2.tranche.underlyings.map(u => u.symbol).join(","), "ANET,APH", "v2: ANET, APH detected");
 eq(r2.tranche.underlyings[0].rawName, "ANET (Arista Networks)", "v2: rawName preserves company");
 
+// ─── SD abbreviation: "KO: 100% SD 5%" (bank blotter shorthand) ────────────
+const SAMPLE_SD = `MSI
+Trade: 21 Oct 2026
+MYR
+NVDA US
+Strike 100%
+KO: 100% SD 5%
+Coupon 12% p.a.
+Tenor 12M
+EKI 65%
+`;
+const rSD = parseTrancheText(SAMPLE_SD);
+near(rSD.tranche.koStartPct,    1.00, 1e-9, "sd: KO start 100%");
+near(rSD.tranche.koStepdownPct, 0.05, 1e-9, "sd: SD 5% detected as stepdown");
+
 // ─── Summary ───────────────────────────────────────────────────────────────
 console.log("\n────────────────");
 console.log(`${pass} passed · ${fail} failed`);
