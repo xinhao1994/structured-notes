@@ -1182,8 +1182,11 @@ export function parseTrancheText(input: string): ParseResult {
     warnings.push({ field: "tenor", message: "Tenor not found — defaulted to 12M." });
   }
 
-  const strikePct = pct(parseField(text, /Strike\s*:?\s+([0-9.]+\s*%)/i)) ?? 1.0;
-  const ekiPct = pct(parseField(text, /EKI\s*:?\s+([0-9.]+\s*%)/i)) ?? 0.6;
+  // "Strike & EKI : 60%" — combined field; both get the same value.
+  // Must be checked before the individual patterns so the shared value wins.
+  const strikeEkiShared = pct(parseField(text, /Strike\s*[&\/]\s*EKI\s*:?\s+([0-9.]+\s*%)/i));
+  const strikePct = strikeEkiShared ?? pct(parseField(text, /Strike\s*:?\s+([0-9.]+\s*%)/i)) ?? 1.0;
+  const ekiPct    = strikeEkiShared ?? pct(parseField(text, /EKI\s*:?\s+([0-9.]+\s*%)/i))    ?? 0.6;
 
   // Accept "KO" or "Autocall" as the knock-out/autocall field label.
   const koLine = parseField(text, /(?:KO|Autocall)\s*:?\s+([^\n]+)/i) || "";

@@ -170,6 +170,24 @@ const rSD = parseTrancheText(SAMPLE_SD);
 near(rSD.tranche.koStartPct,    1.00, 1e-9, "sd: KO start 100%");
 near(rSD.tranche.koStepdownPct, 0.05, 1e-9, "sd: SD 5% detected as stepdown");
 
+// ─── "Strike & EKI : 60%" combined field ──────────────────────────────────
+const SAMPLE_COMBINED = `MSI
+Close today 4pm
+MYR
+Marvell US
+Intel US
+Dell US
+Tenure : 12 months
+Yield : 10% pa
+Strike & EKI : 60%
+Autocall : 105% (4% Step down)
+`;
+const rC = parseTrancheText(SAMPLE_COMBINED);
+near(rC.tranche.strikePct, 0.60, 1e-9, "combined: Strike & EKI 60% → strikePct 60%");
+near(rC.tranche.ekiPct,    0.60, 1e-9, "combined: Strike & EKI 60% → ekiPct 60%");
+near(rC.tranche.koStartPct, 1.05, 1e-9, "combined: Autocall 105%");
+near(rC.tranche.koStepdownPct, 0.04, 1e-9, "combined: 4% stepdown");
+
 // ─── Summary ───────────────────────────────────────────────────────────────
 console.log("\n────────────────");
 console.log(`${pass} passed · ${fail} failed`);
