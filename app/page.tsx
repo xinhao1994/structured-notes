@@ -17,6 +17,7 @@ import { parseTrancheText } from "@/lib/parser";
 import type { Tranche } from "@/lib/types";
 import { BookmarkPlus, BellRing, AlertTriangle, Wallet, Check } from "lucide-react";
 import { trackEvent } from "@/lib/trackEvent";
+import { useToast } from "@/components/Toast";
 
 export default function HomePage() {
   // Lazy state initialiser — runs ONCE on first render per mount. Reading
@@ -29,6 +30,7 @@ export default function HomePage() {
     const text = t && t.trim() ? t : SAMPLE_TRANCHE_TEXT;
     return parseTrancheText(text);
   });
+  const toast = useToast();
   const [saved, setSaved] = useState(false);
 
   // Belt-and-braces: on mount AND whenever another tab updates the current
@@ -131,6 +133,7 @@ export default function HomePage() {
     trackEvent("desk:save-to-pocket", { trancheCode: toSave.trancheCode });
     upsertTranche(toSave);
     setSaved(true);
+    toast.success(`${toSave.trancheCode} saved to Pocket`);
     setTimeout(() => setSaved(false), 6000);
   }
 

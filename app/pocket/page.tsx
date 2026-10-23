@@ -24,9 +24,11 @@ import { useQuotes } from "@/lib/hooks/useQuotes";
 import { assessRisk, currentKoLevel, formatPx } from "@/lib/calc";
 import type { MarketCode, RiskBand } from "@/lib/types";
 import { trackEvent } from "@/lib/trackEvent";
+import { useToast } from "@/components/Toast";
 import clsx from "clsx";
 
 export default function PocketPage() {
+  const toast = useToast();
   const [list, setList] = useState<PocketEntry[]>([]);
   const [q, setQ] = useState("");                 // free-text search
   const [pickedId, setPickedId] = useState("");   // dropdown selection (empty = all)
@@ -93,11 +95,14 @@ export default function PocketPage() {
     if (!confirm("Remove this tranche from Pocket?")) return;
     trackEvent("pocket:delete");
     removePocket(id); setList(listPocket());
+    toast.info("Removed from Pocket");
   }
   function handlePin(id: string) {
     const entry = list.find((e) => e.id === id);
-    trackEvent(entry?.pinned ? "pocket:unpin" : "pocket:pin");
+    const willPin = !entry?.pinned;
+    trackEvent(willPin ? "pocket:pin" : "pocket:unpin");
     togglePin(id); setList(listPocket());
+    toast.success(willPin ? "Pinned to top" : "Unpinned");
   }
   function startEdit(id: string, currentCode: string) { setEditingId(id); setEditingValue(currentCode); }
   function commitEdit(id: string) {
@@ -123,15 +128,15 @@ export default function PocketPage() {
       try { localStorage.setItem("snd.chat.senderName.v1", senderName.trim()); } catch {}
     }
     const encoded = encodeTranche(entry.tranche);
-    if (encoded.length > 2000) { alert("Tranche too large to share."); return; }
+    if (encoded.length > 2000) { toast.error("Tranche too large to share."); return; }
     const { error } = await supa.from("chat_messages").insert({
       sender_name: senderName.trim().slice(0, 32),
       body: encoded,
       attachment_url: null,
       attachment_type: "tranche",
     });
-    if (error) alert("Share failed: " + error.message);
-    else alert(`Shared ${entry.tranche.trancheCode} to chat.`);
+    if (error) toast.error("Share failed: " + error.message);
+    else toast.success(`${entry.tranche.trancheCode} shared to chat`);
   }
 
   return (
@@ -290,6 +295,47 @@ export default function PocketPage() {
                   </div>
                 </Row>
               </div>
+
+              {/* KO distance bars — one per underlying with live price */}
+              {t.underlyings.some((u) => quotes[u.symbol]?.price != null) && (
+                <div className="mt-2 space-y-1.5 border-t border-[var(--line)] pt-2">
+                  {t.underlyings.map((u) => {
+                    const spot = quotes[u.symbol]?.price;
+                    if (spot == null) return null;
+                    const koLevel = ko ? (ko.koPct * (t.initialFixing?.[u.symbol] ?? spot)) : null;
+                    const strikeLevel = t.strikePct * (t.initialFixing?.[u.symbol] ?? spot);
+                    if (!koLevel) return null;
+                    // pct of spot vs KO: 100% = at KO, 0% = at strike
+                    const range = koLevel - strikeLevel;
+                    const raw = range > 0 ? ((spot - strikeLevel) / range) * 100 : 0;
+                    const pct = Math.max(0, Math.min(100, raw));
+                    const aboveKo = spot >= koLevel;
+                    const nearKo = pct >= 80 && !aboveKo;
+                    return (
+                      <div key={u.symbol}>
+                        <div className="mb-0.5 flex justify-between text-[10.5px]">
+                          <span className="font-mono font-semibold">{u.symbol}</span>
+                          <span className={clsx(
+                            "tabular font-medium",
+                            aboveKo ? "text-success" : nearKo ? "text-warning" : "text-[var(--text-muted)]"
+                          )}>
+                            {aboveKo ? "✓ above KO" : `${(100 - pct).toFixed(0)}% to KO`}
+                          </span>
+                        </div>
+                        <div className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--surface-2)]">
+                          <div
+                            className={clsx(
+                              "h-full rounded-full transition-all duration-700",
+                              aboveKo ? "bg-success" : nearKo ? "bg-warning" : "bg-[var(--accent)]"
+                            )}
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
 
               {/* Notes — editable inline */}
               <div className="mt-2 border-t border-[var(--line)] pt-2 text-[11.5px]">

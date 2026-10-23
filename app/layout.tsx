@@ -9,6 +9,7 @@ import { SwipeNavigator } from "@/components/SwipeNavigator";
 // a global presence channel so the admin dashboard can show live green dots.
 // Edge Middleware (middleware.ts) is the no-JS backup.
 import { VisitTracker } from "@/components/VisitTracker";
+import { ToastProvider } from "@/components/Toast";
 
 export const metadata: Metadata = {
   title: "Structured Notes Desk",
@@ -44,14 +45,16 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body className="min-h-dvh">
         <ThemeProvider>
-          <Header />
-          <main className="mx-auto max-w-6xl px-4 sm:px-6 pb-28 pt-4">
-            {children}
-          </main>
-          <BottomNav />
-          <ServiceWorkerRegister />
-          <SwipeNavigator />
-          <VisitTracker />
+          <ToastProvider>
+            <Header />
+            <main className="mx-auto max-w-6xl px-4 sm:px-6 pb-28 pt-4">
+              {children}
+            </main>
+            <BottomNav />
+            <ServiceWorkerRegister />
+            <SwipeNavigator />
+            <VisitTracker />
+          </ToastProvider>
         </ThemeProvider>
       </body>
     </html>
