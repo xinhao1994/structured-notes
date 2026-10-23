@@ -29,12 +29,25 @@ export function BottomNav() {
               key={t.href}
               href={t.href}
               className={clsx(
-                "flex flex-col items-center justify-center gap-0.5 py-1.5 text-[10.5px] font-medium",
-                active ? "text-accent dark:text-[var(--accent)]" : "text-[var(--text-muted)]"
+                "relative flex flex-col items-center justify-center gap-0.5 py-1.5 text-[10.5px] font-medium transition-colors duration-150",
+                active ? "text-[var(--accent)]" : "text-[var(--text-muted)]"
               )}
             >
-              <Icon size={19} className={active ? "stroke-[2.4]" : ""} />
-              <span>{t.label}</span>
+              {/* Active pill highlight */}
+              {active && (
+                <span
+                  className="absolute inset-x-0.5 top-0.5 bottom-0.5 rounded-xl"
+                  style={{ background: "color-mix(in srgb, var(--accent) 13%, transparent)" }}
+                />
+              )}
+              <Icon
+                size={19}
+                className={clsx(
+                  "relative z-10 transition-transform duration-200",
+                  active ? "stroke-[2.4] scale-110" : ""
+                )}
+              />
+              <span className="relative z-10">{t.label}</span>
             </Link>
           );
         })}

@@ -253,6 +253,47 @@ function AnalyzePageContent() {
         </div>
       )}
 
+      {/* Skeleton loader while fetching */}
+      {loading && (
+        <div className="space-y-3 animate-pulse-none">
+          {/* Hero card skeleton */}
+          <div className="card p-4 space-y-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="space-y-2 flex-1">
+                <div className="skeleton skeleton-heading" />
+                <div className="skeleton skeleton-text narrow" />
+              </div>
+              <div className="skeleton skeleton-num" style={{ height: 32, width: 90 }} />
+            </div>
+            <div className="flex gap-2">
+              <div className="skeleton skeleton-badge" />
+              <div className="skeleton skeleton-badge" style={{ width: 80 }} />
+            </div>
+          </div>
+          {/* Metrics row skeleton */}
+          <div className="card p-4">
+            <div className="skeleton skeleton-text mid mb-4" />
+            <div className="grid grid-cols-2 gap-3">
+              {[1,2,3,4,5,6].map((i) => (
+                <div key={i} className="space-y-1.5">
+                  <div className="skeleton skeleton-text narrow" />
+                  <div className="skeleton skeleton-num" />
+                </div>
+              ))}
+            </div>
+          </div>
+          {/* Analyst card skeleton */}
+          <div className="card p-4 space-y-2">
+            <div className="skeleton skeleton-text mid" />
+            <div className="skeleton" style={{ height: 8, borderRadius: 999 }} />
+            <div className="flex justify-between">
+              <div className="skeleton skeleton-text narrow" />
+              <div className="skeleton skeleton-text narrow" />
+            </div>
+          </div>
+        </div>
+      )}
+
       {data && !loading && (
         <>
           {data.inputSymbol && data.inputSymbol.toUpperCase() !== data.symbol && (
