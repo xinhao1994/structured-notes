@@ -97,6 +97,24 @@ export async function GET(req: NextRequest) {
     console.log(`[admin/data] button_events fetch failed: ${buttonEventsError}`);
   }
 
+  // If button_events table doesn't exist yet, read fallback rows from page_visits
+  if (buttonEvents.length === 0) {
+    try {
+      const fallbackRows = await supaFetch(
+        `page_visits?select=path,created_at&path=like.__btn%25&order=created_at.desc&limit=10000`
+      );
+      if (Array.isArray(fallbackRows) && fallbackRows.length > 0) {
+        const mapped = fallbackRows.map((r: any) => ({
+          button_name: String(r.path ?? "").replace(/^__btn:/, ""),
+          page: null,
+          created_at: r.created_at,
+          _fallback: true,
+        }));
+        buttonEvents = [...buttonEvents, ...mapped];
+      }
+    } catch {}
+  }
+
   return NextResponse.json(
     {
       visits,
