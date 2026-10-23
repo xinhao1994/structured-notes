@@ -1,7 +1,7 @@
 // POST /api/migrate/button-events
 // Checks if button_events table exists.
 // If it does → returns {ok: true, exists: true}.
-// If not → returns {ok: false, exists: false, sql: "<DDL to run>"} with the exact SQL Aiden needs to paste into Supabase SQL Editor.
+// If not → returns {ok: false, exists: false, sql: "<DDL to run>"} with the exact SQL to paste into Supabase SQL Editor.
 // Protected by CRON_SECRET.
 
 import { NextRequest, NextResponse } from "next/server";

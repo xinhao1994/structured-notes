@@ -623,7 +623,7 @@ export default function ChatPage() {
               autoFocus value={name}
               onChange={(e) => setName(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") saveName(); }}
-              placeholder="e.g. Aiden" maxLength={32}
+              placeholder="e.g. Alex" maxLength={32}
               className="input h-8 flex-1 text-[13px]"
             />
             <button onClick={saveName} className="btn btn-primary h-8 px-3 text-[11px]">Save</button>

@@ -32,8 +32,6 @@ const PRESET_ENV: Record<string, string> = {
   VAPID_PUBLIC_KEY:              "BFcHsg7xZ-jnngGO1hDbg4Yb8-eaWPxkUY5RQp2wcCv5_llKwqRBHcTXLB0HlaQr0Wqu_D9xboJvcMiPbjl7chg",
   NEXT_PUBLIC_VAPID_PUBLIC_KEY:  "BFcHsg7xZ-jnngGO1hDbg4Yb8-eaWPxkUY5RQp2wcCv5_llKwqRBHcTXLB0HlaQr0Wqu_D9xboJvcMiPbjl7chg",
   VAPID_PRIVATE_KEY:             "tUFnMMvGaVoAvt-78MHc_X88Jf9pAwhpXw7uK8v6Fx8",
-  VAPID_SUBJECT:                 "mailto:chyi0728016@gmail.com",
-  CRON_SECRET:                   "f7e0d761141078908ab1b83cfdd3dcee4ce539a8c02d528a288026fdb007311c",
 };
 
 /** Today's date in YYYY-MM-DD on the Malaysia clock (UTC+8). */
