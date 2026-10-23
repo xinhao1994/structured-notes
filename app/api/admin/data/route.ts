@@ -65,12 +65,12 @@ export async function GET(req: NextRequest) {
 
   let visits: any[] = [];
   let messages: any[] = [];
+  let buttonEvents: any[] = [];
   let visitsError: string | null = null;
   let messagesError: string | null = null;
+  let buttonEventsError: string | null = null;
 
   try {
-    // Pull more than the previous 500 — we have cheap bandwidth and users
-    // want full history. Order newest first so the client just takes the top.
     visits = await supaFetch(
       `page_visits?select=${encodeURIComponent(VISIT_COLS)}&order=created_at.desc&limit=5000`
     );
@@ -88,16 +88,28 @@ export async function GET(req: NextRequest) {
     console.log(`[admin/data] chat_messages fetch failed: ${messagesError}`);
   }
 
+  try {
+    buttonEvents = await supaFetch(
+      `button_events?select=button_name,page,created_at&order=created_at.desc&limit=10000`
+    );
+  } catch (e: any) {
+    buttonEventsError = String(e?.message || e);
+    console.log(`[admin/data] button_events fetch failed: ${buttonEventsError}`);
+  }
+
   return NextResponse.json(
     {
       visits,
       messages,
+      buttonEvents,
       generatedAt: new Date().toISOString(),
       _debug: {
         visits_count: visits.length,
         messages_count: messages.length,
+        button_events_count: buttonEvents.length,
         visits_error: visitsError,
         messages_error: messagesError,
+        button_events_error: buttonEventsError,
       },
     },
     {

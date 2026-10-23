@@ -16,6 +16,7 @@ import { SAMPLE_TRANCHE_TEXT } from "@/lib/sample";
 import { parseTrancheText } from "@/lib/parser";
 import type { Tranche } from "@/lib/types";
 import { BookmarkPlus, BellRing, AlertTriangle, Wallet, Check } from "lucide-react";
+import { trackEvent } from "@/lib/trackEvent";
 
 export default function HomePage() {
   // Lazy state initialiser — runs ONCE on first render per mount. Reading
@@ -127,6 +128,7 @@ export default function HomePage() {
     const toSave =
       trancheWithFixing || baseTranche || tranche || parsedTranche || null;
     if (!toSave) return;
+    trackEvent("desk:save-to-pocket", { trancheCode: toSave.trancheCode });
     upsertTranche(toSave);
     setSaved(true);
     setTimeout(() => setSaved(false), 6000);
@@ -193,7 +195,7 @@ export default function HomePage() {
               {loading ? "Refreshing..." : asOf ? `Last refresh ${new Date(asOf).toLocaleTimeString()}` : "Pulling quotes..."}
             </div>
             <div className="flex gap-2">
-              <button onClick={refresh} className="btn h-9 px-3 text-xs">Refresh</button>
+              <button onClick={() => { trackEvent("desk:refresh-prices"); refresh(); }} className="btn h-9 px-3 text-xs">Refresh</button>
               <button onClick={handleSaveToPocket} className="btn btn-primary h-9 px-3 text-xs">
                 {saved ? <Check size={14} /> : <BookmarkPlus size={14} />}
                 {saved ? "Saved!" : "Save to Pocket"}

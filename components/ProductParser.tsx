@@ -10,6 +10,7 @@ import { Pencil, Sparkles, ClipboardPaste, RotateCcw, CheckCircle2, AlertCircle 
 import { parseTrancheText, type ParseResult } from "@/lib/parser";
 import { SAMPLE_TRANCHE_TEXT } from "@/lib/sample";
 import { getCurrentParsedText, setCurrentParsedText } from "@/lib/storage";
+import { trackEvent } from "@/lib/trackEvent";
 
 interface Props {
   onParsed: (result: ParseResult, rawText: string) => void;
@@ -33,6 +34,7 @@ export function ProductParser({ onParsed, initialText }: Props) {
   }
 
   async function pasteFromClipboard() {
+    trackEvent("desk:orb-paste");
     try {
       const t = await navigator.clipboard.readText();
       if (!t.trim()) {
@@ -179,13 +181,13 @@ export function ProductParser({ onParsed, initialText }: Props) {
             spellCheck={false}
           />
           <div className="mt-3 flex flex-wrap gap-2">
-            <button onClick={() => run(text)} className="btn btn-primary">
+            <button onClick={() => { trackEvent("desk:editor-parse"); run(text); }} className="btn btn-primary">
               <Sparkles size={15} /> Parse this
             </button>
             <button onClick={() => pasteFromClipboard()} className="btn">
               <ClipboardPaste size={15} /> Paste from clipboard
             </button>
-            <button onClick={() => setText(SAMPLE_TRANCHE_TEXT)} className="btn" title="Reset to sample">
+            <button onClick={() => { trackEvent("desk:editor-sample"); setText(SAMPLE_TRANCHE_TEXT); }} className="btn" title="Reset to sample">
               <RotateCcw size={15} /> Sample
             </button>
           </div>

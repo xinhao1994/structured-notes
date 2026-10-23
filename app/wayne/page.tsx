@@ -9,6 +9,7 @@ import { useEffect, useRef, useState } from "react";
 import { Brain, Loader2, Search, TrendingUp, TrendingDown, ShieldAlert, AlertTriangle, CheckCircle2, ClipboardPaste, XCircle, ThumbsUp, ThumbsDown } from "lucide-react";
 import type { MarketCode, Tranche } from "@/lib/types";
 import { parseTrancheText } from "@/lib/parser";
+import { trackEvent } from "@/lib/trackEvent";
 
 interface Projection { year: number; fcf: number; pv: number; }
 interface Analysis {
@@ -208,6 +209,7 @@ export default function WaynePage() {
   async function ask() {
     const s = symbol.trim().toUpperCase();
     if (!s) { inputRef.current?.focus(); return; }
+    trackEvent("wayne:run-dcf", { symbol: s, market });
     setError(null);
     setResult(null);
     setAnalyzing(true);

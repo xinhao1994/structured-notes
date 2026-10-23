@@ -13,6 +13,7 @@
 // WhatsApp directly to the client.
 
 import { Fragment, forwardRef, useEffect, useRef, useState } from "react";
+import { trackEvent } from "@/lib/trackEvent";
 import {
   Banknote, Download, Share2, Plus, Trash2, Users, AlertTriangle,
   TrendingUp, Wallet, PiggyBank, FileSpreadsheet, Zap,
@@ -393,6 +394,7 @@ export default function WFPage() {
              : which === "before" ? beforeSlideRef.current
              : afterSlideRef.current;
     if (!el) return;
+    trackEvent("wf:download-png", { slide: which });
     setExporting(which);
     try {
       // Slides have their own white background baked in — no theme guesswork.

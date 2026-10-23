@@ -19,6 +19,7 @@
 // Every section has a Copy button (WhatsApp-ready), charts have PNG export.
 
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { trackEvent } from "@/lib/trackEvent";
 import { useSearchParams } from "next/navigation";
 import {
   LineChart, Search, AlertTriangle, Copy, Check, Download,
@@ -201,6 +202,7 @@ function AnalyzePageContent() {
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     const s = input.trim(); if (!s) return;
+    trackEvent("analyze:search", { symbol: s, market });
     load(s, market);
   }
 
@@ -1191,7 +1193,7 @@ function CopyButton({ text, label }: { text: string; label: string }) {
   return (
     <button
       onClick={async () => {
-        try { await navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1800); } catch {}
+        try { await navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1800); trackEvent("analyze:copy-section", { section: label }); } catch {}
       }}
       className="btn h-8 px-2.5 text-[11px]"
       title="Copy to WhatsApp"
@@ -1207,6 +1209,7 @@ function ShareToChatButton({ data }: { data: Profile }) {
   const [state, setState] = useState<"idle" | "sharing" | "done" | "error">("idle");
 
   async function share() {
+    trackEvent("analyze:share-to-chat", { symbol: data.symbol });
     setState("sharing");
     try {
       const supa = getSupabaseBrowser();
@@ -1264,6 +1267,7 @@ function DownloadButton({ targetRef, filename }: { targetRef: React.RefObject<HT
     <button
       onClick={async () => {
         if (!targetRef.current) return;
+        trackEvent("analyze:download-png", { filename });
         setBusy(true);
         try {
           const dataUrl = await htmlToImage.toPng(targetRef.current, {

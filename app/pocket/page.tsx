@@ -23,6 +23,7 @@ import { encodeTranche } from "@/lib/trancheShare";
 import { useQuotes } from "@/lib/hooks/useQuotes";
 import { assessRisk, currentKoLevel, formatPx } from "@/lib/calc";
 import type { MarketCode, RiskBand } from "@/lib/types";
+import { trackEvent } from "@/lib/trackEvent";
 import clsx from "clsx";
 
 export default function PocketPage() {
@@ -90,9 +91,14 @@ export default function PocketPage() {
   // Actions
   function handleRemove(id: string) {
     if (!confirm("Remove this tranche from Pocket?")) return;
+    trackEvent("pocket:delete");
     removePocket(id); setList(listPocket());
   }
-  function handlePin(id: string) { togglePin(id); setList(listPocket()); }
+  function handlePin(id: string) {
+    const entry = list.find((e) => e.id === id);
+    trackEvent(entry?.pinned ? "pocket:unpin" : "pocket:pin");
+    togglePin(id); setList(listPocket());
+  }
   function startEdit(id: string, currentCode: string) { setEditingId(id); setEditingValue(currentCode); }
   function commitEdit(id: string) {
     const v = editingValue.trim();
@@ -106,6 +112,7 @@ export default function PocketPage() {
   }
 
   async function handleShareToChat(entry: PocketEntry) {
+    trackEvent("pocket:share-to-chat", { trancheCode: entry.tranche.trancheCode });
     const supa = getSupabaseBrowser();
     if (!supa) { alert("Chat not configured (NEXT_PUBLIC_SUPABASE_ANON_KEY missing)."); return; }
     let senderName = "";

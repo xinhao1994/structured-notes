@@ -13,6 +13,7 @@ import { useDetectedKO } from "@/lib/hooks/useDetectedKO";
 import {
   Calculator, AlertTriangle, CheckCircle2, MessageSquare, RefreshCw, Copy, Check, Trophy,
 } from "lucide-react";
+import { trackEvent } from "@/lib/trackEvent";
 
 const CCYS: Currency[] = ["USD", "HKD", "MYR", "SGD", "JPY", "AUD"];
 
@@ -133,6 +134,7 @@ export default function CalculatorPage() {
 
   async function copyMessage() {
     if (!message) return;
+    trackEvent("calc:copy-message", { templateIdx: tplIdx });
     try {
       await navigator.clipboard.writeText(message);
       setCopied(true);
@@ -299,7 +301,7 @@ export default function CalculatorPage() {
               </div>
               <div className="flex gap-2">
                 <button
-                  onClick={() => setTplIdx((i) => (i + 1) % TEMPLATE_COUNT)}
+                  onClick={() => { trackEvent("calc:switch-template"); setTplIdx((i) => (i + 1) % TEMPLATE_COUNT); }}
                   className="btn h-9 px-3 text-xs"
                   title="Cycle to next message style"
                 >
