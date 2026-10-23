@@ -402,7 +402,7 @@ export default function ChatPage() {
   // to where the new message will land.
   function sendWithFly() {
     const text = input.trim();
-    if (!text || !name.trim()) return;
+    if (!text || !name.trim() || sending) return;
     const ta = textareaRef.current;
     const end = listEndRef.current;
     if (ta && end) {
@@ -430,16 +430,42 @@ export default function ChatPage() {
     if (!supa) return;
     const text = (opts?.bodyOverride ?? input).trim();
     const hasAttachment = !!opts?.attachmentUrl || opts?.attachmentType === "tranche";
-    if ((!text && !hasAttachment) || !name.trim()) return;
-    setSending(true);
+    if ((!text && !hasAttachment) || !name.trim() || sending) return;
+
+    // Clear input and lock send button immediately — don't wait for server
     if (!opts?.bodyOverride) setInput("");
-    const { error } = await supa.from("chat_messages").insert({
+    setSending(true);
+
+    // Optimistic: show message locally right away so the UI feels instant
+    const tempId = `tmp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const optimistic: ChatMessage = {
+      id: tempId,
       sender_name: name.trim().slice(0, 32),
       body: text.slice(0, 2000) || "",
       attachment_url: opts?.attachmentUrl ?? null,
       attachment_type: opts?.attachmentType ?? null,
-    });
-    if (error) { setError(error.message); if (!opts?.bodyOverride) setInput(text); }
+      created_at: new Date().toISOString(),
+    };
+    setMessages((prev) => [...prev, optimistic]);
+    setTimeout(() => { const el = listEndRef.current?.parentElement; if (el) el.scrollTop = el.scrollHeight; }, 30);
+
+    const { data, error } = await supa.from("chat_messages").insert({
+      sender_name: name.trim().slice(0, 32),
+      body: text.slice(0, 2000) || "",
+      attachment_url: opts?.attachmentUrl ?? null,
+      attachment_type: opts?.attachmentType ?? null,
+    }).select().single();
+
+    if (error) {
+      setError(error.message);
+      // Roll back optimistic message on failure, restore input
+      setMessages((prev) => prev.filter((m) => m.id !== tempId));
+      if (!opts?.bodyOverride) setInput(text);
+    } else if (data) {
+      // Swap optimistic with real server record (realtime INSERT will also fire
+      // but dedup check in the subscription handles it cleanly)
+      setMessages((prev) => prev.map((m) => m.id === tempId ? (data as ChatMessage) : m));
+    }
     setSending(false);
   }
 
@@ -505,10 +531,11 @@ export default function ChatPage() {
     e.target.value = "";
     if (!file) return;
     if (file.size > 10 * 1024 * 1024) { setError("Image too large (max 10 MB)."); return; }
+    // Upload first (no send yet), then send — send() manages its own sending state
     setSending(true);
     const url = await uploadImage(file);
-    if (url) await send({ attachmentUrl: url, attachmentType: "image", bodyOverride: "" });
     setSending(false);
+    if (url) await send({ attachmentUrl: url, attachmentType: "image", bodyOverride: "" });
   }
 
   async function clearAllChat() {
